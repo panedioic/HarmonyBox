@@ -1,0 +1,29 @@
+# DevEco Studio
+.idea/
+.cxx/
+.hvigor/
+.clangd/
+.clang-format
+.clang-tidy
+*.iml
+
+# 构建产物
+build/
+oh_modules/
+node_modules/
+local.properties
+
+# 签名与密钥（重要！绝不能上传）
+*.p12
+*.cer
+*.p7b
+*.csr
+signature/
+.signature/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
