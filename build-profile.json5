@@ -1,6 +1,20 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B4B7B8E0BEE5FCD8065CEA563BE1F523143A3A3C29FD339670EAB432C5426EE4377ADF3A2EB5C4F",
+          "profile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p12",
+          "storePassword": "0000001B4523852AEC9B47E755A2CA0CF903498A5216A947EF7BEE88937E19403041F499AAF57CFF92F87C"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
