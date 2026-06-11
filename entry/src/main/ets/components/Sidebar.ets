@@ -17,74 +17,80 @@ export struct Sidebar {
     { id: PageType.FILES, label: '沙箱文件', icon: '📂' }
   ];
 
-  @Builder
-  NavItemView(item: NavItem) {
-    Row({ space: 12 }) {
-      Text(item.icon).fontSize(16)
-      Text(item.label).fontSize(14)
-    }
-    .width('100%')
-    .padding({ left: 25, right: 25, top: 12, bottom: 12 })
-    .margin({ left: 12, right: 12, top: 4, bottom: 4 })
-    .borderRadius(Theme.RADIUS_NAV)
-    .backgroundColor(this.currentPage === item.id ? Theme.HM_BLUE : Color.Transparent)
-    .shadow(this.currentPage === item.id
-      ? { radius: 12, color: 'rgba(0,125,255,0.3)', offsetY: 4 }
-      : { radius: 0, color: Color.Transparent })
-    .onClick(() => {
-      this.currentPage = item.id;
-    })
-    .animation({ duration: 300, curve: Curve.EaseOut })
-  }
-
   build() {
     Column() {
       // Logo
-      Row({ space: 10 }) {
-        Text('🍷').fontSize(22)
+      Row() {
+        Text('🍷').fontSize(20).margin({ right: 8 })
         Text('HarmonyBox')
-          .fontSize(22)
+          .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.HM_BLUE)
       }
       .width('100%')
-      .padding({ left: 25, right: 25, bottom: 30 })
+      .padding({ left: 20, right: 20 })
+      .justifyContent(FlexAlign.Start)
+      .margin({ bottom: 24 })
 
-      // 导航组
+      // 导航列表（顶部对齐，向下排列）
       Column() {
         ForEach(this.navItems, (item: NavItem) => {
-          Row({ space: 12 }) {
-            Text(item.icon).fontSize(16)
-            Text(item.label)
-              .fontSize(14)
-              .fontColor(this.currentPage === item.id ? Color.White : Theme.TEXT_SECONDARY)
-          }
-          .width('100%')
-          .padding({ left: 25, right: 25, top: 12, bottom: 12 })
-          .margin({ left: 12, right: 12, top: 4, bottom: 4 })
-          .borderRadius(Theme.RADIUS_NAV)
-          .backgroundColor(this.currentPage === item.id ? Theme.HM_BLUE : Color.Transparent)
-          .onClick(() => {
-            this.currentPage = item.id;
+          NavItemView({
+            item: item,
+            currentPage: $currentPage
           })
         }, (item: NavItem) => item.id)
       }
       .layoutWeight(1)
+      .width('80%')
       .alignItems(HorizontalAlign.Start)
 
       // 底部版本号
       Text('Wine 9.0 (HarmonyOS Edition)')
-        .fontSize(12)
+        .fontSize(11)
         .fontColor(Theme.TEXT_HINT)
         .width('100%')
         .textAlign(TextAlign.Center)
-        .padding(20)
+        .padding({ top: 12, bottom: 12 })
     }
-    .width(Theme.SIDEBAR_WIDTH)
+    .width(220)
     .height('100%')
-    .backgroundColor('rgba(255,255,255,0.8)')
-    .backdropBlur(20)
+    .backgroundColor('#FAFAFA')
     .border({ width: { right: 1 }, color: Theme.BORDER_LIGHT })
-    .padding({ top: 20, bottom: 20 })
+    .padding({ top: 20, bottom: 8 })
+  }
+}
+
+@Component
+struct NavItemView {
+  item: NavItem = { id: '', label: '', icon: '' };
+  @Link currentPage: string;
+  @State isHovered: boolean = false;
+
+  build() {
+    Row() {
+      Text(this.item.icon).fontSize(15).margin({ right: 10 })
+      Text(this.item.label)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.currentPage === this.item.id ? Color.White : '#666666')
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+    .margin({ left: 10, right: 10, top: 3, bottom: 3 })
+    .borderRadius(10)
+    .backgroundColor(
+      this.currentPage === this.item.id
+        ? Theme.HM_BLUE
+        : (this.isHovered ? '#1A007DFF' : '#00000000')
+    )
+    .animation({ duration: 200, curve: Curve.EaseOut })
+    .onHover((isHover: boolean) => {
+      this.isHovered = isHover;
+    })
+    .onClick(() => {
+      this.currentPage = this.item.id;
+    })
   }
 }

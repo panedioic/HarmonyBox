@@ -55,11 +55,12 @@ struct Index {
           this.PageContent()
         }
         .layoutWeight(1)
-        .padding(30)
+        .padding({ left: 28, right: 28, top: 28, bottom: 28 })
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
       .height('100%')
+      .alignItems(VerticalAlign.Top)   // ← 关键，避免侧边栏被垂直居中
       .backgroundColor(Theme.HM_BG)
 
       if (this.splashVisible) {
