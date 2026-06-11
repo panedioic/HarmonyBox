@@ -13,21 +13,38 @@ export struct LibraryPage {
         .fontWeight(FontWeight.Bold)
         .margin({ bottom: 20 })
 
-      Flex({
-        direction: FlexDirection.Row,
-        wrap: FlexWrap.Wrap,
-        justifyContent: FlexAlign.Start,
-        alignItems: ItemAlign.Start
-      }) {
-        ForEach(this.apps, (app: AppInfo, index: number) => {
-          AppCard({
-            app: app,
-            onLaunch: this.onLaunch
-          })
-        }, (app: AppInfo, index: number) => `${app.name}_${index}`)
+      // 一个外层容器,里面用 if/else 切换内容,避免顶层条件渲染歧义
+      Column() {
+        if (this.apps.length === 0) {
+          Column({ space: 12 }) {
+            Text('📭').fontSize(48)
+            Text('还没有安装任何应用')
+              .fontSize(15)
+              .fontColor('#666666')
+            Text('前往「安装应用」开始添加')
+              .fontSize(12)
+              .fontColor('#999999')
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+        } else {
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start,
+            alignItems: ItemAlign.Start
+          }) {
+            ForEach(this.apps, (app: AppInfo, index: number) => {
+              AppCard({ app: app, onLaunch: this.onLaunch })
+            }, (app: AppInfo, index: number) => app.id || `${app.name}_${index}`)
+          }
+          .width('100%')
+        }
       }
-      .width('100%')
       .layoutWeight(1)
+      .width('100%')
     }
     .width('100%')
     .height('100%')
@@ -37,13 +54,12 @@ export struct LibraryPage {
 
 @Component
 struct AppCard {
-  app: AppInfo = new AppInfo('', '');
+  app: AppInfo = new AppInfo();
   onLaunch: (name: string) => void = () => {};
   @State isHovered: boolean = false;
 
   build() {
     Column() {
-      // 图标方块
       Stack() {
         Text(this.app.icon).fontSize(32)
       }
@@ -53,7 +69,6 @@ struct AppCard {
       .borderRadius(14)
       .margin({ bottom: 12 })
 
-      // 应用名
       Text(this.app.name)
         .fontSize(13)
         .fontWeight(FontWeight.Medium)

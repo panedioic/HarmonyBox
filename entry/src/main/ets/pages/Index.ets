@@ -1,7 +1,9 @@
 import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { common } from '@kit.AbilityKit';
 import { Theme, PageType } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
+import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { Sidebar } from '../components/Sidebar';
 import { LibraryPage } from '../components/LibraryPage';
@@ -13,24 +15,26 @@ import { FilesPage } from '../components/FilesPage';
 @Component
 struct Index {
   @State currentPage: string = PageType.LIBRARY;
-  @State installedApps: AppInfo[] = [
-    new AppInfo('微信 (Windows)', '💬'),
-    new AppInfo('Steam', '🎮'),
-    new AppInfo('Notepad++', '📝')
-  ];
+  @State installedApps: AppInfo[] = [];
+
+  aboutToAppear(): void {
+    const ctx = getContext(this) as common.Context;
+    this.installedApps = AppRegistry.load(ctx);
+  }
 
   launchApp = (name: string): void => {
     this.openAppWindow(name);
   }
 
-  addApp = (name: string): void => {
-    this.installedApps.push(new AppInfo(name, '📦'));
+  addApp = (app: AppInfo): void => {
+    const ctx = getContext(this) as common.Context;
+    const list = AppRegistry.add(ctx, app);
+    this.installedApps = list;
     this.currentPage = PageType.LIBRARY;
   }
 
   async openAppWindow(name: string): Promise<void> {
     try {
-      // 已经打开过：置顶
       const existing = runningWindows.get(name);
       if (existing) {
         await existing.showWindow();
@@ -46,20 +50,16 @@ struct Index {
 
       const mainWindow = windowStage.getMainWindowSync();
 
-      // 关键:在创建子窗口前把应用名写入 AppStorage
-      // 子窗口的 AppRunner 在 aboutToAppear 中会读取一次
       AppStorage.setOrCreate<string>('currentAppName', name);
 
-      const subWin = await mainWindow.createSubWindowWithOptions(`app_${name}`, {
+      const subWin = await mainWindow.createSubWindowWithOptions(`app_${name}_${Date.now()}`, {
         title: name,
         decorEnabled: true,
         isModal: false
       });
 
-      // loadContent 加载页面(注意是 loadContent,不是 setUIContent)
       await subWin.loadContent('pages/AppRunner');
 
-      // 大小与位置
       const w = 800;
       const h = 600;
       await subWin.resize(w, h);
