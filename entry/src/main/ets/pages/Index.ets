@@ -1,18 +1,18 @@
+import { window, display } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { Theme, PageType } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
+import { runningWindows } from '../model/RunningWindow';
 import { Sidebar } from '../components/Sidebar';
 import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
-import { SplashScreen } from '../components/SplashScreen';
 
 @Entry
 @Component
 struct Index {
   @State currentPage: string = PageType.LIBRARY;
-  @State splashVisible: boolean = false;
-  @State splashAppName: string = '';
   @State installedApps: AppInfo[] = [
     new AppInfo('微信 (Windows)', '💬'),
     new AppInfo('Steam', '🎮'),
@@ -20,17 +20,71 @@ struct Index {
   ];
 
   launchApp = (name: string): void => {
-    this.splashAppName = name;
-    this.splashVisible = true;
-  }
-
-  closeSplash = (): void => {
-    this.splashVisible = false;
+    this.openAppWindow(name);
   }
 
   addApp = (name: string): void => {
     this.installedApps.push(new AppInfo(name, '📦'));
     this.currentPage = PageType.LIBRARY;
+  }
+
+  async openAppWindow(name: string): Promise<void> {
+    try {
+      // 已经打开过：置顶
+      const existing = runningWindows.get(name);
+      if (existing) {
+        await existing.showWindow();
+        await existing.raiseToAppTop?.();
+        return;
+      }
+
+      const windowStage = AppStorage.get<window.WindowStage>('windowStage');
+      if (!windowStage) {
+        console.error('windowStage not ready');
+        return;
+      }
+
+      const mainWindow = windowStage.getMainWindowSync();
+
+      // 关键:在创建子窗口前把应用名写入 AppStorage
+      // 子窗口的 AppRunner 在 aboutToAppear 中会读取一次
+      AppStorage.setOrCreate<string>('currentAppName', name);
+
+      const subWin = await mainWindow.createSubWindowWithOptions(`app_${name}`, {
+        title: name,
+        decorEnabled: true,
+        isModal: false
+      });
+
+      // loadContent 加载页面(注意是 loadContent,不是 setUIContent)
+      await subWin.loadContent('pages/AppRunner');
+
+      // 大小与位置
+      const w = 800;
+      const h = 600;
+      await subWin.resize(w, h);
+
+      const prop = mainWindow.getWindowProperties();
+      const displayInfo = display.getDisplayByIdSync(prop.displayId);
+      const x = Math.round((displayInfo.availableWidth - w) / 2);
+      const y = Math.round((displayInfo.availableHeight - h) / 2);
+      await subWin.moveWindowToGlobal(x, y, { displayId: prop.displayId });
+
+      await subWin.setWindowCornerRadius?.(8);
+      await subWin.setWindowBackgroundColor('#FF1A1A1A');
+
+      subWin.on('windowEvent', (event: window.WindowEventType) => {
+        if (event === window.WindowEventType.WINDOW_DESTROYED) {
+          runningWindows.remove(name);
+        }
+      });
+
+      runningWindows.set(name, subWin);
+      await subWin.showWindow();
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`openAppWindow failed: ${err.code}, ${err.message}`);
+    }
   }
 
   @Builder
@@ -47,30 +101,20 @@ struct Index {
   }
 
   build() {
-    Stack() {
-      Row() {
-        Sidebar({ currentPage: $currentPage })
+    Row() {
+      Sidebar({ currentPage: $currentPage })
 
-        Column() {
-          this.PageContent()
-        }
-        .layoutWeight(1)
-        .padding({ left: 28, right: 28, top: 28, bottom: 28 })
-        .alignItems(HorizontalAlign.Start)
+      Column() {
+        this.PageContent()
       }
-      .width('100%')
+      .layoutWeight(1)
       .height('100%')
-      .alignItems(VerticalAlign.Top)   // ← 关键，避免侧边栏被垂直居中
-      .backgroundColor(Theme.HM_BG)
-
-      if (this.splashVisible) {
-        SplashScreen({
-          appName: this.splashAppName,
-          onClose: this.closeSplash
-        })
-      }
+      .padding({ left: 28, right: 28, top: 28, bottom: 28 })
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
     .height('100%')
+    .alignItems(VerticalAlign.Top)
+    .backgroundColor(Theme.HM_BG)
   }
 }
