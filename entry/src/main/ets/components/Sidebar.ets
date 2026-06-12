@@ -45,13 +45,13 @@ export struct Sidebar {
       .width('80%')
       .alignItems(HorizontalAlign.Start)
 
-      // 底部版本号
-      Text('Wine 9.0 (HarmonyOS Edition)')
-        .fontSize(11)
-        .fontColor(Theme.TEXT_HINT)
-        .width('100%')
-        .textAlign(TextAlign.Center)
-        .padding({ top: 12, bottom: 12 })
+      // // 底部版本号
+      // Text('Wine 9.0 (HarmonyOS Edition)')
+      //   .fontSize(11)
+      //   .fontColor(Theme.TEXT_HINT)
+      //   .width('100%')
+      //   .textAlign(TextAlign.Center)
+      //   .padding({ top: 12, bottom: 12 })
     }
     .width(220)
     .height('100%')

@@ -9,7 +9,7 @@ export struct LibraryPage {
 
   build() {
     Column() {
-      Text('已安装的 Windows 程序')
+      Text('已安装的应用程序')
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
         .margin({ bottom: 20 })
