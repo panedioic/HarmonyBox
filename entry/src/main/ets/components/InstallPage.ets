@@ -1,11 +1,15 @@
 import { common } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
-import { AppInfo, AppType, appTypeLabel, isTypeSupported, AppConfig } from '../model/AppInfo';
+import {
+  AppInfo, AppType, RuntimeMode,
+  appTypeLabel, runtimeModeLabel, isTypeSupported, AppConfig
+} from '../model/AppInfo';
 import { InstallService } from '../service/InstallService';
 
 @Component
 export struct InstallPage {
   @State selectedType: AppType = AppType.LINUX64;
+  @State runtimeMode: RuntimeMode = RuntimeMode.GUI;
   @State sourceFolderUri: string = '';
   @State sourceFolderName: string = '';
   @State execRelPath: string = '';
@@ -20,8 +24,12 @@ export struct InstallPage {
   onInstalled: (app: AppInfo) => void = () => {};
 
   private allTypes: AppType[] = [
-    AppType.WIN32, AppType.WIN64, AppType.LINUX32, AppType.LINUX64
+    AppType.WIN32, AppType.WIN64,
+    AppType.LINUX32, AppType.LINUX64,
+    AppType.HARMONY
   ];
+
+  private allModes: RuntimeMode[] = [RuntimeMode.GUI, RuntimeMode.CLI];
 
   async chooseFolder(): Promise<void> {
     const uri: string | null = await InstallService.pickFolder();
@@ -32,6 +40,26 @@ export struct InstallPage {
         this.appName = this.sourceFolderName;
       }
     }
+  }
+
+  async chooseExecFile(): Promise<void> {
+    if (!this.sourceFolderUri) {
+      this.statusText = '请先选择应用文件夹';
+      return;
+    }
+    const fileUri: string | null = await InstallService.pickFile();
+    if (!fileUri) {
+      return;
+    }
+    const rel: string | null = InstallService.relativePath(
+      this.sourceFolderUri, fileUri
+    );
+    if (rel === null) {
+      this.statusText = '主程序必须位于已选文件夹内,请重新选择';
+      return;
+    }
+    this.execRelPath = rel;
+    this.statusText = '';
   }
 
   async startInstall(): Promise<void> {
@@ -80,6 +108,7 @@ export struct InstallPage {
         this.appName.trim(),
         this.appIcon || '📦',
         this.selectedType,
+        this.runtimeMode,
         this.execRelPath.trim(),
         installDir,
         Date.now(),
@@ -112,6 +141,8 @@ export struct InstallPage {
     this.appIcon = '📦';
     this.envVars = '';
     this.launchArgs = '';
+    this.selectedType = AppType.LINUX64;
+    this.runtimeMode = RuntimeMode.GUI;
   }
 
   @Builder
@@ -127,8 +158,23 @@ export struct InstallPage {
       )
       .borderRadius(8)
       .opacity(isTypeSupported(type) ? 1 : 0.5)
+      .margin({ right: 10, bottom: 10 })
       .onClick(() => {
         this.selectedType = type;
+      })
+  }
+
+  @Builder
+  ModeChip(mode: RuntimeMode) {
+    Text(runtimeModeLabel(mode))
+      .fontSize(13)
+      .fontColor(this.runtimeMode === mode ? Color.White : '#333333')
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .backgroundColor(this.runtimeMode === mode ? Theme.HM_BLUE : '#F0F0F0')
+      .borderRadius(8)
+      .margin({ right: 10 })
+      .onClick(() => {
+        this.runtimeMode = mode;
       })
   }
 
@@ -153,7 +199,11 @@ export struct InstallPage {
           // —— 应用类型 ——
           this.SectionLabel('应用类型')
 
-          Row({ space: 10 }) {
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start
+          }) {
             ForEach(this.allTypes, (t: AppType) => {
               this.TypeChip(t)
             }, (t: AppType) => t)
@@ -161,6 +211,26 @@ export struct InstallPage {
           .width('100%')
 
           Text('目前仅支持 64 位 Linux 应用,其他类型即将到来')
+            .fontSize(12)
+            .fontColor('#999999')
+
+          Divider().color('#EEEEEE').margin({ top: 14 })
+
+          // —— 运行模式 ——
+          this.SectionLabel('运行模式')
+
+          Row() {
+            ForEach(this.allModes, (m: RuntimeMode) => {
+              this.ModeChip(m)
+            }, (m: RuntimeMode) => m)
+          }
+          .width('100%')
+
+          Text(
+            this.runtimeMode === RuntimeMode.GUI
+              ? '将在窗口中渲染应用界面'
+              : '在终端中运行,无窗口界面'
+          )
             .fontSize(12)
             .fontColor('#999999')
             .margin({ top: 8 })
@@ -203,15 +273,33 @@ export struct InstallPage {
           // —— 主可执行文件 ——
           this.SectionLabel('主可执行文件 (相对路径)')
 
-          TextInput({
-            placeholder: '例如: bin/app 或 main.exe',
-            text: this.execRelPath
-          })
-            .height(36)
-            .fontSize(13)
-            .onChange((v: string) => {
-              this.execRelPath = v;
+          Row({ space: 8 }) {
+            TextInput({
+              placeholder: '例如: bin/app 或 main.exe',
+              text: this.execRelPath
             })
+              .layoutWeight(1)
+              .height(36)
+              .fontSize(13)
+              .onChange((v: string) => {
+                this.execRelPath = v;
+              })
+
+            Button('浏览...')
+              .fontSize(13)
+              .height(36)
+              .backgroundColor('#F0F0F0')
+              .fontColor('#333333')
+              .onClick(() => {
+                this.chooseExecFile();
+              })
+          }
+          .width('100%')
+
+          Text('可手动输入,或点击「浏览…」从已选文件夹中选取')
+            .fontSize(11)
+            .fontColor('#AAAAAA')
+            .margin({ top: 6 })
 
           Divider().color('#EEEEEE').margin({ top: 14 })
 
@@ -292,7 +380,7 @@ export struct InstallPage {
             Text(this.statusText)
               .fontSize(13)
               .fontColor(
-                this.statusText.startsWith('安装失败') ? '#E64545' : '#666666'
+                this.statusText.startsWith('安装失败') || this.statusText.startsWith('暂不支持') ? '#E64545' : '#666666'
               )
           }
 

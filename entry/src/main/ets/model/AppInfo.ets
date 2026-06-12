@@ -2,7 +2,13 @@ export enum AppType {
   WIN32 = 'win32',
   WIN64 = 'win64',
   LINUX32 = 'linux32',
-  LINUX64 = 'linux64'
+  LINUX64 = 'linux64',
+  HARMONY = 'harmony'
+}
+
+export enum RuntimeMode {
+  GUI = 'gui',
+  CLI = 'cli'
 }
 
 export interface AppConfig {
@@ -16,8 +22,9 @@ export class AppInfo {
   name: string;
   icon: string;
   type: AppType;
-  execPath: string;       // 主可执行文件,相对于 installDir
-  installDir: string;     // 沙箱内目录,相对 filesDir,例如 'apps/app_xxx'
+  runtimeMode: RuntimeMode;
+  execPath: string;
+  installDir: string;
   installedAt: number;
   config: AppConfig;
 
@@ -26,6 +33,7 @@ export class AppInfo {
     name: string = '',
     icon: string = '📦',
     type: AppType = AppType.LINUX64,
+    runtimeMode: RuntimeMode = RuntimeMode.GUI,
     execPath: string = '',
     installDir: string = '',
     installedAt: number = Date.now(),
@@ -35,6 +43,7 @@ export class AppInfo {
     this.name = name;
     this.icon = icon;
     this.type = type;
+    this.runtimeMode = runtimeMode;
     this.execPath = execPath;
     this.installDir = installDir;
     this.installedAt = installedAt;
@@ -48,8 +57,13 @@ export function appTypeLabel(type: AppType): string {
     case AppType.WIN64: return '64位 Windows';
     case AppType.LINUX32: return '32位 Linux';
     case AppType.LINUX64: return '64位 Linux';
+    case AppType.HARMONY: return '鸿蒙原生';
     default: return '未知';
   }
+}
+
+export function runtimeModeLabel(mode: RuntimeMode): string {
+  return mode === RuntimeMode.GUI ? '图形界面 (GUI)' : '命令行 (CLI)';
 }
 
 export function isTypeSupported(type: AppType): boolean {

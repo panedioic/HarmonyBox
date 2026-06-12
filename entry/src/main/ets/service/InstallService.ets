@@ -109,4 +109,33 @@ export class InstallService {
       throw new Error(`删除目录失败: ${(e as Error).message || ''}`);
     }
   }
+
+  // 选择单个文件,返回 URI
+  static async pickFile(): Promise<string | null> {
+    try {
+      const documentPicker = new picker.DocumentViewPicker();
+      const options = new picker.DocumentSelectOptions();
+      options.maxSelectNumber = 1;
+      const uris: string[] = await documentPicker.select(options);
+      return uris && uris.length > 0 ? uris[0] : null;
+    } catch (e) {
+      console.error(`pickFile failed: ${JSON.stringify(e)}`);
+      return null;
+    }
+  }
+
+  // 计算 fileUri 相对于 folderUri 的路径
+  // 若 fileUri 不在 folderUri 之内,返回 null
+  static relativePath(folderUri: string, fileUri: string): string | null {
+    const folder: string = InstallService.uriToPath(folderUri);
+    const file: string = InstallService.uriToPath(fileUri);
+    if (!folder || !file) {
+      return null;
+    }
+    const f: string = folder.endsWith('/') ? folder : `${folder}/`;
+    if (file.startsWith(f)) {
+      return file.substring(f.length);
+    }
+    return null;
+  }
 }
