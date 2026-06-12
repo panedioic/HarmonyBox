@@ -1,0 +1,143 @@
+#include <wayland-server-core.h>
+#include "xdg-shell-server-protocol.h"
+#include <algorithm>
+#include <cstring>
+
+#undef LOG_TAG
+#define LOG_TAG "WLXdg"
+#include <hilog/log.h>
+
+namespace {
+
+struct XdgSurfaceData {
+    wl_resource* wlSurface = nullptr;
+    wl_resource* xdgSurface = nullptr;
+    wl_resource* xdgToplevel = nullptr;
+    bool configureSent = false;
+};
+
+// ── xdg_toplevel 全部空实现 ──────────────────────────
+static void tl_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+static void tl_set_parent(wl_client*, wl_resource*, wl_resource*) {}
+static void tl_set_title(wl_client*, wl_resource*, const char* t) {
+    OH_LOG_INFO(LOG_APP, "toplevel title=%{public}s", t ? t : "(null)");
+}
+static void tl_set_app_id(wl_client*, wl_resource*, const char* a) {
+    OH_LOG_INFO(LOG_APP, "toplevel app_id=%{public}s", a ? a : "(null)");
+}
+static void tl_show_window_menu(wl_client*, wl_resource*, wl_resource*, uint32_t,
+                                int32_t, int32_t) {}
+static void tl_move(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t, uint32_t) {}
+static void tl_set_max_size(wl_client*, wl_resource*, int32_t, int32_t) {}
+static void tl_set_min_size(wl_client*, wl_resource*, int32_t, int32_t) {}
+static void tl_set_maximized(wl_client*, wl_resource*) {}
+static void tl_unset_maximized(wl_client*, wl_resource*) {}
+static void tl_set_fullscreen(wl_client*, wl_resource*, wl_resource*) {}
+static void tl_unset_fullscreen(wl_client*, wl_resource*) {}
+static void tl_set_minimized(wl_client*, wl_resource*) {}
+
+static const struct xdg_toplevel_interface kToplevelImpl = {
+    .destroy          = tl_destroy,
+    .set_parent       = tl_set_parent,
+    .set_title        = tl_set_title,
+    .set_app_id       = tl_set_app_id,
+    .show_window_menu = tl_show_window_menu,
+    .move             = tl_move,
+    .resize           = tl_resize,
+    .set_max_size     = tl_set_max_size,
+    .set_min_size     = tl_set_min_size,
+    .set_maximized    = tl_set_maximized,
+    .unset_maximized  = tl_unset_maximized,
+    .set_fullscreen   = tl_set_fullscreen,
+    .unset_fullscreen = tl_unset_fullscreen,
+    .set_minimized    = tl_set_minimized,
+};
+
+// ── xdg_surface ──────────────────────────────────────
+static void xs_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+
+static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) {
+    auto* d = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xsRes));
+    wl_resource* tl = wl_resource_create(
+        client, &xdg_toplevel_interface,
+        wl_resource_get_version(xsRes), id);
+    d->xdgToplevel = tl;
+    wl_resource_set_implementation(tl, &kToplevelImpl, d, nullptr);
+
+    // 先回 toplevel.configure（建议尺寸 0×0 = 客户端自决），再回 xdg_surface.configure
+    struct wl_array states;
+    wl_array_init(&states);
+    // 加入 activated state（GTK 会更顺）
+    uint32_t* st = (uint32_t*)wl_array_add(&states, sizeof(uint32_t));
+    *st = XDG_TOPLEVEL_STATE_ACTIVATED;
+    xdg_toplevel_send_configure(tl, 0, 0, &states);
+    wl_array_release(&states);
+
+    wl_display* dpy = wl_client_get_display(client);
+    uint32_t serial = wl_display_next_serial(dpy);
+    xdg_surface_send_configure(xsRes, serial);
+    d->configureSent = true;
+    OH_LOG_INFO(LOG_APP, "xdg_surface configure sent serial=%{public}u", serial);
+}
+
+static void xs_get_popup(wl_client*, wl_resource*, uint32_t,
+                          wl_resource*, wl_resource*) {}
+static void xs_set_window_geometry(wl_client*, wl_resource*,
+                                    int32_t, int32_t, int32_t, int32_t) {}
+static void xs_ack_configure(wl_client*, wl_resource*, uint32_t serial) {
+    OH_LOG_DEBUG(LOG_APP, "ack_configure serial=%{public}u", serial);
+}
+
+static const struct xdg_surface_interface kSurfaceImpl = {
+    .destroy             = xs_destroy,
+    .get_toplevel        = xs_get_toplevel,
+    .get_popup           = xs_get_popup,
+    .set_window_geometry = xs_set_window_geometry,
+    .ack_configure       = xs_ack_configure,
+};
+
+static void xs_resource_destroy(wl_resource* r) {
+    delete static_cast<XdgSurfaceData*>(wl_resource_get_user_data(r));
+}
+
+// ── xdg_wm_base ──────────────────────────────────────
+static void wm_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+static void wm_create_positioner(wl_client* c, wl_resource*, uint32_t id) {
+    // 简单实现：创建一个空 positioner（很多 client 启动期不会用）
+    wl_resource* p = wl_resource_create(c, &xdg_positioner_interface, 3, id);
+    if (p) wl_resource_set_implementation(p, nullptr, nullptr, nullptr);
+}
+static void wm_get_xdg_surface(wl_client* client, wl_resource* wmRes,
+                                uint32_t id, wl_resource* surfaceRes) {
+    wl_resource* xs = wl_resource_create(
+        client, &xdg_surface_interface,
+        wl_resource_get_version(wmRes), id);
+    auto* d = new XdgSurfaceData();
+    d->wlSurface  = surfaceRes;
+    d->xdgSurface = xs;
+    wl_resource_set_implementation(xs, &kSurfaceImpl, d, xs_resource_destroy);
+    OH_LOG_INFO(LOG_APP, "get_xdg_surface ok");
+}
+static void wm_pong(wl_client*, wl_resource*, uint32_t) {}
+
+static const struct xdg_wm_base_interface kWmBaseImpl = {
+    .destroy           = wm_destroy,
+    .create_positioner = wm_create_positioner,
+    .get_xdg_surface   = wm_get_xdg_surface,
+    .pong              = wm_pong,
+};
+
+static void wm_base_bind(wl_client* client, void*, uint32_t version, uint32_t id) {
+    wl_resource* r = wl_resource_create(
+        client, &xdg_wm_base_interface, std::min(version, 3u), id);
+    wl_resource_set_implementation(r, &kWmBaseImpl, nullptr, nullptr);
+    OH_LOG_INFO(LOG_APP, "xdg_wm_base bound v=%{public}u", std::min(version, 3u));
+}
+
+} // namespace
+
+extern "C" void RegisterXdgShell(wl_display* display) {
+    wl_global_create(display, &xdg_wm_base_interface, 3, nullptr, wm_base_bind);
+    OH_LOG_INFO(LOG_APP, "xdg_wm_base global created");
+}

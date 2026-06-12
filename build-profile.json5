@@ -7,11 +7,11 @@
         "material": {
           "certpath": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B4B7B8E0BEE5FCD8065CEA563BE1F523143A3A3C29FD339670EAB432C5426EE4377ADF3A2EB5C4F",
+          "keyPassword": "0000001BC7666BD425D140DAD1AC4F7DD8FF3C67A46454F14A3632915093D72A3886BA4ADA90C99FE6F5AA",
           "profile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p12",
-          "storePassword": "0000001B4523852AEC9B47E755A2CA0CF903498A5216A947EF7BEE88937E19403041F499AAF57CFF92F87C"
+          "storePassword": "0000001B96155C76C1584CE4A1F477C0DA211D1577C53FC3EA58B91FA814F660BBD5469344CC76A2F5752E"
         }
       }
     ],

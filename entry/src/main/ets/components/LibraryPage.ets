@@ -4,7 +4,7 @@ import { AppInfo } from '../model/AppInfo';
 @Component
 export struct LibraryPage {
   @Link apps: AppInfo[];
-  onLaunch: (name: string) => void = () => {};
+  onLaunch: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
 
   build() {
@@ -59,7 +59,7 @@ export struct LibraryPage {
 @Component
 struct AppCard {
   app: AppInfo = new AppInfo();
-  onLaunch: (name: string) => void = () => {};
+  onLaunch: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
 
@@ -72,7 +72,7 @@ struct AppCard {
         content: '启动应用'
       })
         .onClick(() => {
-          this.onLaunch(this.app.name);
+          this.onLaunch(this.app);
         })
 
       MenuItem({
@@ -153,7 +153,7 @@ struct AppCard {
       this.isHovered = isHover;
     })
     .onClick(() => {
-      this.onLaunch(this.app.name);
+      this.onLaunch(this.app);
     })
     .bindContextMenu(this.ContextMenu, ResponseType.RightClick)
   }

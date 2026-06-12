@@ -47,6 +47,23 @@
           }
         ],
       }
+    ],
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY"
+      },
+      {
+        "name": "ohos.permission.kernel.DISABLE_CODE_MEMORY_PROTECTION"
+      },
+      {
+        "name": "ohos.permission.READ_WRITE_USER_FILE"
+      },
+      {
+        "name": "ohos.permission.FILE_ACCESS_PERSIST"
+      },
+      {
+        "name": "ohos.permission.INTERNET"
+      }
     ]
   }
 }
