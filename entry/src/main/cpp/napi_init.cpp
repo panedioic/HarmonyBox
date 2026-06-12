@@ -213,6 +213,120 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     return r;
 }
 
+struct ExecCtx {
+    std::string exe;
+    std::vector<std::string> argv;
+    std::string libPath;
+    int code = -1;
+    std::string out;
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+};
+
+static void ExecExecuteCB(napi_env, void* data) {
+    ExecCtx* c = static_cast<ExecCtx*>(data);
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { c->code = -1; return; }
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        if (pipefd[1] > 2) close(pipefd[1]);
+        for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
+
+        std::string envLdp = "LD_LIBRARY_PATH=" + c->libPath;
+        std::string envHome = "HOME=/data/storage/el2/base";
+        char* envp[] = {
+            (char*)envLdp.c_str(),
+            (char*)envHome.c_str(),
+            nullptr
+        };
+
+        std::vector<char*> cargv;
+        cargv.reserve(c->argv.size() + 1);
+        for (auto& s : c->argv) cargv.push_back(const_cast<char*>(s.c_str()));
+        cargv.push_back(nullptr);
+        execve(c->exe.c_str(), cargv.data(), envp);
+        _exit(127);
+    }
+    if (pid < 0) {
+        close(pipefd[0]); close(pipefd[1]);
+        c->code = -1;
+        return;
+    }
+    close(pipefd[1]);
+
+    char buf[1024];
+    while (true) {
+        ssize_t n = read(pipefd[0], buf, sizeof(buf));
+        if (n > 0) {
+            c->out.append(buf, n);
+            if (c->out.size() > 8192) break; // 防止某些工具 -v 输出过多
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    close(pipefd[0]);
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) > 0) {
+        c->code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+}
+
+static void ExecCompleteCB(napi_env env, napi_status, void* data) {
+    ExecCtx* c = static_cast<ExecCtx*>(data);
+    napi_value result, codeVal, outVal;
+    napi_create_object(env, &result);
+    napi_create_int32(env, c->code, &codeVal);
+    napi_create_string_utf8(env, c->out.c_str(), c->out.size(), &outVal);
+    napi_set_named_property(env, result, "code", codeVal);
+    napi_set_named_property(env, result, "stdout", outVal);
+    napi_resolve_deferred(env, c->deferred, result);
+    napi_delete_async_work(env, c->work);
+    delete c;
+}
+
+static napi_value ExecCapture(napi_env env, napi_callback_info info) {
+    size_t argc = 3; napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    ExecCtx* c = new ExecCtx();
+    char buf[1024] = {0}; size_t len;
+    napi_get_value_string_utf8(env, args[0], buf, sizeof(buf), &len);
+    c->exe = buf;
+
+    uint32_t n = 0;
+    napi_get_array_length(env, args[1], &n);
+    for (uint32_t i = 0; i < n; ++i) {
+        napi_value el;
+        napi_get_element(env, args[1], i, &el);
+        char b2[1024] = {0};
+        napi_get_value_string_utf8(env, el, b2, sizeof(b2), &len);
+        c->argv.emplace_back(b2);
+    }
+    if (c->argv.empty()) c->argv.push_back(c->exe);
+
+    napi_get_value_string_utf8(env, args[2], buf, sizeof(buf), &len);
+    c->libPath = buf;
+
+    napi_value promise;
+    napi_create_promise(env, &c->deferred, &promise);
+
+    napi_value resName;
+    napi_create_string_utf8(env, "ExecCapture", NAPI_AUTO_LENGTH, &resName);
+    napi_create_async_work(env, nullptr, resName,
+        ExecExecuteCB, ExecCompleteCB, c, &c->work);
+    napi_queue_async_work(env, c->work);
+
+    return promise;
+}
+
 static void KillClientLocked() {
     g_readerRunning = false;
     if (g_clientPid > 0) {
@@ -244,6 +358,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopClient",         nullptr, StopClient,         nullptr,nullptr,nullptr, napi_default,nullptr},
         {"stopAll",            nullptr, StopAll,            nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setStateCallback",   nullptr, SetStateCallback,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"execCapture",        nullptr, ExecCapture,        nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);
