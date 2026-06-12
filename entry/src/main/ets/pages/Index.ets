@@ -10,6 +10,7 @@ import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
+import { InstallService } from '../service/InstallService';
 
 @Entry
 @Component
@@ -31,6 +32,32 @@ struct Index {
     const list = AppRegistry.add(ctx, app);
     this.installedApps = list;
     this.currentPage = PageType.LIBRARY;
+  }
+
+  deleteApp = (app: AppInfo): void => {
+    const ctx = getContext(this) as common.Context;
+
+    // 1. 如果该应用窗口正在运行,先关闭
+    const running = runningWindows.get(app.name);
+    if (running) {
+      try {
+        running.destroyWindow();
+      } catch (e) {
+        console.error(`destroy window failed: ${JSON.stringify(e)}`);
+      }
+      runningWindows.remove(app.name);
+    }
+
+    // 2. 删除沙箱目录
+    try {
+      InstallService.uninstall(ctx, app.installDir);
+    } catch (e) {
+      console.error(`uninstall failed: ${JSON.stringify(e)}`);
+      // 即使目录删除失败,也继续清理注册表,避免 UI 卡死
+    }
+
+    // 3. 更新注册表
+    this.installedApps = AppRegistry.remove(ctx, app.id);
   }
 
   async openAppWindow(name: string): Promise<void> {
@@ -90,7 +117,11 @@ struct Index {
   @Builder
   PageContent() {
     if (this.currentPage === PageType.LIBRARY) {
-      LibraryPage({ apps: $installedApps, onLaunch: this.launchApp })
+      LibraryPage({
+        apps: $installedApps,
+        onLaunch: this.launchApp,
+        onDelete: this.deleteApp
+      })
     } else if (this.currentPage === PageType.INSTALL) {
       InstallPage({ onInstalled: this.addApp })
     } else if (this.currentPage === PageType.SETTINGS) {

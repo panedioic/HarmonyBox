@@ -5,6 +5,7 @@ import { AppInfo } from '../model/AppInfo';
 export struct LibraryPage {
   @Link apps: AppInfo[];
   onLaunch: (name: string) => void = () => {};
+  onDelete: (app: AppInfo) => void = () => {};
 
   build() {
     Column() {
@@ -13,7 +14,6 @@ export struct LibraryPage {
         .fontWeight(FontWeight.Bold)
         .margin({ bottom: 20 })
 
-      // 一个外层容器,里面用 if/else 切换内容,避免顶层条件渲染歧义
       Column() {
         if (this.apps.length === 0) {
           Column({ space: 12 }) {
@@ -37,7 +37,11 @@ export struct LibraryPage {
             alignItems: ItemAlign.Start
           }) {
             ForEach(this.apps, (app: AppInfo, index: number) => {
-              AppCard({ app: app, onLaunch: this.onLaunch })
+              AppCard({
+                app: app,
+                onLaunch: this.onLaunch,
+                onDelete: this.onDelete
+              })
             }, (app: AppInfo, index: number) => app.id || `${app.name}_${index}`)
           }
           .width('100%')
@@ -56,7 +60,57 @@ export struct LibraryPage {
 struct AppCard {
   app: AppInfo = new AppInfo();
   onLaunch: (name: string) => void = () => {};
+  onDelete: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
+
+  // 右键菜单
+  @Builder
+  ContextMenu() {
+    Menu() {
+      MenuItem({
+        startIcon: $r('sys.media.ohos_ic_public_play'),
+        content: '启动应用'
+      })
+        .onClick(() => {
+          this.onLaunch(this.app.name);
+        })
+
+      MenuItem({
+        content: '查看路径'
+      })
+        .onClick(() => {
+          console.info(`installDir: ${this.app.installDir}`);
+        })
+
+      MenuItem({
+        // startIcon: $r('sys.media.ohos_ic_public_delete'),
+        content: '删除应用'
+      })
+        .onClick(() => {
+          this.confirmDelete();
+        })
+    }
+  }
+
+  confirmDelete(): void {
+    AlertDialog.show({
+      title: '删除应用',
+      message: `确定要删除「${this.app.name}」吗?\n\n应用目录及其全部文件都会被移除,此操作无法撤销。`,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: '#E64545',
+        action: () => {
+          this.onDelete(this.app);
+        }
+      }
+    });
+  }
 
   build() {
     Column() {
@@ -101,5 +155,6 @@ struct AppCard {
     .onClick(() => {
       this.onLaunch(this.app.name);
     })
+    .bindContextMenu(this.ContextMenu, ResponseType.RightClick)
   }
 }

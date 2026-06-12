@@ -93,4 +93,20 @@ export class InstallService {
       throw new Error((e as Error).message || '安装失败');
     }
   }
+
+  // 递归删除沙箱目录
+  static uninstall(context: common.Context, installDir: string): void {
+    if (!installDir) {
+      return;
+    }
+    const fullPath: string = `${context.filesDir}/${installDir}`;
+    try {
+      if (fs.accessSync(fullPath)) {
+        fs.rmdirSync(fullPath);
+      }
+    } catch (e) {
+      console.error(`uninstall failed at ${fullPath}: ${JSON.stringify(e)}`);
+      throw new Error(`删除目录失败: ${(e as Error).message || ''}`);
+    }
+  }
 }

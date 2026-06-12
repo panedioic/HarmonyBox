@@ -58,4 +58,11 @@ export class AppRegistry {
     AppRegistry.save(context, apps);
     return apps;
   }
+
+  static remove(context: common.Context, appId: string): AppInfo[] {
+    const apps: AppInfo[] = AppRegistry.load(context);
+    const filtered: AppInfo[] = apps.filter((a: AppInfo) => a.id !== appId);
+    AppRegistry.save(context, filtered);
+    return filtered;
+  }
 }
