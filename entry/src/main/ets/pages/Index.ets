@@ -1,9 +1,8 @@
 import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
 import { Theme, PageType } from '../common/Theme';
-import { AppInfo, RuntimeMode, AppType, appTypeLabel } from '../model/AppInfo';
+import { AppInfo, RuntimeMode, AppType } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { InstallService } from '../service/InstallService';
