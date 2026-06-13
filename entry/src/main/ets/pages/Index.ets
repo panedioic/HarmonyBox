@@ -3,7 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { Theme, PageType } from '../common/Theme';
-import { AppInfo, AppType, appTypeLabel } from '../model/AppInfo';
+import { AppInfo, RuntimeMode, AppType, appTypeLabel } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { InstallService } from '../service/InstallService';
@@ -13,6 +13,7 @@ import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
+import { CliService } from '../service/CliService';
 
 @Entry
 @Component
@@ -24,6 +25,7 @@ struct Index {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.installedApps = AppRegistry.load(ctx);
     WaylandService.getInstance().init(ctx);
+    CliService.getInstance().init(ctx);
   }
 
   aboutToDisappear(): void {
@@ -55,10 +57,7 @@ struct Index {
   async openAppWindow(app: AppInfo): Promise<void> {
     // 仅支持 LINUX64
     if (app.type !== AppType.LINUX64) {
-      promptAction.showToast({
-        message: `暂不支持 ${appTypeLabel(app.type)}`,
-        duration: 1500
-      });
+      this.toast(`暂不支持 $\{appTypeLabel(app.type)}`, 1500);
       return;
     }
 
@@ -70,20 +69,83 @@ struct Index {
       return;
     }
 
+    if (app.runtimeMode === RuntimeMode.CLI) {
+      await this.openCliWindow(app);
+    } else {
+      await this.openGuiWindow(app);
+    }
+  }
+
+  private toast(msg: string, dur: number = 1500): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg, duration: dur });
+    } catch (e) { /* ignore */ }
+  }
+
+  private async openCliWindow(app: AppInfo): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const svc = CliService.getInstance();
+    svc.init(ctx);
+    const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
+    const exeAbs: string = `${installRoot}/${app.execPath}`;
+    const userArgs: string[] = (app.config.args || '')
+      .split(/\s+/)
+      .filter((s: string): boolean => s.length > 0);
+    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot);
+    if (pid <= 0) {
+      this.toast('启动 CLI 失败', 1500);
+      return;
+    }
+    AppStorage.setOrCreate<string>('currentAppName', app.name);
+    AppStorage.setOrCreate<number>('currentCliPid', pid);
+    try {
+      const windowStage = AppStorage.get<window.WindowStage>('windowStage');
+      if (!windowStage) return;
+      const main = windowStage.getMainWindowSync();
+      const subWin = await main.createSubWindowWithOptions(
+        `cli_${app.id}_${Date.now()}`,
+        { title: `${app.name} (CLI)`, decorEnabled: true, isModal: false }
+      );
+      await subWin.loadContent('pages/CliRunner');
+      const w: number = 720;
+      const h: number = 480;
+      await subWin.resize(w, h);
+      const prop = main.getWindowProperties();
+      const di = display.getDisplayByIdSync(prop.displayId);
+      await subWin.moveWindowToGlobal(
+        Math.round((di.availableWidth - w) / 2),
+        Math.round((di.availableHeight - h) / 2),
+        { displayId: prop.displayId }
+      );
+      await subWin.setWindowCornerRadius?.(8);
+      await subWin.setWindowBackgroundColor('#FF0E0E0E');
+      subWin.on('windowEvent', (event: window.WindowEventType): void => {
+        if (event === window.WindowEventType.WINDOW_DESTROYED) {
+          runningWindows.remove(app.id);
+          svc.stop(pid);
+        }
+      });
+      runningWindows.set(app.id, subWin);
+      await subWin.showWindow();
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`openCliWindow failed: ${err.code}, ${err.message}`);
+      svc.stop(pid);
+    }
+  }
+
+  private async openGuiWindow(app: AppInfo): Promise<void> {
     const wlSvc = WaylandService.getInstance();
     if (!wlSvc.isServerReady()) {
-      promptAction.showToast({ message: 'Wayland 服务未就绪', duration: 1500 });
+      this.toast('Wayland 服务未就绪', 1500);
       return;
     }
     if (!wlSvc.isBox64Ready()) {
-      promptAction.showToast({ message: 'box64 未安装,请先部署 HNP 包', duration: 2000 });
+      this.toast('box64 未安装,请先部署 HNP 包', 1800);
       return;
     }
     if (wlSvc.getCurrentAppId()) {
-      promptAction.showToast({
-        message: '已有应用在运行,请先关闭当前窗口',
-        duration: 1800
-      });
+      this.toast('已有 GUI 应用在运行,请先关闭', 1800);
       return;
     }
 
@@ -93,15 +155,12 @@ struct Index {
       .split(/\s+/)
       .filter((s: string): boolean => s.length > 0);
 
-    promptAction.showToast({ message: `正在启动 ${app.name}...`, duration: 1200 });
+    this.toast(`正在启动 ${app.name}...`, 1200);
 
     const code: number = await wlSvc.launch(app.id, exeAbs, userArgs);
     if (code <= 0) {
       const reason = this.launchErrorText(code);
-      promptAction.showToast({
-        message: `${app.name} 启动失败: ${reason}`,
-        duration: 2500
-      });
+      this.toast(`${app.name} 启动失败: ${reason}`, 2500);
       return;
     }
 

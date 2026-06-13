@@ -1,6 +1,7 @@
 {
   "src": [
     "pages/Index",
-    "pages/AppRunner"
+    "pages/AppRunner",
+    "pages/CliRunner"
   ]
 }

@@ -17,6 +17,9 @@
 #include <thread>
 #include <atomic>
 #include <vector>
+#include <map>
+#include <mutex>
+#include <memory>
 
 extern char** environ;
 
@@ -327,6 +330,194 @@ static napi_value ExecCapture(napi_env env, napi_callback_info info) {
     return promise;
 }
 
+struct CliEvent {
+    int32_t pid;
+    std::string event;   // "out" | "exit"
+    std::string data;
+};
+
+struct CliProc {
+    pid_t pid = -1;
+    int outFd = -1;
+    std::atomic<bool> running{false};
+};
+
+static std::mutex g_cliMutex;
+static std::map<pid_t, std::shared_ptr<CliProc>> g_cliProcs;
+static napi_threadsafe_function g_cliTsfn = nullptr;
+
+static void CliTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    CliEvent* ev = static_cast<CliEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[3];
+        napi_get_undefined(env, &undef);
+        napi_create_int32(env, ev->pid, &args[0]);
+        napi_create_string_utf8(env, ev->event.c_str(), NAPI_AUTO_LENGTH, &args[1]);
+        napi_create_string_utf8(env, ev->data.c_str(), NAPI_AUTO_LENGTH, &args[2]);
+        napi_call_function(env, undef, jsCb, 3, args, nullptr);
+    }
+    delete ev;
+}
+
+static void EmitCli(int32_t pid, const char* event, const std::string& data) {
+    if (!g_cliTsfn) return;
+    CliEvent* ev = new CliEvent();
+    ev->pid = pid;
+    ev->event = event;
+    ev->data = data;
+    napi_call_threadsafe_function(g_cliTsfn, ev, napi_tsfn_blocking);
+}
+
+static void CliReaderMain(int32_t pid, int fd) {
+    char buf[2048];
+    std::string pending;
+    while (true) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = 0;
+            pending.append(buf, n);
+            size_t pos;
+            while ((pos = pending.find('\n')) != std::string::npos) {
+                EmitCli(pid, "out", pending.substr(0, pos));
+                pending.erase(0, pos + 1);
+            }
+        } else if (n == 0) {
+            break;
+        } else {
+            if (errno == EINTR) continue;
+            break;
+        }
+    }
+    if (!pending.empty()) EmitCli(pid, "out", pending);
+    close(fd);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    EmitCli(pid, "exit", std::to_string(code));
+
+    std::lock_guard<std::mutex> lk(g_cliMutex);
+    g_cliProcs.erase(pid);
+}
+
+static napi_value SetCliCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_cliTsfn) {
+        napi_release_threadsafe_function(g_cliTsfn, napi_tsfn_release);
+        g_cliTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "CliEvt", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, CliTsfnCallJs, &g_cliTsfn);
+    return nullptr;
+}
+
+static napi_value LaunchCli(napi_env env, napi_callback_info info) {
+    size_t argc = 4; napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char exePath[1024]={0}, libPath[1024]={0}, cwd[1024]={0}; size_t len;
+    napi_get_value_string_utf8(env, args[0], exePath, sizeof(exePath), &len);
+
+    uint32_t n = 0;
+    napi_get_array_length(env, args[1], &n);
+    std::vector<std::string> argvStrs;
+    for (uint32_t i = 0; i < n; ++i) {
+        napi_value el; napi_get_element(env, args[1], i, &el);
+        char b[1024]={0};
+        napi_get_value_string_utf8(env, el, b, sizeof(b), &len);
+        argvStrs.emplace_back(b);
+    }
+    if (argvStrs.empty()) argvStrs.emplace_back(exePath);
+
+    napi_get_value_string_utf8(env, args[2], libPath, sizeof(libPath), &len);
+    napi_get_value_string_utf8(env, args[3], cwd, sizeof(cwd), &len);
+
+    if (access(exePath, X_OK) != 0) chmod(exePath, 0755);
+    if (argvStrs.size() >= 2 && !argvStrs[1].empty() && argvStrs[1][0] == '/') {
+        if (access(argvStrs[1].c_str(), X_OK) != 0) {
+            chmod(argvStrs[1].c_str(), 0755);
+        }
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        napi_value r; napi_create_int32(env, -1, &r); return r;
+    }
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    signal(SIGCHLD, SIG_IGN);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        if (pipefd[1] > 2) close(pipefd[1]);
+        prctl(PR_SET_NAME, "cli-app", 0, 0, 0);
+        close_inherited_fds_except(STDOUT_FILENO, STDERR_FILENO);
+        for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
+
+        if (cwd[0]) {
+            if (chdir(cwd) != 0) {
+                fprintf(stderr, "chdir(%s) failed: %s\n", cwd, strerror(errno));
+            }
+        }
+
+        std::string envLdp  = "LD_LIBRARY_PATH=" + std::string(libPath);
+        std::string envHome = "HOME=/data/storage/el2/base";
+        std::string envBoxLog       = "BOX64_LOG=1";
+        std::string envBoxNoBanner  = "BOX64_NOBANNER=0";
+        std::string envTerm         = "TERM=xterm-256color";
+        char* envp[] = {
+            (char*)envLdp.c_str(),
+            (char*)envHome.c_str(),
+            (char*)envBoxLog.c_str(),
+            (char*)envBoxNoBanner.c_str(),
+            (char*)envTerm.c_str(),
+            nullptr,
+        };
+
+        std::vector<char*> cargv;
+        for (auto& s : argvStrs) cargv.push_back(const_cast<char*>(s.c_str()));
+        cargv.push_back(nullptr);
+        execve(exePath, cargv.data(), envp);
+        fprintf(stderr, "execve(%s) failed: %s\n", exePath, strerror(errno));
+        _exit(127);
+    }
+    if (pid < 0) {
+        close(pipefd[0]); close(pipefd[1]);
+        napi_value r; napi_create_int32(env, -1, &r); return r;
+    }
+    close(pipefd[1]);
+
+    auto proc = std::make_shared<CliProc>();
+    proc->pid = pid;
+    proc->outFd = pipefd[0];
+    proc->running = true;
+    {
+        std::lock_guard<std::mutex> lk(g_cliMutex);
+        g_cliProcs[pid] = proc;
+    }
+    std::thread(CliReaderMain, (int32_t)pid, pipefd[0]).detach();
+
+    OH_LOG_INFO(LOG_APP, "cli pid=%{public}d exe=%{public}s", pid, exePath);
+    napi_value r; napi_create_int32(env, pid, &r);
+    return r;
+}
+
+static napi_value StopCli(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t pid = 0;
+    napi_get_value_int32(env, args[0], &pid);
+    if (pid > 0) {
+        kill(pid, SIGTERM);
+    }
+    return nullptr;
+}
+
 static void KillClientLocked() {
     g_readerRunning = false;
     if (g_clientPid > 0) {
@@ -359,6 +550,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopAll",            nullptr, StopAll,            nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setStateCallback",   nullptr, SetStateCallback,   nullptr,nullptr,nullptr, napi_default,nullptr},
         {"execCapture",        nullptr, ExecCapture,        nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"launchCli",          nullptr, LaunchCli,          nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"stopCli",            nullptr, StopCli,            nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setCliCallback",     nullptr, SetCliCallback,     nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);
