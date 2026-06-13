@@ -118,7 +118,8 @@ static napi_value StartWaylandServer(napi_env env, napi_callback_info info) {
 static int LaunchImpl(const char* exePath,
                       const std::vector<std::string>& argvStrs,
                       const char* sockPath,
-                      const char* libPath) {
+                      const char* libPath,
+                      const std::vector<std::string>& extraEnv) {
     if (access(exePath, X_OK) != 0) chmod(exePath, 0755);
     if (argvStrs.size() >= 2) {
         const std::string& target = argvStrs[1];
@@ -151,27 +152,28 @@ static int LaunchImpl(const char* exePath,
         auto pos  = p.find_last_of('/');
         std::string dir  = (pos == std::string::npos) ? std::string("/tmp") : p.substr(0, pos);
         std::string name = (pos == std::string::npos) ? p : p.substr(pos + 1);
-        std::string envXdg  = "XDG_RUNTIME_DIR=" + dir;
-        std::string envWld  = "WAYLAND_DISPLAY="  + name;
-        std::string envLdp  = "LD_LIBRARY_PATH=" + std::string(libPath);
-        std::string envHome = "HOME=" + dir;
-        std::string envBoxLog       = "BOX64_LOG=1";
-        std::string envBoxNoBanner  = "BOX64_NOBANNER=0";
-        char* envp[] = {
-            (char*)envXdg.c_str(),
-            (char*)envWld.c_str(),
-            (char*)envLdp.c_str(),
-            (char*)envHome.c_str(),
-            (char*)envBoxLog.c_str(),
-            (char*)envBoxNoBanner.c_str(),
-            nullptr,
+        
+        std::vector<std::string> envHolder = {
+            "XDG_RUNTIME_DIR=" + dir,
+            "WAYLAND_DISPLAY=" + name,
+            "LD_LIBRARY_PATH=" + std::string(libPath),
+            "HOME=" + dir,
+            "BOX64_LOG=1",
+            "BOX64_NOBANNER=0",
         };
+        for (const auto& e : extraEnv) {
+            if (!e.empty()) envHolder.push_back(e);
+        }
+        std::vector<char*> envp;
+        envp.reserve(envHolder.size() + 1);
+        for (auto& s : envHolder) envp.push_back(const_cast<char*>(s.c_str()));
+        envp.push_back(nullptr);
 
         std::vector<char*> cargv;
         cargv.reserve(argvStrs.size() + 1);
         for (const auto& s : argvStrs) cargv.push_back(const_cast<char*>(s.c_str()));
         cargv.push_back(nullptr);
-        execve(exePath, cargv.data(), envp);
+        execve(exePath, cargv.data(), envp.data());
         fprintf(stderr, "execve(%s) failed: %s\n", exePath, strerror(errno));
         _exit(127);
     }
@@ -190,7 +192,7 @@ static int LaunchImpl(const char* exePath,
 
 // 唯一的启动接口:argv 由 ArkTS 传入。如果 argv 为空数组,自动用 [exePath]
 static napi_value LaunchClient(napi_env env, napi_callback_info info) {
-    size_t argc = 4; napi_value args[4];
+    size_t argc = 5; napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     char exePath[1024]={0}, sockPath[512]={0}, libPath[1024]={0}; size_t len;
     napi_get_value_string_utf8(env, args[0], exePath, sizeof(exePath), &len);
@@ -198,20 +200,32 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     uint32_t n = 0;
     napi_get_array_length(env, args[1], &n);
     std::vector<std::string> argvStrs;
-    argvStrs.reserve(n > 0 ? n : 1);
     for (uint32_t i = 0; i < n; ++i) {
-        napi_value el;
-        napi_get_element(env, args[1], i, &el);
-        char buf[1024] = {0};
-        napi_get_value_string_utf8(env, el, buf, sizeof(buf), &len);
-        argvStrs.emplace_back(buf);
+        napi_value el; napi_get_element(env, args[1], i, &el);
+        char b[1024]={0}; napi_get_value_string_utf8(env, el, b, sizeof(b), &len);
+        argvStrs.emplace_back(b);
     }
     if (argvStrs.empty()) argvStrs.emplace_back(exePath);
 
     napi_get_value_string_utf8(env, args[2], sockPath, sizeof(sockPath), &len);
     napi_get_value_string_utf8(env, args[3], libPath, sizeof(libPath), &len);
 
-    int pid = LaunchImpl(exePath, argvStrs, sockPath, libPath);
+    // 第 5 个参数:extraEnv string[]
+    std::vector<std::string> extraEnv;
+    bool hasArr = false;
+    napi_is_array(env, args[4], &hasArr);
+    if (hasArr) {
+        uint32_t en = 0;
+        napi_get_array_length(env, args[4], &en);
+        for (uint32_t i = 0; i < en; ++i) {
+            napi_value el; napi_get_element(env, args[4], i, &el);
+            char b[2048]={0};
+            napi_get_value_string_utf8(env, el, b, sizeof(b), &len);
+            extraEnv.emplace_back(b);
+        }
+    }
+
+    int pid = LaunchImpl(exePath, argvStrs, sockPath, libPath, extraEnv);
     napi_value r; napi_create_int32(env, pid, &r);
     return r;
 }
@@ -415,12 +429,13 @@ static napi_value SetCliCallback(napi_env env, napi_callback_info info) {
 }
 
 static napi_value LaunchCli(napi_env env, napi_callback_info info) {
-    size_t argc = 4; napi_value args[4];
+    size_t argc = 5; napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     char exePath[1024]={0}, libPath[1024]={0}, cwd[1024]={0}; size_t len;
     napi_get_value_string_utf8(env, args[0], exePath, sizeof(exePath), &len);
 
+    // argv
     uint32_t n = 0;
     napi_get_array_length(env, args[1], &n);
     std::vector<std::string> argvStrs;
@@ -434,6 +449,21 @@ static napi_value LaunchCli(napi_env env, napi_callback_info info) {
 
     napi_get_value_string_utf8(env, args[2], libPath, sizeof(libPath), &len);
     napi_get_value_string_utf8(env, args[3], cwd, sizeof(cwd), &len);
+
+    // extraEnv: string[]
+    std::vector<std::string> extraEnv;
+    bool isArr = false;
+    napi_is_array(env, args[4], &isArr);
+    if (isArr) {
+        uint32_t en = 0;
+        napi_get_array_length(env, args[4], &en);
+        for (uint32_t i = 0; i < en; ++i) {
+            napi_value el; napi_get_element(env, args[4], i, &el);
+            char b[2048]={0};
+            napi_get_value_string_utf8(env, el, b, sizeof(b), &len);
+            extraEnv.emplace_back(b);
+        }
+    }
 
     if (access(exePath, X_OK) != 0) chmod(exePath, 0755);
     if (argvStrs.size() >= 2 && !argvStrs[1].empty() && argvStrs[1][0] == '/') {
@@ -465,24 +495,28 @@ static napi_value LaunchCli(napi_env env, napi_callback_info info) {
             }
         }
 
-        std::string envLdp  = "LD_LIBRARY_PATH=" + std::string(libPath);
-        std::string envHome = "HOME=/data/storage/el2/base";
-        std::string envBoxLog       = "BOX64_LOG=1";
-        std::string envBoxNoBanner  = "BOX64_NOBANNER=0";
-        std::string envTerm         = "TERM=xterm-256color";
-        char* envp[] = {
-            (char*)envLdp.c_str(),
-            (char*)envHome.c_str(),
-            (char*)envBoxLog.c_str(),
-            (char*)envBoxNoBanner.c_str(),
-            (char*)envTerm.c_str(),
-            nullptr,
+        // 默认 env + 调用方 extraEnv
+        std::vector<std::string> envHolder = {
+            std::string("LD_LIBRARY_PATH=") + libPath,
+            std::string("HOME=/data/storage/el2/base"),
+            std::string("BOX64_LOG=1"),
+            std::string("BOX64_NOBANNER=0"),
+            std::string("TERM=xterm-256color"),
         };
+        for (const auto& e : extraEnv) {
+            if (!e.empty()) envHolder.push_back(e);
+        }
+        std::vector<char*> envp;
+        envp.reserve(envHolder.size() + 1);
+        for (auto& s : envHolder) envp.push_back(const_cast<char*>(s.c_str()));
+        envp.push_back(nullptr);
 
         std::vector<char*> cargv;
+        cargv.reserve(argvStrs.size() + 1);
         for (auto& s : argvStrs) cargv.push_back(const_cast<char*>(s.c_str()));
         cargv.push_back(nullptr);
-        execve(exePath, cargv.data(), envp);
+
+        execve(exePath, cargv.data(), envp.data());
         fprintf(stderr, "execve(%s) failed: %s\n", exePath, strerror(errno));
         _exit(127);
     }
@@ -502,7 +536,8 @@ static napi_value LaunchCli(napi_env env, napi_callback_info info) {
     }
     std::thread(CliReaderMain, (int32_t)pid, pipefd[0]).detach();
 
-    OH_LOG_INFO(LOG_APP, "cli pid=%{public}d exe=%{public}s", pid, exePath);
+    OH_LOG_INFO(LOG_APP, "cli pid=%{public}d exe=%{public}s envc=%{public}u",
+                pid, exePath, (uint32_t)extraEnv.size());
     napi_value r; napi_create_int32(env, pid, &r);
     return r;
 }
