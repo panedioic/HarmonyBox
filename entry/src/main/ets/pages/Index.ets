@@ -106,8 +106,8 @@ struct Index {
         { title: `${app.name} (CLI)`, decorEnabled: true, isModal: false }
       );
       await subWin.loadContent('pages/CliRunner');
-      const w: number = 720;
-      const h: number = 480;
+      const w: number = 1440;
+      const h: number = 960;
       await subWin.resize(w, h);
       const prop = main.getWindowProperties();
       const di = display.getDisplayByIdSync(prop.displayId);
