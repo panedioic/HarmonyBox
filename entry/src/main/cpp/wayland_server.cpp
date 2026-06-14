@@ -133,6 +133,10 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
     state->surface = surfRes;
     wl_resource_set_implementation(surfRes, &k_surface_impl, state,
         [](wl_resource* r) {
+            auto* self = WaylandServer::GetInstance();
+            if (self->mainSurface_ == r) {
+                self->mainSurface_ = nullptr;
+            }
             auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(r));
             delete s;
         });
@@ -153,7 +157,29 @@ void WaylandServer::surface_attach(wl_client*, wl_resource* surfRes, wl_resource
 void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(surfRes));
     if (!s->pendingBuffer) return;
-
+    
+    auto* self = WaylandServer::GetInstance();
+    // 1. 首次有 buffer 提交的 surface，作为排他的主渲染窗口
+    if (self->mainSurface_ == nullptr) {
+        self->mainSurface_ = surfRes;
+        OH_LOG_INFO(LOG_APP, "Main surface bound to %{public}p", surfRes);
+    }
+    // 2. 如果提交的不是主窗口（比如是客户端用来显示鼠标光标的32x32 surface）
+    // 拦截像素拷贝，直接释放 buffer 并归还 frame callback 防止客户端卡死
+    if (self->mainSurface_ != surfRes) {
+        wl_buffer_send_release(s->pendingBuffer);
+        s->currentBuffer = s->pendingBuffer;
+        s->pendingBuffer = nullptr;
+        // 必须消耗掉 frame callback，否则对应组件/光标动画会卡死在第一帧
+        uint32_t now = (uint32_t)(time(nullptr) * 1000);
+        for (auto* cb : s->frameCallbacks) {
+            wl_callback_send_done(cb, now);
+            wl_resource_destroy(cb);
+        }
+        s->frameCallbacks.clear();
+        return;
+    }
+    // 3. 以下为主窗口的正常渲染搬运逻辑 (原代码保持不变)
     wl_shm_buffer* shm = wl_shm_buffer_get(s->pendingBuffer);
     if (shm) {
         int32_t w = wl_shm_buffer_get_width(shm);
@@ -162,8 +188,6 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
 
         wl_shm_buffer_begin_access(shm);
         const uint8_t* src = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm));
-
-        auto* self = WaylandServer::GetInstance();
         {
             std::lock_guard<std::mutex> lk(self->frameMutex_);
             self->latestPixels_.resize(stride * h);
@@ -191,7 +215,6 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     commitFps.Tick();
     
     // 首帧到达 → 通知 UI
-    auto* self = GetInstance();
     if (self->MarkFirstCommit()) {
         self->SetKeyboardFocus(surfRes);
         self->SetPointerFocus(surfRes);
@@ -444,3 +467,13 @@ void WaylandServer::DispatchMouseLeave() {
         if (wl_resource_get_client(p) == c)
             wl_pointer_send_leave(p, serial, ptrFocus_);
 }
+
+// 修改或追加 ResetFirstCommit 的实现：
+// 确保带上 WaylandServer:: 作用域
+void WaylandServer::ResetFirstCommit() {
+    firstCommit_ = false;
+    mainSurface_ = nullptr;
+    kbFocus_ = nullptr;
+    ptrFocus_ = nullptr;
+}
+
