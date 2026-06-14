@@ -576,6 +576,69 @@ static napi_value StopAll(napi_env env, napi_callback_info) {
     return nullptr;
 }
 
+// ====== Keyboard and Mouse =====
+static napi_value SendKey(napi_env env, napi_callback_info info) {
+    size_t argc = 2; napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t code = 0; bool pressed = false;
+    napi_get_value_int32(env, args[0], &code);
+    napi_get_value_bool(env, args[1], &pressed);
+    WaylandServer::GetInstance()->DispatchKey((uint32_t)code, pressed);
+    return nullptr;
+}
+
+static napi_value SendModifiers(napi_env env, napi_callback_info info) {
+    size_t argc = 4; napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t v[4] = {0,0,0,0};
+    for (int i = 0; i < 4; i++) {
+        int32_t t = 0; napi_get_value_int32(env, args[i], &t);
+        v[i] = (uint32_t)t;
+    }
+    WaylandServer::GetInstance()->DispatchModifiers(v[0], v[1], v[2], v[3]);
+    return nullptr;
+}
+
+static napi_value SendMouseMove(napi_env env, napi_callback_info info) {
+    size_t argc = 2; napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    double x = 0, y = 0;
+    napi_get_value_double(env, args[0], &x);
+    napi_get_value_double(env, args[1], &y);
+    WaylandServer::GetInstance()->DispatchMouseMotion(x, y);
+    return nullptr;
+}
+
+static napi_value SendMouseButton(napi_env env, napi_callback_info info) {
+    size_t argc = 2; napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t btn = 0; bool pressed = false;
+    napi_get_value_int32(env, args[0], &btn);
+    napi_get_value_bool(env, args[1], &pressed);
+    WaylandServer::GetInstance()->DispatchMouseButton((uint32_t)btn, pressed);
+    return nullptr;
+}
+
+static napi_value SendMouseAxis(napi_env env, napi_callback_info info) {
+    size_t argc = 2; napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    double dx = 0, dy = 0;
+    napi_get_value_double(env, args[0], &dx);
+    napi_get_value_double(env, args[1], &dy);
+    WaylandServer::GetInstance()->DispatchMouseAxis(dx, dy);
+    return nullptr;
+}
+
+static napi_value SendMouseHover(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool inside = false;
+    napi_get_value_bool(env, args[0], &inside);
+    if (inside) WaylandServer::GetInstance()->DispatchMouseEnter(0, 0);
+    else WaylandServer::GetInstance()->DispatchMouseLeave();
+    return nullptr;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -588,6 +651,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"launchCli",          nullptr, LaunchCli,          nullptr,nullptr,nullptr, napi_default,nullptr},
         {"stopCli",            nullptr, StopCli,            nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setCliCallback",     nullptr, SetCliCallback,     nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendKey",         nullptr, SendKey,         nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendModifiers",   nullptr, SendModifiers,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendMouseMove",   nullptr, SendMouseMove,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendMouseButton", nullptr, SendMouseButton, nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendMouseAxis",   nullptr, SendMouseAxis,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"sendMouseHover",  nullptr, SendMouseHover,  nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

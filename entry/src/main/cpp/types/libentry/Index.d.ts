@@ -20,3 +20,10 @@ export const launchCli: (
   exePath: string, argv: string[], libPath: string,
   cwd: string, extraEnv: string[]
 ) => number;
+
+export const sendKey: (evdevCode: number, pressed: boolean) => void;
+export const sendModifiers: (depressed: number, latched: number, locked: number, group: number) => void;
+export const sendMouseMove: (x: number, y: number) => void;
+export const sendMouseButton: (button: number, pressed: boolean) => void;
+export const sendMouseAxis: (dx: number, dy: number) => void;
+export const sendMouseHover: (inside: boolean) => void;

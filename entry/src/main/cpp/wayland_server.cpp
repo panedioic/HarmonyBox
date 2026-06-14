@@ -4,6 +4,15 @@
 #include <ctime>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <algorithm>
+
+extern "C" {
+#include <linux/memfd.h>
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001
+#endif
+int memfd_create(const char* name, unsigned int flags);
+}
 
 #include "fps_counter.h"
 
@@ -77,6 +86,10 @@ bool WaylandServer::Start(const std::string& socketPath) {
     wl_display_init_shm(display_); // wl_shm 由 libwayland 内置实现
     
     RegisterXdgShell(display_);
+    
+    // io
+    wl_global_create(display_, &wl_seat_interface, 5, this, seat_bind);
+    BuildKeymapFd();
 
     running_ = true;
     loopThread_ = std::thread(&WaylandServer::Loop, this);
@@ -180,6 +193,8 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     // 首帧到达 → 通知 UI
     auto* self = GetInstance();
     if (self->MarkFirstCommit()) {
+        self->SetKeyboardFocus(surfRes);
+        self->SetPointerFocus(surfRes);
         self->FireState("active");
     }
 }
@@ -200,4 +215,232 @@ bool WaylandServer::TakeLatestFrame(std::vector<uint8_t>& out, int& w, int& h) {
     w = latestW_; h = latestH_;
     dirty_ = false;
     return true;
+}
+
+// ===== Keyboard and Mouse =====
+
+static const struct wl_seat_interface k_seat_impl = {
+    .get_pointer  = WaylandServer::seat_get_pointer,
+    .get_keyboard = WaylandServer::seat_get_keyboard,
+    .get_touch    = WaylandServer::seat_get_touch,
+    .release      = WaylandServer::seat_release,
+};
+
+static const struct wl_keyboard_interface k_keyboard_impl = {
+    .release = WaylandServer::keyboard_release,
+};
+
+static const struct wl_pointer_interface k_pointer_impl = {
+    .set_cursor = WaylandServer::pointer_set_cursor,
+    .release    = WaylandServer::pointer_release,
+};
+
+uint32_t WaylandServer::NextSerial() { return wl_display_next_serial(display_); }
+
+uint32_t WaylandServer::NowMs() {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+bool WaylandServer::BuildKeymapFd() {
+    static const char kKeymap[] =
+        "xkb_keymap {\n"
+        "  xkb_keycodes  { include \"evdev+aliases(qwerty)\" };\n"
+        "  xkb_types     { include \"complete\" };\n"
+        "  xkb_compat    { include \"complete\" };\n"
+        "  xkb_symbols   { include \"pc+us+inet(evdev)\" };\n"
+        "};\n";
+    keymapSize_ = sizeof(kKeymap);
+    int fd = memfd_create("hbox-xkb", MFD_CLOEXEC);
+    if (fd < 0) return false;
+    if (ftruncate(fd, keymapSize_) < 0) { close(fd); return false; }
+    void* p = mmap(nullptr, keymapSize_, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) { close(fd); return false; }
+    memcpy(p, kKeymap, keymapSize_);
+    munmap(p, keymapSize_);
+    keymapFd_ = fd;
+    return true;
+}
+
+void WaylandServer::seat_bind(wl_client* c, void* data, uint32_t v, uint32_t id) {
+    auto* self = static_cast<WaylandServer*>(data);
+    wl_resource* res = wl_resource_create(c, &wl_seat_interface, v, id);
+    wl_resource_set_implementation(res, &k_seat_impl, self, nullptr);
+    self->seat_.seatRes = res;
+    wl_seat_send_capabilities(res,
+        WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER);
+    if (v >= 2) wl_seat_send_name(res, "default");
+}
+
+void WaylandServer::seat_get_keyboard(wl_client* c, wl_resource* sr, uint32_t id) {
+    auto* self = static_cast<WaylandServer*>(wl_resource_get_user_data(sr));
+    wl_resource* kb = wl_resource_create(c, &wl_keyboard_interface,
+        wl_resource_get_version(sr), id);
+    wl_resource_set_implementation(kb, &k_keyboard_impl, self, [](wl_resource* r) {
+        auto& v = WaylandServer::GetInstance()->seat_.keyboards;
+        v.erase(std::remove(v.begin(), v.end(), r), v.end());
+    });
+    self->seat_.keyboards.push_back(kb);
+
+    if (self->keymapFd_ >= 0) {
+        wl_keyboard_send_keymap(kb, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+            self->keymapFd_, (uint32_t)self->keymapSize_);
+    }
+    if (wl_resource_get_version(kb) >= 4) {
+        wl_keyboard_send_repeat_info(kb, 25, 400);
+    }
+    if (self->kbFocus_ &&
+        wl_resource_get_client(self->kbFocus_) == c) {
+        wl_array keys; wl_array_init(&keys);
+        wl_keyboard_send_enter(kb, self->NextSerial(), self->kbFocus_, &keys);
+        wl_array_release(&keys);
+    }
+}
+
+void WaylandServer::seat_get_pointer(wl_client* c, wl_resource* sr, uint32_t id) {
+    auto* self = static_cast<WaylandServer*>(wl_resource_get_user_data(sr));
+    wl_resource* p = wl_resource_create(c, &wl_pointer_interface,
+        wl_resource_get_version(sr), id);
+    wl_resource_set_implementation(p, &k_pointer_impl, self, [](wl_resource* r) {
+        auto& v = WaylandServer::GetInstance()->seat_.pointers;
+        v.erase(std::remove(v.begin(), v.end(), r), v.end());
+    });
+    self->seat_.pointers.push_back(p);
+}
+
+void WaylandServer::seat_get_touch(wl_client* c, wl_resource* sr, uint32_t id) {
+    wl_resource* t = wl_resource_create(c, &wl_touch_interface,
+        wl_resource_get_version(sr), id);
+    static const struct wl_touch_interface impl = {
+        .release = [](wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+    };
+    wl_resource_set_implementation(t, &impl, nullptr, nullptr);
+}
+
+void WaylandServer::seat_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+void WaylandServer::keyboard_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+void WaylandServer::pointer_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
+void WaylandServer::pointer_set_cursor(wl_client*, wl_resource*, uint32_t,
+                                       wl_resource*, int32_t, int32_t) {
+    // 暂不实现自定义光标,客户端可能会调
+}
+
+// ─── 焦点 ───
+void WaylandServer::SetKeyboardFocus(wl_resource* surf) {
+    if (kbFocus_ == surf) return;
+    uint32_t serial = NextSerial();
+    if (kbFocus_) {
+        for (auto* k : seat_.keyboards)
+            if (wl_resource_get_client(k) == wl_resource_get_client(kbFocus_))
+                wl_keyboard_send_leave(k, serial, kbFocus_);
+    }
+    kbFocus_ = surf;
+    if (kbFocus_) {
+        wl_array a; wl_array_init(&a);
+        for (auto* k : seat_.keyboards)
+            if (wl_resource_get_client(k) == wl_resource_get_client(kbFocus_))
+                wl_keyboard_send_enter(k, serial, kbFocus_, &a);
+        wl_array_release(&a);
+    }
+}
+
+void WaylandServer::SetPointerFocus(wl_resource* surf) {
+    if (ptrFocus_ == surf) return;
+    uint32_t serial = NextSerial();
+    if (ptrFocus_) {
+        for (auto* p : seat_.pointers)
+            if (wl_resource_get_client(p) == wl_resource_get_client(ptrFocus_))
+                wl_pointer_send_leave(p, serial, ptrFocus_);
+    }
+    ptrFocus_ = surf;
+    if (ptrFocus_) {
+        for (auto* p : seat_.pointers)
+            if (wl_resource_get_client(p) == wl_resource_get_client(ptrFocus_))
+                wl_pointer_send_enter(p, serial, ptrFocus_,
+                    wl_fixed_from_int(0), wl_fixed_from_int(0));
+    }
+}
+
+// ─── 事件分发 ───
+void WaylandServer::DispatchKey(uint32_t code, bool pressed) {
+    if (!kbFocus_) return;
+    uint32_t serial = NextSerial(), t = NowMs();
+    auto* c = wl_resource_get_client(kbFocus_);
+    for (auto* k : seat_.keyboards)
+        if (wl_resource_get_client(k) == c)
+            wl_keyboard_send_key(k, serial, t, code,
+                pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchModifiers(uint32_t d, uint32_t l, uint32_t lk, uint32_t g) {
+    if (!kbFocus_) return;
+    uint32_t serial = NextSerial();
+    auto* c = wl_resource_get_client(kbFocus_);
+    for (auto* k : seat_.keyboards)
+        if (wl_resource_get_client(k) == c)
+            wl_keyboard_send_modifiers(k, serial, d, l, lk, g);
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchMouseMotion(double x, double y) {
+    if (!ptrFocus_) return;
+    uint32_t t = NowMs();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != c) continue;
+        wl_pointer_send_motion(p, t,
+            wl_fixed_from_double(x), wl_fixed_from_double(y));
+        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
+    }
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchMouseButton(uint32_t button, bool pressed) {
+    if (!ptrFocus_) return;
+    uint32_t serial = NextSerial(), t = NowMs();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != c) continue;
+        wl_pointer_send_button(p, serial, t, button,
+            pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
+        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
+    }
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchMouseAxis(double dx, double dy) {
+    if (!ptrFocus_) return;
+    uint32_t t = NowMs();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != c) continue;
+        if (dx != 0)
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+                                 wl_fixed_from_double(dx));
+        if (dy != 0)
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                 wl_fixed_from_double(dy));
+        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
+    }
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchMouseEnter(double x, double y) {
+    if (!ptrFocus_) return;
+    uint32_t serial = NextSerial();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    for (auto* p : seat_.pointers)
+        if (wl_resource_get_client(p) == c)
+            wl_pointer_send_enter(p, serial, ptrFocus_,
+                wl_fixed_from_double(x), wl_fixed_from_double(y));
+}
+
+void WaylandServer::DispatchMouseLeave() {
+    if (!ptrFocus_) return;
+    uint32_t serial = NextSerial();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    for (auto* p : seat_.pointers)
+        if (wl_resource_get_client(p) == c)
+            wl_pointer_send_leave(p, serial, ptrFocus_);
 }
