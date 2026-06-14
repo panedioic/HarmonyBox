@@ -1,6 +1,7 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { LibStore } from './LibStore';
 
 const ACTIVE_TIMEOUT_MS: number = 15000;
 
@@ -21,8 +22,10 @@ export class WaylandService {
   private box64Ready: boolean = false;
   private currentAppId: string | null = null;
   private activeWaiter: ((ok: boolean) => void) | null = null;
+  private context: common.UIAbilityContext | null = null;
 
   init(context: common.UIAbilityContext): boolean {
+    this.context = context;
     if (this.serverReady) {
       return true;
     }
@@ -80,12 +83,17 @@ export class WaylandService {
         return;
       }
 
+      const libDir: string = LibStore.getDir(this.context!);
+      const extraEnv: string[] = [`BOX64_LD_LIBRARY_PATH=${libDir}`];
+
       const argv: string[] = [this.box64Path, exeAbsPath];
       for (const a of extraArgs) {
         argv.push(a);
       }
 
-      const pid: number = wl.launchClient(this.box64Path, argv, this.sockPath, this.libPath);
+      const pid: number = wl.launchClient(
+        this.box64Path, argv, this.sockPath, this.libPath, extraEnv
+      );
       if (pid <= 0) {
         resolve(-4);
         return;

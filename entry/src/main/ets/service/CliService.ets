@@ -1,5 +1,6 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
+import { LibStore } from './LibStore';
 
 export interface CliSubscriber {
   onLine: (line: string) => void;
@@ -58,7 +59,9 @@ export class CliService {
     const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
     const argv: string[] = [BOX64_PATH, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
-    return wl.launchCli(BOX64_PATH, argv, libPath, cwd);
+    const x64LibDir: string = LibStore.getDir(this.context);
+    const extraEnv: string[] = [`BOX64_LD_LIBRARY_PATH=${x64LibDir}`];
+    return wl.launchCli(BOX64_PATH, argv, libPath, cwd, extraEnv);
   }
 
   // 订阅指定 pid 的输出,返回当前已缓冲的全部行

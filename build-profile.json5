@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.cer",
+          "certpath": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BC7666BD425D140DAD1AC4F7DD8FF3C67A46454F14A3632915093D72A3886BA4ADA90C99FE6F5AA",
-          "profile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p7b",
+          "keyPassword": "0000001B24A019481DA3944B80A092FF4A6AE6B702AFFF9DE16F68EA3ED580BB8778A7AE3D2DDCE057BD49",
+          "profile": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\Seina\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p12",
-          "storePassword": "0000001B96155C76C1584CE4A1F477C0DA211D1577C53FC3EA58B91FA814F660BBD5469344CC76A2F5752E"
+          "storeFile": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p12",
+          "storePassword": "0000001B944205CFBA3AF940A01824F975B97D61BE3B1A3F9B8F4ABB37B567A6E49DED9AC94A6D77D8A2F2"
         }
       }
     ],

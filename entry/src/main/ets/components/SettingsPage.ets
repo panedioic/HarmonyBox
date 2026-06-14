@@ -2,6 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
 import { ToolDetector, ToolStatus } from '../service/ToolDetector';
 import { ToolEnvStore, Box64Env } from '../model/ToolEnvStore';
+import { LibStore, LibFile } from '../service/LibStore';
 
 @Component
 export struct SettingsPage {
@@ -9,11 +10,14 @@ export struct SettingsPage {
   @State hapsHowto: ToolStatus = ToolDetector.getHapsHowto();
   @State box64Env: Box64Env = ToolEnvStore.defaults();
   @State savedHint: string = '';
+  @State libFiles: LibFile[] = [];
+  @State libDir: string = '';
 
   aboutToAppear(): void {
     this.refreshTools();
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.box64Env = ToolEnvStore.loadBox64(ctx);
+    this.refreshLibs();
   }
 
   refreshTools(): void {
@@ -65,6 +69,47 @@ export struct SettingsPage {
 
   resetBox64Env(): void {
     this.box64Env = ToolEnvStore.defaults();
+  }
+
+  refreshLibs(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.libDir = LibStore.getDir(ctx);
+    this.libFiles = LibStore.list(ctx);
+  }
+
+  async uploadLibs(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const n: number = await LibStore.pickAndAdd(ctx);
+    if (n > 0) {
+      this.refreshLibs();
+      this.savedHint = `已添加 ${n} 个文件`;
+      setTimeout((): void => { this.savedHint = ''; }, 2000);
+    }
+  }
+
+  removeLib(name: string): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    LibStore.remove(ctx, name);
+    this.refreshLibs();
+  }
+
+  clearLibs(): void {
+    AlertDialog.show({
+      title: '清空共享库',
+      message: `将删除 ${this.libFiles.length} 个文件,无法撤销。`,
+      primaryButton: {
+        value: '取消', action: (): void => {}
+      },
+      secondaryButton: {
+        value: '清空',
+        fontColor: '#E64545',
+        action: (): void => {
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          LibStore.clear(ctx);
+          this.refreshLibs();
+        }
+      }
+    });
   }
 
   @Builder
@@ -205,6 +250,87 @@ export struct SettingsPage {
             this.ToolRow(t)
           }, (t: ToolStatus): string => `${t.id}_${t.installed}_${t.version}`)
         }
+        .width('100%')
+
+        // —— X86_64 共享库 ——
+        Row() {
+          Column({ space: 2 }) {
+            Text('X86_64 共享库 (box64)')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+            Text('上传应用依赖的 x86_64 .so,启动时自动注入 BOX64_LD_LIBRARY_PATH')
+              .fontSize(11)
+              .fontColor('#999999')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Button('上传')
+            .fontSize(12)
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.HM_BLUE)
+            .onClick((): void => { this.uploadLibs(); })
+          Button('清空')
+            .fontSize(12)
+            .height(28)
+            .margin({ left: 8 })
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#F0F0F0')
+            .fontColor('#333333')
+            .enabled(this.libFiles.length > 0)
+            .onClick((): void => { this.clearLibs(); })
+        }
+        .width('100%')
+        .margin({ top: 16, bottom: 8 })
+
+        Column() {
+          Text(this.libDir)
+            .fontSize(11)
+            .fontColor('#999999')
+            .width('100%')
+            .margin({ bottom: 10 })
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          if (this.libFiles.length === 0) {
+            Text('尚未上传任何 .so 文件')
+              .fontSize(13)
+              .fontColor('#999999')
+              .padding(12)
+          } else {
+            ForEach(this.libFiles, (f: LibFile): void => {
+              Row() {
+                Column({ space: 2 }) {
+                  Text(f.name)
+                    .fontSize(13)
+                    .fontColor('#333333')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(LibStore.formatSize(f.size))
+                    .fontSize(11)
+                    .fontColor('#999999')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Button('删除')
+                  .fontSize(11)
+                  .height(26)
+                  .padding({ left: 10, right: 10 })
+                  .backgroundColor('#FFEEEE')
+                  .fontColor('#E64545')
+                  .onClick((): void => { this.removeLib(f.name); })
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+            }, (f: LibFile): string => `${f.name}_${f.size}`)
+          }
+        }
+        .padding(14)
+        .backgroundColor('#FAFAFA')
+        .borderRadius(10)
+        .alignItems(HorizontalAlign.Start)
         .width('100%')
 
         // —— box64 环境变量 ——
