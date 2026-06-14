@@ -54,14 +54,22 @@ export class CliService {
   }
 
   // 通过 box64 启动 x86_64 cli 应用
-  launchBox64(exeAbsPath: string, extraArgs: string[], cwd: string): number {
+  launchBox64(
+    exeAbsPath: string,
+    extraArgs: string[],
+    cwd: string,
+    extraEnv: string[] = []
+  ): number {
     if (!this.context) return -1;
     const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
     const argv: string[] = [BOX64_PATH, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
+
     const x64LibDir: string = LibStore.getDir(this.context);
-    const extraEnv: string[] = [`BOX64_LD_LIBRARY_PATH=${x64LibDir}`];
-    return wl.launchCli(BOX64_PATH, argv, libPath, cwd, extraEnv);
+    const env: string[] = [`BOX64_LD_LIBRARY_PATH=${x64LibDir}`];
+    for (const e of extraEnv) env.push(e);
+
+    return wl.launchCli(BOX64_PATH, argv, libPath, cwd, env);
   }
 
   // 订阅指定 pid 的输出,返回当前已缓冲的全部行

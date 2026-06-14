@@ -5,6 +5,7 @@ import { AppInfo } from '../model/AppInfo';
 export struct LibraryPage {
   @Link apps: AppInfo[];
   onLaunch: (app: AppInfo) => void = () => {};
+  onLaunchWithLog: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
 
   build() {
@@ -40,6 +41,7 @@ export struct LibraryPage {
               AppCard({
                 app: app,
                 onLaunch: this.onLaunch,
+                onLaunchWithLog: this.onLaunchWithLog,
                 onDelete: this.onDelete
               })
             }, (app: AppInfo, index: number) => app.id || `${app.name}_${index}`)
@@ -60,6 +62,7 @@ export struct LibraryPage {
 struct AppCard {
   app: AppInfo = new AppInfo();
   onLaunch: (app: AppInfo) => void = () => {};
+  onLaunchWithLog: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
 
@@ -74,6 +77,9 @@ struct AppCard {
         .onClick(() => {
           this.onLaunch(this.app);
         })
+
+      MenuItem({ content: '启动并显示日志' })
+        .onClick((): void => { this.onLaunchWithLog(this.app); })
 
       MenuItem({
         content: '查看路径'
