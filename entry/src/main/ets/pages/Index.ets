@@ -58,7 +58,9 @@ struct Index {
     for (const k of [this.guiKey(app.id), this.cliKey(app.id)]) {
       const w = runningWindows.get(k);
       if (w) {
-        try { w.destroyWindow(); } catch (e) { /* ignore */ }
+        w.destroyWindow().catch(() => {
+          // TODO: Implement error handling.
+        });
         runningWindows.remove(k);
       }
     }
@@ -113,8 +115,12 @@ struct Index {
     // 已经打开过 → 置顶
     const existing = runningWindows.get(app.id);
     if (existing) {
-      await existing.showWindow();
-      await existing.raiseToAppTop?.();
+      try {
+        await existing.showWindow();
+        await existing.raiseToAppTop?.();
+      } catch (error) {
+        // TODO: Implement error handling.
+      }
       return;
     }
 
@@ -266,7 +272,9 @@ struct Index {
             // 顺手关掉 GUI 窗口(如果已开)
             const guiWin = runningWindows.get(this.guiKey(app.id));
             if (guiWin) {
-              try { guiWin.destroyWindow(); } catch (e) { /* ignore */ }
+              guiWin.destroyWindow().catch(() => {
+                // TODO: Implement error handling.
+              });
               runningWindows.remove(this.guiKey(app.id));
             }
           }
@@ -313,7 +321,9 @@ struct Index {
             // 顺手关 CLI 窗口
             const cliWin = runningWindows.get(this.cliKey(app.id));
             if (cliWin) {
-              try { cliWin.destroyWindow(); } catch (e) { /* ignore */ }
+              cliWin.destroyWindow().catch(() => {
+                // TODO: Implement error handling.
+              });
               runningWindows.remove(this.cliKey(app.id));
             }
           }
