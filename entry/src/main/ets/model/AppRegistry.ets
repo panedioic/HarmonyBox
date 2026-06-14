@@ -66,4 +66,15 @@ export class AppRegistry {
     AppRegistry.save(context, filtered);
     return filtered;
   }
+
+  static update(context: common.Context, updated: AppInfo): AppInfo[] {
+    const apps: AppInfo[] = AppRegistry.load(context);
+    const idx: number = apps.findIndex((a: AppInfo): boolean => a.id === updated.id);
+    if (idx < 0) {
+      return apps;
+    }
+    apps[idx] = updated;
+    AppRegistry.save(context, apps);
+    return apps;
+  }
 }

@@ -67,6 +67,20 @@ struct Index {
     this.installedApps = AppRegistry.remove(ctx, app.id);
   }
 
+  editApp = (updated: AppInfo): void => {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.installedApps = AppRegistry.update(ctx, updated);
+    this.toast(`已保存「${updated.name}」`, 1200);
+  }
+
+  exportApp = (app: AppInfo): void => {
+    this.toast('导出应用功能尚未实现', 1500);
+  }
+
+  updateApp = (app: AppInfo): void => {
+    this.toast('更新应用功能尚未实现', 1500);
+  }
+
   private parseAppEnv(
     envText: string,
     ctx: common.UIAbilityContext,
@@ -321,7 +335,10 @@ struct Index {
         apps: $installedApps,
         onLaunch: this.launchApp,
         onLaunchWithLog: this.launchAppWithLog,
-        onDelete: this.deleteApp
+        onDelete: this.deleteApp,
+        onEdit: this.editApp,
+        onExport: this.exportApp,
+        onUpdate: this.updateApp
       })
     } else if (this.currentPage === PageType.INSTALL) {
       InstallPage({ onInstalled: this.addApp })

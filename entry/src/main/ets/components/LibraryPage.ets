@@ -1,16 +1,21 @@
 import { Theme } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
+import { EditAppDialog } from './EditAppDialog';
 
+// LibraryPage 顶层增加 onEdit / onExport / onUpdate 三个回调透传
 @Component
 export struct LibraryPage {
   @Link apps: AppInfo[];
   onLaunch: (app: AppInfo) => void = () => {};
   onLaunchWithLog: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
+  onEdit: (app: AppInfo) => void = () => {};
+  onExport: (app: AppInfo) => void = () => {};
+  onUpdate: (app: AppInfo) => void = () => {};
 
   build() {
     Column() {
-      Text('已安装的应用程序')
+      Text('已安装的应用')
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
         .margin({ bottom: 20 })
@@ -37,14 +42,17 @@ export struct LibraryPage {
             justifyContent: FlexAlign.Start,
             alignItems: ItemAlign.Start
           }) {
-            ForEach(this.apps, (app: AppInfo, index: number) => {
+            ForEach(this.apps, (app: AppInfo, index: number): void => {
               AppCard({
                 app: app,
                 onLaunch: this.onLaunch,
                 onLaunchWithLog: this.onLaunchWithLog,
-                onDelete: this.onDelete
+                onDelete: this.onDelete,
+                onEdit: this.onEdit,
+                onExport: this.onExport,
+                onUpdate: this.onUpdate
               })
-            }, (app: AppInfo, index: number) => app.id || `${app.name}_${index}`)
+            }, (app: AppInfo, index: number): string => app.id || `${app.name}_${index}`)
           }
           .width('100%')
         }
@@ -64,37 +72,47 @@ struct AppCard {
   onLaunch: (app: AppInfo) => void = () => {};
   onLaunchWithLog: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
+  onEdit: (app: AppInfo) => void = () => {};
+  onExport: (app: AppInfo) => void = () => {};
+  onUpdate: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
 
-  // 右键菜单
+  // dialog 控制器在 build 上下文里创建,把 app 和 onSave 直接绑过去
+  private editDialog: CustomDialogController = new CustomDialogController({
+    builder: EditAppDialog({
+      app: this.app,
+      onSave: (updated: AppInfo): void => {
+        this.onEdit(updated);
+      }
+    }),
+    autoCancel: true,
+    customStyle: true,
+    alignment: DialogAlignment.Center
+  });
+
   @Builder
   ContextMenu() {
     Menu() {
-      MenuItem({
-        startIcon: $r('sys.media.ohos_ic_public_play'),
-        content: '启动应用'
-      })
-        .onClick(() => {
-          this.onLaunch(this.app);
-        })
+      MenuItem({ content: '启动应用' })
+        .onClick((): void => { this.onLaunch(this.app); })
 
       MenuItem({ content: '启动并显示日志' })
         .onClick((): void => { this.onLaunchWithLog(this.app); })
 
-      MenuItem({
-        content: '查看路径'
-      })
-        .onClick(() => {
-          console.info(`installDir: ${this.app.installDir}`);
-        })
+      MenuItem({ content: '编辑信息' })
+        .onClick((): void => { this.editDialog.open(); })
 
-      MenuItem({
-        // startIcon: $r('sys.media.ohos_ic_public_delete'),
-        content: '删除应用'
-      })
-        .onClick(() => {
-          this.confirmDelete();
-        })
+      MenuItem({ content: '更新应用' })
+        .onClick((): void => { this.onUpdate(this.app); })
+
+      MenuItem({ content: '导出应用' })
+        .onClick((): void => { this.onExport(this.app); })
+
+      MenuItem({ content: '查看路径' })
+        .onClick((): void => { console.info(`installDir: ${this.app.installDir}`); })
+
+      MenuItem({ content: '删除应用' })
+        .onClick((): void => { this.confirmDelete(); })
     }
   }
 
@@ -106,12 +124,12 @@ struct AppCard {
       alignment: DialogAlignment.Center,
       primaryButton: {
         value: '取消',
-        action: () => {}
+        action: (): void => {}
       },
       secondaryButton: {
         value: '删除',
         fontColor: '#E64545',
-        action: () => {
+        action: (): void => {
           this.onDelete(this.app);
         }
       }
@@ -155,10 +173,10 @@ struct AppCard {
       ? { radius: 16, color: '#14000000', offsetX: 0, offsetY: 6 }
       : { radius: 0, color: '#00000000', offsetX: 0, offsetY: 0 })
     .animation({ duration: 200, curve: Curve.EaseOut })
-    .onHover((isHover: boolean) => {
+    .onHover((isHover: boolean): void => {
       this.isHovered = isHover;
     })
-    .onClick(() => {
+    .onClick((): void => {
       this.onLaunch(this.app);
     })
     .bindContextMenu(this.ContextMenu, ResponseType.RightClick)
