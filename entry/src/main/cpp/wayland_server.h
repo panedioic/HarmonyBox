@@ -22,7 +22,7 @@ public:
     bool Start(const std::string& socketPath);
     void Stop();
     bool TakeLatestFrame(std::vector<uint8_t>& outPixels, int& w, int& h);
-    void ResetFirstCommit() { firstCommit_ = false; }
+    void ResetFirstCommit();
     
     void SetStateCallback(StateCb cb) { stateCb_ = std::move(cb); }
     void FireState(const char* s) { if (stateCb_) stateCb_(s); }
@@ -97,6 +97,8 @@ private:
     bool BuildKeymapFd();
     uint32_t NextSerial();
     uint32_t NowMs();
+
+    wl_resource* mainSurface_ = nullptr; // 追踪主渲染窗口
 };
 
 struct SurfaceState {
