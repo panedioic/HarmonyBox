@@ -13,6 +13,7 @@ import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
 import { CliService } from '../service/CliService';
+import { LibStore } from '../service/LibStore';
 
 @Entry
 @Component
@@ -66,6 +67,24 @@ struct Index {
     this.installedApps = AppRegistry.remove(ctx, app.id);
   }
 
+  private parseAppEnv(envText: string, ctx: common.UIAbilityContext): string[] {
+    if (!envText) return [];
+    const x64Libs: string = LibStore.getDir(ctx);
+    const filesDir: string = ctx.filesDir;
+    const out: string[] = [];
+    // 支持 ; 和换行作为分隔
+    const parts: string[] = envText.split(/[;\n\r]+/);
+    for (const raw of parts) {
+      const line: string = raw.trim();
+      if (!line || !line.includes('=')) continue;
+      const expanded: string = line
+        .replace(/\$\{X64_LIBS\}/g, x64Libs)
+        .replace(/\$\{FILES_DIR\}/g, filesDir);
+      out.push(expanded);
+    }
+    return out;
+  }
+
   async openAppWindow(app: AppInfo, withLog: boolean): Promise<void> {
     // 仅支持 LINUX64
     if (app.type !== AppType.LINUX64) {
@@ -111,11 +130,14 @@ struct Index {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const svc = CliService.getInstance();
     svc.init(ctx);
+
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
     const exeAbs: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot);
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+
+    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot, userEnv);
     if (pid <= 0) {
       this.toast('启动 CLI 失败', 1500);
       return;
@@ -128,12 +150,15 @@ struct Index {
     if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
     if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
     if (wlSvc.getCurrentAppId()) { this.toast('已有 GUI 应用在运行', 1800); return; }
+
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const exeAbs: string = `${ctx.filesDir}/${app.installDir}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+
     this.toast(`正在启动 ${app.name}...`, 1200);
-    const code: number = await wlSvc.launch(app.id, exeAbs, userArgs);
+    const code: number = await wlSvc.launch(app.id, exeAbs, userArgs, userEnv);
     if (code <= 0) {
       this.toast(`${app.name} 启动失败: ${this.launchErrorText(code)}`, 2500);
       return;
@@ -144,30 +169,38 @@ struct Index {
   private async openGuiWithLog(app: AppInfo): Promise<void> {
     const wlSvc = WaylandService.getInstance();
     const cliSvc = CliService.getInstance();
+
     if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
     if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
     if (!wlSvc.claimSlot(app.id)) { this.toast('已有 GUI 应用在运行', 1800); return; }
+
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     cliSvc.init(ctx);
+
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
     const exeAbs: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const wlEnv: string[] = wlSvc.getWaylandEnv();
-    const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, wlEnv);
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+
+    // wayland 环境变量 + 用户自定义环境变量
+    const env: string[] = [];
+    for (const e of wlSvc.getWaylandEnv()) env.push(e);
+    for (const e of userEnv) env.push(e);
+
+    const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, env);
     if (pid <= 0) {
       wlSvc.releaseSlot(app.id);
       this.toast('启动失败', 1500);
       return;
     }
-    // 立即开 CLI 窗口(用户能看到日志输出)
+
     await this.createCliWindow(app, pid, true);
     this.toast(`正在启动 ${app.name}...`, 1200);
-    // 等 wayland 客户端连接 + 首帧
+
     const ok: boolean = await wlSvc.waitActive(15000);
     if (!ok) {
       this.toast('客户端未在 15s 内连接 Wayland', 2500);
-      // 注意:不 kill 进程,CLI 窗口仍在,用户可看输出排查
       return;
     }
     await this.createAppWindow(app, pid);

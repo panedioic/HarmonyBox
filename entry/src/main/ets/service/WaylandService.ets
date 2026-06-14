@@ -109,7 +109,12 @@ export class WaylandService {
   // 旧路径:不带日志,直接 launchClient 等 active
   // 返回 >0 = pid, -1 = server 未就绪, -2 = 槽位已占, -3 = box64 未就绪,
   //       -4 = launch 失败, -5 = 等 active 超时
-  async launch(appId: string, exeAbsPath: string, extraArgs: string[]): Promise<number> {
+  async launch(
+    appId: string,
+    exeAbsPath: string,
+    extraArgs: string[],
+    extraEnv: string[] = []
+  ): Promise<number> {
     if (!this.serverReady) return -1;
     if (!this.box64Ready) return -3;
     if (!this.claimSlot(appId)) return -2;
@@ -118,10 +123,12 @@ export class WaylandService {
     for (const a of extraArgs) argv.push(a);
 
     const libDir: string = this.context ? LibStore.getDir(this.context) : '';
-    const extraEnv: string[] = libDir ? [`BOX64_LD_LIBRARY_PATH=${libDir}`] : [];
+    const env: string[] = [];
+    if (libDir) env.push(`BOX64_LD_LIBRARY_PATH=${libDir}`);
+    for (const e of extraEnv) env.push(e);
 
     const pid: number = wl.launchClient(
-      this.box64Path, argv, this.sockPath, this.libPath, extraEnv
+      this.box64Path, argv, this.sockPath, this.libPath, env
     );
     if (pid <= 0) {
       this.releaseSlot(appId);

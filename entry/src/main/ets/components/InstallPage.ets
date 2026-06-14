@@ -332,20 +332,24 @@ export struct InstallPage {
 
           Divider().color('#EEEEEE').margin({ top: 14 })
 
-          // —— 占位配置 ——
-          this.SectionLabel('环境变量 (占位)')
+          this.SectionLabel('环境变量')
 
-          TextInput({
-            placeholder: 'KEY=VALUE;KEY2=VALUE2',
+          TextArea({
+            placeholder: 'KEY=VALUE,可多行或用 ; 分隔\n可用占位符: ${X64_LIBS}, ${FILES_DIR}',
             text: this.envVars
           })
-            .height(36)
+            .height(80)
             .fontSize(13)
-            .onChange((v: string) => {
+            .onChange((v: string): void => {
               this.envVars = v;
             })
 
-          this.SectionLabel('启动参数 (占位)')
+          Text('示例: LD_PRELOAD=${X64_LIBS}/libforkpty_shim.so')
+            .fontSize(11)
+            .fontColor('#999999')
+            .margin({ top: 4 })
+
+          this.SectionLabel('启动参数')
 
           TextInput({
             placeholder: '--debug --port=8080',
@@ -353,7 +357,7 @@ export struct InstallPage {
           })
             .height(36)
             .fontSize(13)
-            .onChange((v: string) => {
+            .onChange((v: string): void => {
               this.launchArgs = v;
             })
         }
