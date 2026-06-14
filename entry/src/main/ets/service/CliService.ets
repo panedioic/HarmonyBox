@@ -58,17 +58,25 @@ export class CliService {
     exeAbsPath: string,
     extraArgs: string[],
     cwd: string,
-    extraEnv: string[] = []
+    extraEnv: string[] = [],
+    appDir: string = ''
   ): number {
     if (!this.context) return -1;
     const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
     const argv: string[] = [BOX64_PATH, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
 
+    const env: string[] = [];
     const x64LibDir: string = LibStore.getDir(this.context);
-    const env: string[] = [`BOX64_LD_LIBRARY_PATH=${x64LibDir}`];
-    for (const e of extraEnv) env.push(e);
+    const ldPaths: string[] = [];
+    if (appDir) {
+      ldPaths.push(appDir);
+      ldPaths.push(`${appDir}/lib`);
+    }
+    if (x64LibDir) ldPaths.push(x64LibDir);
+    if (ldPaths.length > 0) env.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
 
+    for (const e of extraEnv) env.push(e);
     return wl.launchCli(BOX64_PATH, argv, libPath, cwd, env);
   }
 

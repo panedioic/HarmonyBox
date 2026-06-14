@@ -67,17 +67,21 @@ struct Index {
     this.installedApps = AppRegistry.remove(ctx, app.id);
   }
 
-  private parseAppEnv(envText: string, ctx: common.UIAbilityContext): string[] {
+  private parseAppEnv(
+    envText: string,
+    ctx: common.UIAbilityContext,
+    appDir: string
+  ): string[] {
     if (!envText) return [];
     const x64Libs: string = LibStore.getDir(ctx);
     const filesDir: string = ctx.filesDir;
     const out: string[] = [];
-    // 支持 ; 和换行作为分隔
     const parts: string[] = envText.split(/[;\n\r]+/);
     for (const raw of parts) {
       const line: string = raw.trim();
       if (!line || !line.includes('=')) continue;
       const expanded: string = line
+        .replace(/\$\{APP_DIR\}/g, appDir)
         .replace(/\$\{X64_LIBS\}/g, x64Libs)
         .replace(/\$\{FILES_DIR\}/g, filesDir);
       out.push(expanded);
@@ -134,8 +138,8 @@ struct Index {
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
     const exeAbs: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
-      .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+      .split(/\s+/).filter((s: string): boolean => s.length > 0)
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
     const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot, userEnv);
     if (pid <= 0) {
@@ -152,10 +156,11 @@ struct Index {
     if (wlSvc.getCurrentAppId()) { this.toast('已有 GUI 应用在运行', 1800); return; }
 
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
     const exeAbs: string = `${ctx.filesDir}/${app.installDir}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
     this.toast(`正在启动 ${app.name}...`, 1200);
     const code: number = await wlSvc.launch(app.id, exeAbs, userArgs, userEnv);
@@ -181,7 +186,7 @@ struct Index {
     const exeAbs: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx);
+    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
     // wayland 环境变量 + 用户自定义环境变量
     const env: string[] = [];

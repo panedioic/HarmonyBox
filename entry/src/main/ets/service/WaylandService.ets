@@ -113,7 +113,8 @@ export class WaylandService {
     appId: string,
     exeAbsPath: string,
     extraArgs: string[],
-    extraEnv: string[] = []
+    extraEnv: string[] = [],
+    appDir: string = ''
   ): Promise<number> {
     if (!this.serverReady) return -1;
     if (!this.box64Ready) return -3;
@@ -122,9 +123,10 @@ export class WaylandService {
     const argv: string[] = [this.box64Path, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
 
-    const libDir: string = this.context ? LibStore.getDir(this.context) : '';
     const env: string[] = [];
-    if (libDir) env.push(`BOX64_LD_LIBRARY_PATH=${libDir}`);
+    // 应用目录优先,然后是全局池
+    const ldPath: string = this.buildLdPath(appDir);
+    if (ldPath) env.push(`BOX64_LD_LIBRARY_PATH=${ldPath}`);
     for (const e of extraEnv) env.push(e);
 
     const pid: number = wl.launchClient(
@@ -141,6 +143,24 @@ export class WaylandService {
       return -5;
     }
     return pid;
+  }
+
+  private buildLdPath(appDir: string): string {
+    const parts: string[] = [];
+    if (appDir) {
+      parts.push(appDir);
+      parts.push(`${appDir}/lib`);
+    }
+    if (this.context) {
+      const x64: string = LibStore.getDir(this.context);
+      if (x64) parts.push(x64);
+    }
+    return parts.join(':');
+  }
+
+  // 暴露给 GUI+Log 模式用
+  buildAppLdPath(appDir: string): string {
+    return this.buildLdPath(appDir);
   }
 
   // 主动停掉当前客户端
