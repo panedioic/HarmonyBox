@@ -16,6 +16,10 @@ import { CliService } from '../service/CliService';
 import { LibStore } from '../service/LibStore';
 import { FontStore } from '../service/FontStore';
 
+interface MovableWindow {
+  startMoving?: () => Promise<void>;
+}
+
 @Entry
 @Component
 struct Index {
@@ -30,6 +34,9 @@ struct Index {
     WaylandService.getInstance().setSizeListener((w: number, h: number): void => {
       this.handleWaylandSizeChange(w, h);
     });
+    WaylandService.getInstance().setMoveListener((): void => {
+      this.handleWaylandMoveRequest();
+    });
   }
 
   aboutToDisappear(): void {
@@ -43,6 +50,25 @@ struct Index {
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
     this.applyWindowSize(guiWin, bufW, bufH);
+  }
+
+  private handleWaylandMoveRequest(): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    try {
+      const movable: MovableWindow = guiWin as MovableWindow;
+      if (movable.startMoving) {
+        movable.startMoving().catch((e: BusinessError): void => {
+          console.error(`startMoving failed: ${e.code} ${e.message}`);
+        });
+      } else {
+        console.warn('window.startMoving not available on this device');
+      }
+    } catch (e) {
+      console.error(`handleWaylandMoveRequest failed: ${JSON.stringify(e)}`);
+    }
   }
 
   private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {

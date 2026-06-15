@@ -88,6 +88,11 @@ public:
     void SetWindowGeometry(wl_resource* surf, int32_t x, int32_t y, int32_t w, int32_t h);
     void ClearWindowGeometry(wl_resource* surf);
     WindowGeom GetWindowGeometry(wl_resource* surf);
+    
+    // for dragging
+    void SetMoveCallback(std::function<void()> cb) { moveCallback_ = std::move(cb); }
+    void FireMoveRequest();
+    void ReleaseAllPointerButtons();
 
 private:
     WaylandServer() = default;
@@ -126,6 +131,9 @@ private:
     // for remove csd border
     std::mutex geomMutex_;
     std::map<wl_resource*, WindowGeom> geomMap_;
+    
+    // for dragging
+    std::function<void()> moveCallback_;
 };
 
 struct SurfaceState {

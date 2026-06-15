@@ -643,6 +643,37 @@ static napi_value SendMouseHover(napi_env env, napi_callback_info info) {
 struct SizeEvent { int w; int h; };
 static napi_threadsafe_function g_sizeTsfn = nullptr;
 
+// for dragging
+static napi_threadsafe_function g_moveTsfn = nullptr;
+
+static void MoveTsfnCallJs(napi_env env, napi_value jsCb, void*, void* /*data*/) {
+    if (env && jsCb) {
+        napi_value undef;
+        napi_get_undefined(env, &undef);
+        napi_call_function(env, undef, jsCb, 0, nullptr, nullptr);
+    }
+}
+
+static napi_value SetMoveCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_moveTsfn) {
+        napi_release_threadsafe_function(g_moveTsfn, napi_tsfn_release);
+        g_moveTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLMove", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, MoveTsfnCallJs, &g_moveTsfn);
+
+    WaylandServer::GetInstance()->SetMoveCallback([]() {
+        if (g_moveTsfn) {
+            napi_call_threadsafe_function(g_moveTsfn, nullptr, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
 static void SizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
     SizeEvent* ev = static_cast<SizeEvent*>(data);
     if (env && jsCb && ev) {
@@ -708,6 +739,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"sendMouseHover",  nullptr, SendMouseHover,  nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setSizeCallback",    nullptr, SetSizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
         {"getLatestSize",      nullptr, GetLatestSize,      nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setMoveCallback",    nullptr, SetMoveCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

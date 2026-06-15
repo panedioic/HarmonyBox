@@ -30,3 +30,5 @@ export const sendMouseHover: (inside: boolean) => void;
 
 export const setSizeCallback: (cb: (w: number, h: number) => void) => void;
 export const getLatestSize: () => { w: number; h: number };
+
+export const setMoveCallback: (cb: () => void) => void;

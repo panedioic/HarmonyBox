@@ -552,3 +552,27 @@ WaylandServer::WindowGeom WaylandServer::GetWindowGeometry(wl_resource* surf) {
     if (it == geomMap_.end()) return WindowGeom();
     return it->second;
 }
+
+// for dragging
+void WaylandServer::FireMoveRequest() {
+    // 给客户端补一个 button release,避免它的实现认为鼠标仍然按下
+    ReleaseAllPointerButtons();
+    if (moveCallback_) moveCallback_();
+}
+
+void WaylandServer::ReleaseAllPointerButtons() {
+    if (!ptrFocus_) return;
+    uint32_t serial = NextSerial();
+    uint32_t t = NowMs();
+    auto* c = wl_resource_get_client(ptrFocus_);
+    // 主流 CSD 发 move 都是响应 BTN_LEFT(0x110),保险起见把左/中/右都释放一次
+    const uint32_t btns[] = {0x110, 0x111, 0x112};
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != c) continue;
+        for (uint32_t b : btns) {
+            wl_pointer_send_button(p, serial, t, b, WL_POINTER_BUTTON_STATE_RELEASED);
+        }
+        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
+    }
+    wl_display_flush_clients(display_);
+}

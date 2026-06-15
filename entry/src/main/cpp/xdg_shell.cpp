@@ -29,7 +29,12 @@ static void tl_set_app_id(wl_client*, wl_resource*, const char* a) {
 }
 static void tl_show_window_menu(wl_client*, wl_resource*, wl_resource*, uint32_t,
                                 int32_t, int32_t) {}
-static void tl_move(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+// for dragging
+static void tl_move(wl_client*, wl_resource*, wl_resource*, uint32_t serial) {
+    OH_LOG_INFO(LOG_APP, "xdg_toplevel.move serial=%{public}u", serial);
+    WaylandServer::GetInstance()->FireMoveRequest();
+}
+
 static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t, uint32_t) {}
 static void tl_set_max_size(wl_client*, wl_resource*, int32_t, int32_t) {}
 static void tl_set_min_size(wl_client*, wl_resource*, int32_t, int32_t) {}

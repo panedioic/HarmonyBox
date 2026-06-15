@@ -32,6 +32,7 @@ export class WaylandService {
   private activeWaiter: ((ok: boolean) => void) | null = null;
   private context: common.UIAbilityContext | null = null;
   private sizeListener: ((w: number, h: number) => void) | null = null;
+  private moveListener: (() => void) | null = null;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -63,6 +64,11 @@ export class WaylandService {
       if (this.sizeListener) this.sizeListener(w, h);
     });
 
+    wl.setMoveCallback((): void => {
+      console.info('[WL] move request');
+      if (this.moveListener) this.moveListener();
+    });
+
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;
     return ok;
@@ -79,6 +85,10 @@ export class WaylandService {
 
   setSizeListener(cb: ((w: number, h: number) => void) | null): void {
     this.sizeListener = cb;
+  }
+
+  setMoveListener(cb: (() => void) | null): void {
+    this.moveListener = cb;
   }
 
   getLatestBufferSize(): WlBufferSize {
