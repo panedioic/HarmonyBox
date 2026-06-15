@@ -1,5 +1,5 @@
 import wl from 'libentry.so';
-import { OH2EVDEV, modMaskOf, MOD_SHIFT, MOD_CTRL, MOD_ALT } from '../common/KeyMap';
+import { OH2EVDEV, modMaskOf } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { WaylandService, WlBufferSize } from '../service/WaylandService';
 
@@ -7,19 +7,36 @@ import { WaylandService, WlBufferSize } from '../service/WaylandService';
 @Component
 struct AppRunner {
   @State appName: string = '应用';
-  @State surfaceW: number = 800;
-  @State surfaceH: number = 600;
   @State scaleNumber: number = 1.0;
   @State surfacePxW: number = 1;
   @State surfacePxH: number = 1;
 
-  // ArkTS 自己维护修饰键状态
   private modMask: number = 0;
+
+  // Resize drag 状态
+  private resizing: boolean = false;
+  private resizeEdges: number = 0;
+  private resizeStartVpX: number = 0;
+  private resizeStartVpY: number = 0;
+  private lastVpX: number = 0;
+  private lastVpY: number = 0;
 
   aboutToAppear(): void {
     const name = AppStorage.get<string>('currentAppName');
     if (name) this.appName = name;
     this.scaleNumber = WaylandService.getInstance().getUiScale();
+
+    WaylandService.getInstance().setHostResizeBeginListener((edges: number): void => {
+      this.resizing = true;
+      this.resizeEdges = edges;
+      this.resizeStartVpX = this.lastVpX;
+      this.resizeStartVpY = this.lastVpY;
+      console.info(`HBOX_GUI_RESIZE_DRAG_RUNNER_BEGIN edges=0x${edges.toString(16)} startVp=${this.lastVpX.toFixed(1)},${this.lastVpY.toFixed(1)}`);
+    });
+  }
+
+  aboutToDisappear(): void {
+    WaylandService.getInstance().setHostResizeBeginListener(null);
   }
 
   private updateModifiers(ohKey: number, pressed: boolean): void {
@@ -39,27 +56,39 @@ struct AppRunner {
       })
         .width('100%').height('100%')
         .onLoad((): void => {
-          // 通知一次进入
           wl.sendMouseHover(true);
         })
     }
     .width('100%').height('100%')
     .backgroundColor(Color.Black)
-    // ── 焦点 ──
     .focusable(true)
     .defaultFocus(true)
-    // ── 键盘 ──
     .onKeyEvent((ev: KeyEvent): void => {
       const code: number = OH2EVDEV[ev.keyCode] ?? 0;
       if (code === 0) return;
       const pressed: boolean = ev.type === KeyType.Down;
-      // 修饰键先发 modifiers,再发 key
       this.updateModifiers(ev.keyCode, pressed);
       wl.sendKey(code, pressed);
     })
-    // ── 鼠标 ──
     .onMouse((ev: MouseEvent): void => {
-      // 比例映射:不依赖固定 scale,自动适配最大化/手动 resize
+      this.lastVpX = ev.x;
+      this.lastVpY = ev.y;
+
+      // ── Resize drag 接管:此时不转发任何鼠标事件给客户端 ──
+      if (this.resizing) {
+        if (ev.action === MouseAction.Move || ev.action === MouseAction.Hover) {
+          const dxPx: number = vp2px(ev.x - this.resizeStartVpX);
+          const dyPx: number = vp2px(ev.y - this.resizeStartVpY);
+          WaylandService.getInstance().notifyHostResizeDrag(this.resizeEdges, dxPx, dyPx);
+        } else if (ev.action === MouseAction.Release) {
+          console.info('HBOX_GUI_RESIZE_DRAG_RUNNER_END');
+          this.resizing = false;
+          WaylandService.getInstance().notifyHostResizeEnd();
+        }
+        return;
+      }
+
+      // ── 普通模式:vp → buffer 比例映射 ──
       const sz: WlBufferSize = WaylandService.getInstance().getLatestBufferSize();
       if (sz.w <= 0 || sz.h <= 0 || this.surfacePxW <= 0 || this.surfacePxH <= 0) return;
       const x: number = vp2px(ev.x) * sz.w / this.surfacePxW;

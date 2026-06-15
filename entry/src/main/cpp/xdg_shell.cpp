@@ -47,7 +47,7 @@ static void tl_unset_maximized(wl_client*, wl_resource*) {
 }
 
 static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t serial, uint32_t edges) {
-    OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_REQ_CLIENT serial=%{public}u edges=0x%{public}x",
+    OH_LOG_INFO(LOG_APP, "HBOX_GUI_RESIZE_DRAG_NATIVE_REQ serial=%{public}u edges=0x%{public}x",
                 serial, edges);
     WaylandServer::GetInstance()->FireResizeRequest(edges);
 }

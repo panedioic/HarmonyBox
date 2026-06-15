@@ -38,6 +38,9 @@ export class WaylandService {
   private maximizeListener: (() => void) | null = null;
   private unmaximizeListener: (() => void) | null = null;
   private resizeListener: ((edges: number) => void) | null = null;
+  private hostResizeBeginListener: ((edges: number) => void) | null = null;
+  private hostResizeDragListener: ((edges: number, dxPx: number, dyPx: number) => void) | null = null;
+  private hostResizeEndListener: (() => void) | null = null;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -134,6 +137,26 @@ export class WaylandService {
 
   setResizeListener(cb: ((edges: number) => void) | null): void {
     this.resizeListener = cb;
+  }
+
+  setHostResizeBeginListener(cb: ((edges: number) => void) | null): void {
+    this.hostResizeBeginListener = cb;
+  }
+  setHostResizeDragListener(cb: ((edges: number, dxPx: number, dyPx: number) => void) | null): void {
+    this.hostResizeDragListener = cb;
+  }
+  setHostResizeEndListener(cb: (() => void) | null): void {
+    this.hostResizeEndListener = cb;
+  }
+
+  fireHostResizeBegin(edges: number): void {
+    if (this.hostResizeBeginListener) this.hostResizeBeginListener(edges);
+  }
+  notifyHostResizeDrag(edges: number, dxPx: number, dyPx: number): void {
+    if (this.hostResizeDragListener) this.hostResizeDragListener(edges, dxPx, dyPx);
+  }
+  notifyHostResizeEnd(): void {
+    if (this.hostResizeEndListener) this.hostResizeEndListener();
   }
 
   getLatestBufferSize(): WlBufferSize {

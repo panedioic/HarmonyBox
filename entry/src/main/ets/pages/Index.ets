@@ -36,6 +36,14 @@ interface HostSize {
   y: number;
 }
 
+interface ResizeStart {
+  edges: number;
+  startX: number;
+  startY: number;
+  startW: number;
+  startH: number;
+}
+
 @Entry
 @Component
 struct Index {
@@ -47,6 +55,7 @@ struct Index {
   private savedHostSizes: Map<string, HostSize> = new Map();
   private maxOpUntil: number = 0;        // 这个时间戳之前忽略 windowSizeChange
   private resizeDebounceTimer: number = -1;
+  private resizeStart: ResizeStart | null = null;
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -70,6 +79,13 @@ struct Index {
     });
     WaylandService.getInstance().setResizeListener((edges: number): void => {
       this.handleWaylandResize(edges);
+    });
+    WaylandService.getInstance().setHostResizeDragListener(
+      (edges: number, dxPx: number, dyPx: number): void => {
+        this.handleHostResizeDrag(edges, dxPx, dyPx);
+      });
+    WaylandService.getInstance().setHostResizeEndListener((): void => {
+      this.handleHostResizeEnd();
     });
   }
 
@@ -218,26 +234,66 @@ struct Index {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
-    if (!guiWin) {
-      console.warn('HBOX_WIN_RESIZE_HOST_NO_WIN');
-      return;
-    }
+    if (!guiWin) return;
     try {
-      const resizable: ResizableWindow = guiWin as ResizableWindow;
-      if (resizable.startResizing && typeof resizable.startResizing === 'function') {
-        resizable.startResizing(edges)
-          .then((): void => {
-            console.info(`HBOX_WIN_RESIZE_HOST_OK edges=0x${edges.toString(16)}`);
-          })
-          .catch((e: BusinessError): void => {
-            console.warn(`HBOX_WIN_RESIZE_HOST_FAIL code=${e.code} msg=${e.message}`);
-          });
-      } else {
-        console.warn('HBOX_WIN_RESIZE_HOST_NA');
-      }
+      const prop = guiWin.getWindowProperties();
+      const r = prop.windowRect;
+      this.resizeStart = {
+        edges,
+        startX: r.left, startY: r.top,
+        startW: r.width, startH: r.height
+      };
+      console.info(`HBOX_GUI_RESIZE_DRAG_INDEX_BEGIN ${r.width}x${r.height}@${r.left},${r.top} edges=0x${edges.toString(16)}`);
+      WaylandService.getInstance().fireHostResizeBegin(edges);
     } catch (e) {
-      console.warn(`HBOX_WIN_RESIZE_HOST_THROW ${JSON.stringify(e)}`);
+      console.warn(`HBOX_GUI_RESIZE_DRAG_INDEX_FAIL ${JSON.stringify(e)}`);
     }
+  }
+
+  private handleHostResizeDrag(edges: number, dxPx: number, dyPx: number): void {
+    if (!this.resizeStart) return;
+    const s: ResizeStart = this.resizeStart;
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+
+    // xdg_toplevel.resize_edge: top=1, bottom=2, left=4, right=8
+    let newX: number = s.startX;
+    let newY: number = s.startY;
+    let newW: number = s.startW;
+    let newH: number = s.startH;
+    if ((edges & 1) !== 0) { newY = s.startY + dyPx; newH = s.startH - dyPx; }
+    if ((edges & 2) !== 0) { newH = s.startH + dyPx; }
+    if ((edges & 4) !== 0) { newX = s.startX + dxPx; newW = s.startW - dxPx; }
+    if ((edges & 8) !== 0) { newW = s.startW + dxPx; }
+
+    const minW: number = 200;
+    const minH: number = 120;
+    if (newW < minW) {
+      if ((edges & 4) !== 0) newX = s.startX + s.startW - minW;
+      newW = minW;
+    }
+    if (newH < minH) {
+      if ((edges & 1) !== 0) newY = s.startY + s.startH - minH;
+      newH = minH;
+    }
+
+    // 屏蔽 windowSizeChange 期间的 debounce 反向 configure(避免环路)
+    this.maxOpUntil = Date.now() + 200;
+
+    guiWin.resize(newW, newH).then((): void => {
+      guiWin.moveWindowToGlobal(newX, newY).catch((): void => { /* ignore */ });
+    }).catch((e: BusinessError): void => {
+      console.warn(`HBOX_GUI_RESIZE_DRAG_INDEX_FAIL resize code=${e.code}`);
+    });
+  }
+
+  private handleHostResizeEnd(): void {
+    console.info('HBOX_GUI_RESIZE_DRAG_INDEX_END');
+    this.resizeStart = null;
+    // 松手后,debounce 解禁后 windowSizeChange 会自然把最终尺寸 configure 给客户端
+    this.maxOpUntil = Date.now() + 100;
   }
 
   private sendConfigureFromHostSize(hostW: number, hostH: number, maximized: boolean): void {
