@@ -32,6 +32,8 @@ interface ResizableWindow {
 interface HostSize {
   w: number;
   h: number;
+  x: number;
+  y: number;
 }
 
 @Entry
@@ -125,72 +127,72 @@ struct Index {
   private handleWaylandMaximize(): void {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
+    if (this.maximizedApps.has(appId)) return; // 防止重复
     this.maximizedApps.add(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
 
-    // 1. 保存当前 host 尺寸,供 unmaximize 时还原
+    // 1. 保存当前尺寸+位置(用于 unmax 还原)
     try {
       const prop = guiWin.getWindowProperties();
       const r = prop.windowRect;
-      this.savedHostSizes.set(appId, { w: r.width, h: r.height } as HostSize);
-      console.info(`[HBox] saved host size ${r.width}x${r.height}`);
+      this.savedHostSizes.set(appId, {
+        w: r.width, h: r.height, x: r.left, y: r.top
+      } as HostSize);
+      console.info(`HBOX_WIN_RESIZE_MAX_SAVE ${r.width}x${r.height} @${r.left},${r.top}`);
     } catch (e) { /* ignore */ }
 
-    // 2. 屏蔽接下来 800ms 内的 windowSizeChange,避免动画中间帧打断
-    this.maxOpUntil = Date.now() + 800;
+    this.maxOpUntil = Date.now() + 1000;
 
-    // 3. 用 display 可用区域算目标 buf 尺寸,先告诉客户端
+    // 2. 取屏幕可用尺寸
+    let availW: number = 0;
+    let availH: number = 0;
     try {
       const di = display.getDefaultDisplaySync();
-      this.sendConfigureFromHostSize(di.availableWidth, di.availableHeight, true);
+      availW = di.availableWidth;
+      availH = di.availableHeight;
     } catch (e) { /* ignore */ }
+    if (availW <= 0 || availH <= 0) return;
 
-    // 4. 让 host 真正最大化
-    try {
-      const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
-      if (maximizable.maximize) {
-        maximizable.maximize().catch((e: BusinessError): void => {
-          console.warn(`maximize failed: ${e.code} ${e.message}`);
-        });
-      }
-    } catch (e) { /* ignore */ }
+    // 3. 先告诉客户端目标 buffer 尺寸
+    this.sendConfigureFromHostSize(availW, availH, true);
+
+    // 4. 用 resize + move 模拟最大化(避免 native maximize/restore 在子窗口的限制)
+    guiWin.resize(availW, availH).then((): void => {
+      guiWin.moveWindowToGlobal(0, 0).catch((): void => { /* ignore */ });
+      console.info(`HBOX_WIN_RESIZE_MAX_DONE ${availW}x${availH}`);
+    }).catch((e: BusinessError): void => {
+      console.warn(`HBOX_WIN_RESIZE_MAX_FAIL code=${e.code} msg=${e.message}`);
+    });
   }
 
   private handleWaylandUnmaximize(): void {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
+    if (!this.maximizedApps.has(appId)) return;
     this.maximizedApps.delete(appId);
-    const saved: HostSize | undefined = this.savedHostSizes.get(appId);
-    this.savedHostSizes.delete(appId);
-
-    // ★ 取消 maximize 时设的屏蔽,让 restore 后的 windowSizeChange 能触发 configure
-    this.maxOpUntil = 0;
-
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
 
-    // 同步先发一次小尺寸 configure 给客户端,host 真变小后 windowSizeChange 还会再纠正一次
-    if (saved) {
-      this.sendConfigureFromHostSize(saved.w, saved.h, false);
+    this.maxOpUntil = Date.now() + 1000;
+
+    const saved: HostSize | undefined = this.savedHostSizes.get(appId);
+    this.savedHostSizes.delete(appId);
+    if (!saved) {
+      console.warn('HBOX_WIN_RESIZE_UNMAX_NO_SAVED');
+      return;
     }
 
-    try {
-      const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
-      if (maximizable.restore) {
-        maximizable.restore().catch((e: BusinessError): void => {
-          console.warn(`HBOX_WIN_RESIZE_RESTORE_FAIL code=${e.code} msg=${e.message}`);
-          // restore 不灵就退化成 resize 兜底
-          if (saved) {
-            guiWin.resize(saved.w, saved.h).catch((e: BusinessError): void => {
-              console.warn(`HBOX_WIN_RESIZE_FALLBACK_FAIL code=${e.code} msg=${e.message}`);
-            });
-          }
-        });
-      } else if (saved) {
-        guiWin.resize(saved.w, saved.h).catch((): void => { /* ignore */ });
-      }
-    } catch (e) { /* ignore */ }
+    // 1. 先告诉客户端
+    this.sendConfigureFromHostSize(saved.w, saved.h, false);
+
+    // 2. 还原 host 尺寸+位置
+    guiWin.resize(saved.w, saved.h).then((): void => {
+      guiWin.moveWindowToGlobal(saved.x, saved.y).catch((): void => { /* ignore */ });
+      console.info(`HBOX_WIN_RESIZE_UNMAX_DONE ${saved.w}x${saved.h} @${saved.x},${saved.y}`);
+    }).catch((e: BusinessError): void => {
+      console.warn(`HBOX_WIN_RESIZE_UNMAX_FAIL code=${e.code} msg=${e.message}`);
+    });
   }
 
   private handleHostResize(appId: string, hostW: number, hostH: number): void {
