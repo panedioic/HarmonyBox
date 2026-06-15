@@ -56,6 +56,7 @@ struct Index {
   private maxOpUntil: number = 0;        // 这个时间戳之前忽略 windowSizeChange
   private resizeDebounceTimer: number = -1;
   private resizeStart: ResizeStart | null = null;
+  private resizeDragLastConfigure: number = 0;
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -279,21 +280,39 @@ struct Index {
       newH = minH;
     }
 
-    // 屏蔽 windowSizeChange 期间的 debounce 反向 configure(避免环路)
-    this.maxOpUntil = Date.now() + 200;
-
+    // 1. resize host
     guiWin.resize(newW, newH).then((): void => {
       guiWin.moveWindowToGlobal(newX, newY).catch((): void => { /* ignore */ });
     }).catch((e: BusinessError): void => {
-      console.warn(`HBOX_GUI_RESIZE_DRAG_INDEX_FAIL resize code=${e.code}`);
+      console.warn(`HBOX_GUI_RESIZE_DRAG_HOST_FAIL code=${e.code}`);
     });
+
+    // 2. 节流 configure 给客户端,让它跟着重画 buffer。
+    //    每 80ms 最多一次,够 weston-terminal 反应,又不会刷爆事件循环。
+    const now: number = Date.now();
+    if (now - this.resizeDragLastConfigure >= 80) {
+      this.resizeDragLastConfigure = now;
+      this.sendConfigureFromHostSize(newW, newH, false);
+    }
   }
 
   private handleHostResizeEnd(): void {
     console.info('HBOX_GUI_RESIZE_DRAG_INDEX_END');
+    // 松手时无条件再 configure 一次最终尺寸,确保客户端落到准确值
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (appId) {
+      const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+      if (guiWin) {
+        try {
+          const r = guiWin.getWindowProperties().windowRect;
+          this.sendConfigureFromHostSize(r.width, r.height, false);
+        } catch (e) { /* ignore */ }
+      }
+    }
     this.resizeStart = null;
-    // 松手后,debounce 解禁后 windowSizeChange 会自然把最终尺寸 configure 给客户端
-    this.maxOpUntil = Date.now() + 100;
+    this.resizeDragLastConfigure = 0;
+    // 让 windowSizeChange 那条 debounce 路径也短暂静默,避免和我们 configure 打架
+    this.maxOpUntil = Date.now() + 300;
   }
 
   private sendConfigureFromHostSize(hostW: number, hostH: number, maximized: boolean): void {
