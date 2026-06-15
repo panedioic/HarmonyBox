@@ -17,6 +17,7 @@ export struct SettingsPage {
   @State uiScale: number = 1.0;
   @State fontFiles: FontFile[] = [];
   @State fontDir: string = '';
+  @State useNativeDecor: boolean = true;
 
   private scaleOptions: number[] = [1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -27,6 +28,7 @@ export struct SettingsPage {
     this.refreshLibs();
     const uiPrefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = uiPrefs.scale;
+    this.useNativeDecor = uiPrefs.useNativeDecor;
     this.refreshFonts();
   }
 
@@ -494,6 +496,42 @@ export struct SettingsPage {
         .borderRadius(10)
         .alignItems(HorizontalAlign.Start)
         .width('100%')
+
+        Divider().color('#EEEEEE').margin({ top: 14, bottom: 12 })
+
+        Row() {
+          Column({ space: 2 }) {
+            Text('使用鸿蒙原生标题栏')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+            Text('关闭后变为沉浸式窗口,由客户端自带装饰提供标题栏与按钮')
+              .fontSize(11)
+              .fontColor('#999999')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Toggle({ type: ToggleType.Switch, isOn: this.useNativeDecor })
+            .selectedColor(Theme.HM_BLUE)
+            .onChange((on: boolean): void => {
+              this.useNativeDecor = on;
+              const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+              const prefs: UiPrefs = {
+                scale: this.uiScale,
+                useNativeDecor: on
+              } as UiPrefs;
+              ToolEnvStore.saveUiPrefs(ctx, prefs);
+              WaylandService.getInstance().reloadUiPrefs(ctx);
+              this.savedHint = on ? '已启用原生标题栏' : '已切换为沉浸式窗口';
+              setTimeout((): void => { this.savedHint = ''; }, 2000);
+            })
+        }
+        .width('100%')
+
+        Text('需要新打开的应用窗口才会生效。')
+          .fontSize(11)
+          .fontColor('#AAAAAA')
+          .margin({ top: 6 })
 
         // —— box64 环境变量 ——
         Text('box64 环境变量')

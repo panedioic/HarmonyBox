@@ -69,6 +69,15 @@ static void ReaderThreadMain(int fd) {
     }
     if (!pending.empty()) emit(pending);
     close(fd);
+
+    // ★ 客户端进程已退出(pipe EOF 或被主动 kill 后 fd 关闭)
+    g_readerRunning = false;
+    g_clientPid = -1;
+    if (g_stateTsfn) {
+        char* dup = strdup("exited");
+        napi_call_threadsafe_function(g_stateTsfn, dup, napi_tsfn_blocking);
+    }
+    OH_LOG_INFO(LOG_APP, "client reader exited, fired state=exited");
 }
 
 static void StateTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
@@ -556,8 +565,19 @@ static napi_value StopCli(napi_env env, napi_callback_info info) {
 static void KillClientLocked() {
     g_readerRunning = false;
     if (g_clientPid > 0) {
-        kill(g_clientPid, SIGTERM);
+        pid_t pid = g_clientPid;
         g_clientPid = -1;
+        kill(pid, SIGTERM);
+        OH_LOG_INFO(LOG_APP, "sent SIGTERM to client pid=%{public}d", pid);
+        // 异步兜底:800ms 后还活着就 SIGKILL
+        std::thread([pid]() {
+            usleep(800 * 1000);
+            if (kill(pid, 0) == 0) {
+                kill(pid, SIGKILL);
+                OH_LOG_WARN(LOG_APP,
+                    "client pid=%{public}d not exited in 800ms, SIGKILL", pid);
+            }
+        }).detach();
     }
 }
 

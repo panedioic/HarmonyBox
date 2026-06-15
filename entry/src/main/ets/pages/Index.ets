@@ -37,6 +37,9 @@ struct Index {
     WaylandService.getInstance().setMoveListener((): void => {
       this.handleWaylandMoveRequest();
     });
+    WaylandService.getInstance().setExitListener((): void => {
+      this.handleClientExited();
+    });
   }
 
   aboutToDisappear(): void {
@@ -71,19 +74,38 @@ struct Index {
     }
   }
 
-  private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {
-    // window.resize 单位是 px;buffer 也是 px。需要给标题栏装饰留高度。
-    let decorPx: number = 90;
-    try {
-      const di = display.getDefaultDisplaySync();
-      const density: number = di.densityPixels ?? 1;
-      decorPx = Math.round(45 * density);
-    } catch (e) { /* ignore */ }
+  private handleClientExited(): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (guiWin) {
+      guiWin.destroyWindow().catch((e: BusinessError): void => {
+        console.error(`destroy gui window failed: ${e.code} ${e.message}`);
+      });
+    }
+    // CLI 联动窗口在 windowEvent WINDOW_DESTROYED 链路里会被一起清理
+  }
 
-    const scale: number = WaylandService.getInstance().getUiScale();
+  private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {
+    const wlSvc = WaylandService.getInstance();
+    const scale: number = wlSvc.getUiScale();
+    const useNative: boolean = wlSvc.getUseNativeDecor();
+
+    let decorPx: number = 0;
+    if (useNative) {
+      try {
+        const di = display.getDefaultDisplaySync();
+        const density: number = di.densityPixels ?? 1;
+        decorPx = Math.round(45 * density);
+      } catch (e) {
+        decorPx = 90;
+      }
+    }
+
     const totalW: number = Math.max(1, Math.round(bufW * scale));
     const totalH: number = Math.max(1, Math.round(bufH * scale)) + decorPx;
-    console.info(`[HBox] resize host: buf=${bufW}x${bufH} scale=${scale} total=${totalW}x${totalH}`);
+    console.info(`[HBox] resize host: buf=${bufW}x${bufH} scale=${scale} ` +
+      `decor=${decorPx} total=${totalW}x${totalH}`);
 
     win.resize(totalW, totalH).then((): void => {
       try {
@@ -364,9 +386,11 @@ struct Index {
       if (!windowStage) return;
       const main = windowStage.getMainWindowSync();
       AppStorage.setOrCreate<string>('currentAppName', app.name);
+
+      const useNative: boolean = WaylandService.getInstance().getUseNativeDecor();
       const subWin = await main.createSubWindowWithOptions(
         `app_${app.id}_${Date.now()}`,
-        { title: app.name, decorEnabled: true, isModal: false }
+        { title: app.name, decorEnabled: useNative, isModal: false }
       );
       await subWin.loadContent('pages/AppRunner');
       const w: number = 800; const h: number = 600;
@@ -375,11 +399,11 @@ struct Index {
       const prop = main.getWindowProperties();
       const di = display.getDisplayByIdSync(prop.displayId);
       await subWin.moveWindowToGlobal(
-        Math.round((di.availableWidth - w) / 2),
-        Math.round((di.availableHeight - h) / 2),
+        Math.round((di.availableWidth - w * fallbackScale) / 2),
+        Math.round((di.availableHeight - h * fallbackScale) / 2),
         { displayId: prop.displayId }
       );
-      await subWin.setWindowCornerRadius?.(8);
+      await subWin.setWindowCornerRadius?.(useNative ? 8 : 4);
       await subWin.setWindowBackgroundColor('#FF000000');
       const key: string = this.guiKey(app.id);
       subWin.on('windowEvent', (event: window.WindowEventType): void => {

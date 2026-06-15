@@ -156,7 +156,19 @@ void WaylandServer::surface_attach(wl_client*, wl_resource* surfRes, wl_resource
 
 void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(surfRes));
-    if (!s->pendingBuffer) return;
+    // NULL buffer commit(客户端隐藏窗口/关闭流程的标准信号)
+    //   仍要消耗 frame callback,否则客户端会卡在等下一帧
+    if (!s->pendingBuffer) {
+        if (!s->frameCallbacks.empty()) {
+            uint32_t now = (uint32_t)(time(nullptr) * 1000);
+            for (auto* cb : s->frameCallbacks) {
+                wl_callback_send_done(cb, now);
+                wl_resource_destroy(cb);
+            }
+            s->frameCallbacks.clear();
+        }
+        return;
+    }
     
     auto* self = WaylandServer::GetInstance();
     // 1. 首次有 buffer 提交的 surface，作为排他的主渲染窗口

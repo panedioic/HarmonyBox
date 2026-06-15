@@ -58,6 +58,17 @@ const SPECS: ToolSpec[] = [
     ],
     versionArgs: [],
     parseFirstLine: true
+  },
+  {
+    id: 'proot',
+    name: 'proot (Termony)',
+    url: 'https://github.com/TermonyHQ/Termony',
+    candidatePaths: [
+      '/data/service/hnp/bin/proot',
+      '/data/service/hnp/bin/termony'
+    ],
+    versionArgs: [],
+    parseFirstLine: true
   }
 ];
 

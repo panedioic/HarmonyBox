@@ -11,6 +11,7 @@ export interface Box64Env {
 
 export interface UiPrefs {
   scale: number;  // 1.0 / 1.25 / 1.5 / 2.0 / 3.0
+  useNativeDecor: boolean;
 }
 
 const FILE_NAME: string = 'tool_env.json';
@@ -77,7 +78,7 @@ export class ToolEnvStore {
   }
 
   static defaultUiPrefs(): UiPrefs {
-    return { scale: 1.0 } as UiPrefs;
+    return { scale: 1.0, useNativeDecor: true } as UiPrefs;
   }
 
   static loadUiPrefs(ctx: common.Context): UiPrefs {
@@ -85,10 +86,16 @@ export class ToolEnvStore {
     try {
       if (!fs.accessSync(path)) return ToolEnvStore.defaultUiPrefs();
       const data = JSON.parse(fs.readTextSync(path)) as StoreFile;
-      if (data.ui && typeof data.ui.scale === 'number' && data.ui.scale > 0) {
-        return { scale: data.ui.scale } as UiPrefs;
+      const merged: UiPrefs = ToolEnvStore.defaultUiPrefs();
+      if (data.ui) {
+        if (typeof data.ui.scale === 'number' && data.ui.scale > 0) {
+          merged.scale = data.ui.scale;
+        }
+        if (typeof data.ui.useNativeDecor === 'boolean') {
+          merged.useNativeDecor = data.ui.useNativeDecor;
+        }
       }
-      return ToolEnvStore.defaultUiPrefs();
+      return merged;
     } catch (e) {
       console.error(`loadUiPrefs failed: ${JSON.stringify(e)}`);
       return ToolEnvStore.defaultUiPrefs();

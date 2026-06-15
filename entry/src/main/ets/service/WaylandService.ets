@@ -33,6 +33,8 @@ export class WaylandService {
   private context: common.UIAbilityContext | null = null;
   private sizeListener: ((w: number, h: number) => void) | null = null;
   private moveListener: (() => void) | null = null;
+  private exitListener: (() => void) | null = null;
+  private useNativeDecor: boolean = true;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -43,6 +45,7 @@ export class WaylandService {
 
     const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(context);
     this.uiScale = prefs.scale;
+    this.useNativeDecor = prefs.useNativeDecor;
 
     try {
       this.box64Ready = fs.accessSync(this.box64Path);
@@ -56,6 +59,9 @@ export class WaylandService {
         const w = this.activeWaiter;
         this.activeWaiter = null;
         w(true);
+      }
+      if (s === 'exited') {
+        if (this.exitListener) this.exitListener();
       }
     });
 
@@ -78,9 +84,14 @@ export class WaylandService {
     return this.uiScale;
   }
 
+  getUseNativeDecor(): boolean {
+    return this.useNativeDecor;
+  }
+
   reloadUiPrefs(ctx: common.Context): void {
     const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = prefs.scale;
+    this.useNativeDecor = prefs.useNativeDecor;
   }
 
   setSizeListener(cb: ((w: number, h: number) => void) | null): void {
@@ -89,6 +100,10 @@ export class WaylandService {
 
   setMoveListener(cb: (() => void) | null): void {
     this.moveListener = cb;
+  }
+
+  setExitListener(cb: (() => void) | null): void {
+    this.exitListener = cb;
   }
 
   getLatestBufferSize(): WlBufferSize {
