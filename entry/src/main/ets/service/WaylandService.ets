@@ -2,6 +2,7 @@ import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { LibStore } from './LibStore';
+import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
 
 export interface WlBufferSize {
   w: number;
@@ -12,6 +13,7 @@ const ACTIVE_TIMEOUT_MS: number = 15000;
 
 export class WaylandService {
   private static instance: WaylandService | null = null;
+  private uiScale: number = 1.0;
 
   static getInstance(): WaylandService {
     if (!WaylandService.instance) {
@@ -37,6 +39,9 @@ export class WaylandService {
     this.sockPath = `${context.filesDir}/wl-sock`;
     this.libPath = context.applicationInfo.nativeLibraryPath ?? '';
 
+    const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(context);
+    this.uiScale = prefs.scale;
+
     try {
       this.box64Ready = fs.accessSync(this.box64Path);
     } catch (e) {
@@ -60,6 +65,15 @@ export class WaylandService {
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;
     return ok;
+  }
+
+  getUiScale(): number {
+    return this.uiScale;
+  }
+
+  reloadUiPrefs(ctx: common.Context): void {
+    const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
+    this.uiScale = prefs.scale;
   }
 
   setSizeListener(cb: ((w: number, h: number) => void) | null): void {

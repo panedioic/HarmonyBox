@@ -46,15 +46,17 @@ struct Index {
 
   private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {
     // window.resize 单位是 px;buffer 也是 px。需要给标题栏装饰留高度。
-    let decorPx: number = 56;
+    let decorPx: number = 90;
     try {
       const di = display.getDefaultDisplaySync();
       const density: number = di.densityPixels ?? 1;
-      decorPx = Math.round(37 * density); // 默认 decor 高 ~37vp
+      decorPx = Math.round(45 * density);
     } catch (e) { /* ignore */ }
 
-    const totalW: number = bufW;
-    const totalH: number = bufH + decorPx;
+    const scale: number = WaylandService.getInstance().getUiScale();
+    const totalW: number = Math.max(1, Math.round(bufW * scale));
+    const totalH: number = Math.max(1, Math.round(bufH * scale)) + decorPx;
+    console.info(`[HBox] resize host: buf=${bufW}x${bufH} scale=${scale} total=${totalW}x${totalH}`);
 
     win.resize(totalW, totalH).then((): void => {
       try {
@@ -340,7 +342,8 @@ struct Index {
       );
       await subWin.loadContent('pages/AppRunner');
       const w: number = 800; const h: number = 600;
-      await subWin.resize(w, h);
+      const fallbackScale: number = WaylandService.getInstance().getUiScale();
+      await subWin.resize(Math.round(w * fallbackScale), Math.round(h * fallbackScale));
       const prop = main.getWindowProperties();
       const di = display.getDisplayByIdSync(prop.displayId);
       await subWin.moveWindowToGlobal(

@@ -1,8 +1,9 @@
 import { common, Want } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
 import { ToolDetector, ToolStatus } from '../service/ToolDetector';
-import { ToolEnvStore, Box64Env } from '../model/ToolEnvStore';
+import { ToolEnvStore, Box64Env, UiPrefs } from '../model/ToolEnvStore';
 import { LibStore, LibFile } from '../service/LibStore';
+import { WaylandService } from '../service/WaylandService';
 
 @Component
 export struct SettingsPage {
@@ -12,12 +13,17 @@ export struct SettingsPage {
   @State savedHint: string = '';
   @State libFiles: LibFile[] = [];
   @State libDir: string = '';
+  @State uiScale: number = 1.0;
+
+  private scaleOptions: number[] = [1.0, 1.25, 1.5, 2.0, 3.0];
 
   aboutToAppear(): void {
     this.refreshTools();
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.box64Env = ToolEnvStore.loadBox64(ctx);
     this.refreshLibs();
+    const uiPrefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
+    this.uiScale = uiPrefs.scale;
   }
 
   refreshTools(): void {
@@ -110,6 +116,26 @@ export struct SettingsPage {
         }
       }
     });
+  }
+
+  @Builder
+  ScaleChip(s: number) {
+    Text(`${Math.round(s * 100)}%`)
+      .fontSize(13)
+      .fontColor(this.uiScale === s ? Color.White : '#333333')
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .backgroundColor(this.uiScale === s ? Theme.HM_BLUE : '#F0F0F0')
+      .borderRadius(8)
+      .margin({ right: 10, bottom: 10 })
+      .onClick((): void => {
+        const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+        this.uiScale = s;
+        const prefs: UiPrefs = { scale: s } as UiPrefs;
+        ToolEnvStore.saveUiPrefs(ctx, prefs);
+        WaylandService.getInstance().reloadUiPrefs(ctx);
+        this.savedHint = `已设置缩放 ${Math.round(s * 100)}%`;
+        setTimeout((): void => { this.savedHint = ''; }, 2000);
+      })
   }
 
   @Builder
@@ -326,6 +352,40 @@ export struct SettingsPage {
               .padding({ top: 8, bottom: 8 })
             }, (f: LibFile): string => `${f.name}_${f.size}`)
           }
+        }
+        .padding(14)
+        .backgroundColor('#FAFAFA')
+        .borderRadius(10)
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+
+        // —— 窗口缩放 ——
+        Text('窗口缩放')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .margin({ top: 16, bottom: 4 })
+
+        Text('高分屏上窗口太小时使用。仅对新打开的应用窗口生效,需重新启动应用。')
+          .fontSize(12)
+          .fontColor('#999999')
+          .margin({ bottom: 12 })
+
+        Column() {
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start
+          }) {
+            ForEach(this.scaleOptions, (s: number): void => {
+              this.ScaleChip(s)
+            }, (s: number): string => `scale_${s}`)
+          }
+          .width('100%')
+
+          Text('放大原理:鸿蒙窗口尺寸 = buffer × 缩放比;EGL 在显示时双线性放大,文字会略糊。后续可加客户端原生缩放。')
+            .fontSize(11)
+            .fontColor('#AAAAAA')
+            .margin({ top: 4 })
         }
         .padding(14)
         .backgroundColor('#FAFAFA')

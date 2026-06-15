@@ -9,10 +9,15 @@ export interface Box64Env {
   customEnv: string;            // 自定义,KEY=VALUE 多行
 }
 
+export interface UiPrefs {
+  scale: number;  // 1.0 / 1.25 / 1.5 / 2.0 / 3.0
+}
+
 const FILE_NAME: string = 'tool_env.json';
 
 interface StoreFile {
   box64: Box64Env;
+  ui?: UiPrefs;
 }
 
 export class ToolEnvStore {
@@ -68,6 +73,49 @@ export class ToolEnvStore {
       }
     } catch (e) {
       console.error(`ToolEnvStore.saveBox64 failed: ${JSON.stringify(e)}`);
+    }
+  }
+
+  static defaultUiPrefs(): UiPrefs {
+    return { scale: 1.0 } as UiPrefs;
+  }
+
+  static loadUiPrefs(ctx: common.Context): UiPrefs {
+    const path: string = ToolEnvStore.getPath(ctx);
+    try {
+      if (!fs.accessSync(path)) return ToolEnvStore.defaultUiPrefs();
+      const data = JSON.parse(fs.readTextSync(path)) as StoreFile;
+      if (data.ui && typeof data.ui.scale === 'number' && data.ui.scale > 0) {
+        return { scale: data.ui.scale } as UiPrefs;
+      }
+      return ToolEnvStore.defaultUiPrefs();
+    } catch (e) {
+      console.error(`loadUiPrefs failed: ${JSON.stringify(e)}`);
+      return ToolEnvStore.defaultUiPrefs();
+    }
+  }
+
+  static saveUiPrefs(ctx: common.Context, prefs: UiPrefs): void {
+    const path: string = ToolEnvStore.getPath(ctx);
+    try {
+      let existing: StoreFile;
+      if (fs.accessSync(path)) {
+        existing = JSON.parse(fs.readTextSync(path)) as StoreFile;
+      } else {
+        existing = { box64: ToolEnvStore.defaults() } as StoreFile;
+      }
+      existing.ui = prefs;
+      const json: string = JSON.stringify(existing, null, 2);
+      const file = fs.openSync(
+        path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC
+      );
+      try {
+        fs.writeSync(file.fd, json);
+      } finally {
+        fs.closeSync(file.fd);
+      }
+    } catch (e) {
+      console.error(`saveUiPrefs failed: ${JSON.stringify(e)}`);
     }
   }
 }
