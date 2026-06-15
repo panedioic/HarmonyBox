@@ -240,6 +240,7 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         if (self->lastNotifiedW_ != outW || self->lastNotifiedH_ != outH) {
             self->lastNotifiedW_ = outW;
             self->lastNotifiedH_ = outH;
+            OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_BUF_NEW %{public}dx%{public}d", outW, outH);
             if (self->sizeCallback_) self->sizeCallback_(outW, outH);
         }
     }
@@ -657,6 +658,7 @@ void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
     xdg_surface_send_configure(activeXdgSurface_, serial);
     wl_display_flush_clients(display_);
 
-    OH_LOG_INFO(LOG_APP, "send configure %{public}dx%{public}d max=%{public}d serial=%{public}u",
+    OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_CFG_SEND %{public}dx%{public}d "
+                         "max=%{public}d serial=%{public}u",
                 w, h, maximized ? 1 : 0, serial);
 }

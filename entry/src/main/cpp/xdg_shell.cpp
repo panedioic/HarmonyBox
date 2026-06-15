@@ -47,7 +47,8 @@ static void tl_unset_maximized(wl_client*, wl_resource*) {
 }
 
 static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t serial, uint32_t edges) {
-    OH_LOG_INFO(LOG_APP, "xdg_toplevel.resize serial=%{public}u edges=0x%{public}x", serial, edges);
+    OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_REQ_CLIENT serial=%{public}u edges=0x%{public}x",
+                serial, edges);
     WaylandServer::GetInstance()->FireResizeRequest(edges);
 }
 
@@ -114,12 +115,13 @@ static void xs_set_window_geometry(wl_client*, wl_resource* xsRes,
     auto* d = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xsRes));
     if (d && d->wlSurface) {
         WaylandServer::GetInstance()->SetWindowGeometry(d->wlSurface, x, y, w, h);
-        OH_LOG_INFO(LOG_APP, "set_window_geometry %{public}d,%{public}d "
+        OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_GEOM_SET %{public}d,%{public}d "
                              "%{public}dx%{public}d", x, y, w, h);
     }
 }
+
 static void xs_ack_configure(wl_client*, wl_resource*, uint32_t serial) {
-    OH_LOG_INFO(LOG_APP, "ack_configure serial=%{public}u", serial);
+    OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_CFG_ACK serial=%{public}u", serial);
 }
 
 static const struct xdg_surface_interface kSurfaceImpl = {

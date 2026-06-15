@@ -161,24 +161,34 @@ struct Index {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
     this.maximizedApps.delete(appId);
+    const saved: HostSize | undefined = this.savedHostSizes.get(appId);
+    this.savedHostSizes.delete(appId);
+
+    // ★ 取消 maximize 时设的屏蔽,让 restore 后的 windowSizeChange 能触发 configure
+    this.maxOpUntil = 0;
+
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
 
-    this.maxOpUntil = Date.now() + 800;
-
-    // 用保存的 host 尺寸通知客户端
-    const saved: HostSize | undefined = this.savedHostSizes.get(appId);
+    // 同步先发一次小尺寸 configure 给客户端,host 真变小后 windowSizeChange 还会再纠正一次
     if (saved) {
       this.sendConfigureFromHostSize(saved.w, saved.h, false);
     }
-    this.savedHostSizes.delete(appId);
 
     try {
       const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
       if (maximizable.restore) {
         maximizable.restore().catch((e: BusinessError): void => {
-          console.warn(`restore failed: ${e.code} ${e.message}`);
+          console.warn(`HBOX_WIN_RESIZE_RESTORE_FAIL code=${e.code} msg=${e.message}`);
+          // restore 不灵就退化成 resize 兜底
+          if (saved) {
+            guiWin.resize(saved.w, saved.h).catch((e: BusinessError): void => {
+              console.warn(`HBOX_WIN_RESIZE_FALLBACK_FAIL code=${e.code} msg=${e.message}`);
+            });
+          }
         });
+      } else if (saved) {
+        guiWin.resize(saved.w, saved.h).catch((): void => { /* ignore */ });
       }
     } catch (e) { /* ignore */ }
   }
@@ -186,7 +196,11 @@ struct Index {
   private handleHostResize(appId: string, hostW: number, hostH: number): void {
     if (!this.firstCommitDone.has(appId)) return;
     if (hostW <= 0 || hostH <= 0) return;
-    if (Date.now() < this.maxOpUntil) return; // max/unmax 期间静默
+    console.info(`HBOX_WIN_RESIZE_HOST_SIZE host=${hostW}x${hostH}`);
+    if (Date.now() < this.maxOpUntil) {
+      console.info('HBOX_WIN_RESIZE_HOST_SIZE_BLOCKED');
+      return;
+    }
 
     if (this.resizeDebounceTimer >= 0) {
       clearTimeout(this.resizeDebounceTimer);
@@ -202,22 +216,25 @@ struct Index {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
-    if (!guiWin) return;
+    if (!guiWin) {
+      console.warn('HBOX_WIN_RESIZE_HOST_NO_WIN');
+      return;
+    }
     try {
       const resizable: ResizableWindow = guiWin as ResizableWindow;
       if (resizable.startResizing && typeof resizable.startResizing === 'function') {
         resizable.startResizing(edges)
           .then((): void => {
-            console.info(`[WL] startResizing succeeded edges=0x${edges.toString(16)}`);
+            console.info(`HBOX_WIN_RESIZE_HOST_OK edges=0x${edges.toString(16)}`);
           })
           .catch((e: BusinessError): void => {
-            console.warn(`startResizing not supported or failed: ${e.code} ${e.message}`);
+            console.warn(`HBOX_WIN_RESIZE_HOST_FAIL code=${e.code} msg=${e.message}`);
           });
       } else {
-        console.warn('window.startResizing not available on this device');
+        console.warn('HBOX_WIN_RESIZE_HOST_NA');
       }
     } catch (e) {
-      console.warn(`handleWaylandResize error: ${JSON.stringify(e)}`);
+      console.warn(`HBOX_WIN_RESIZE_HOST_THROW ${JSON.stringify(e)}`);
     }
   }
 
@@ -234,7 +251,8 @@ struct Index {
     }
     const bufW: number = Math.max(1, Math.round(hostW / scale));
     const bufH: number = Math.max(1, Math.round((hostH - decorPx) / scale));
-    console.info(`[HBox] configure -> client: host=${hostW}x${hostH} buf=${bufW}x${bufH} max=${maximized}`);
+    console.info(`HBOX_WIN_RESIZE_CFG_OUT host=${hostW}x${hostH} decor=${decorPx} `
+      + `scale=${scale} buf=${bufW}x${bufH} max=${maximized}`);
     WaylandService.getInstance().requestClientResize(bufW, bufH, maximized);
   }
 

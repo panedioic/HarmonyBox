@@ -89,7 +89,7 @@ export class WaylandService {
     });
 
     wl.setResizeCallback((edges: number): void => {
-      console.info(`[WL] resize request edges=0x${edges.toString(16)}`);
+      console.info(`HBOX_WIN_RESIZE_REQ_RECV edges=0x${edges.toString(16)}`);
       if (this.resizeListener) this.resizeListener(edges);
     });
 
