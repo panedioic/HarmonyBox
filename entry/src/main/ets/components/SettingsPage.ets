@@ -4,6 +4,7 @@ import { ToolDetector, ToolStatus } from '../service/ToolDetector';
 import { ToolEnvStore, Box64Env, UiPrefs } from '../model/ToolEnvStore';
 import { LibStore, LibFile } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
+import { FontStore, FontFile } from '../service/FontStore';
 
 @Component
 export struct SettingsPage {
@@ -14,6 +15,8 @@ export struct SettingsPage {
   @State libFiles: LibFile[] = [];
   @State libDir: string = '';
   @State uiScale: number = 1.0;
+  @State fontFiles: FontFile[] = [];
+  @State fontDir: string = '';
 
   private scaleOptions: number[] = [1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -24,6 +27,7 @@ export struct SettingsPage {
     this.refreshLibs();
     const uiPrefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = uiPrefs.scale;
+    this.refreshFonts();
   }
 
   refreshTools(): void {
@@ -113,6 +117,44 @@ export struct SettingsPage {
           const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
           LibStore.clear(ctx);
           this.refreshLibs();
+        }
+      }
+    });
+  }
+
+  refreshFonts(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.fontDir = FontStore.getFontDir(ctx);
+    this.fontFiles = FontStore.list(ctx);
+  }
+
+  async uploadFonts(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const n: number = await FontStore.pickAndAdd(ctx);
+    if (n > 0) {
+      this.refreshFonts();
+      this.savedHint = `已添加 ${n} 个字体`;
+      setTimeout((): void => { this.savedHint = ''; }, 2000);
+    }
+  }
+
+  removeFont(name: string): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    FontStore.remove(ctx, name);
+    this.refreshFonts();
+  }
+
+  clearFonts(): void {
+    AlertDialog.show({
+      title: '清空字体',
+      message: `将删除 ${this.fontFiles.length} 个字体文件,无法撤销。`,
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: {
+        value: '清空', fontColor: '#E64545',
+        action: (): void => {
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          FontStore.clear(ctx);
+          this.refreshFonts();
         }
       }
     });
@@ -358,6 +400,66 @@ export struct SettingsPage {
         .borderRadius(10)
         .alignItems(HorizontalAlign.Start)
         .width('100%')
+
+        Row() {
+          Column({ space: 2 }) {
+            Text('字体 (fontconfig)')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+            Text('上传 .ttf / .otf,启动时通过 FONTCONFIG_FILE 让客户端读取')
+              .fontSize(11)
+              .fontColor('#999999')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Button('上传')
+            .fontSize(12).height(28).padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.HM_BLUE)
+            .onClick((): void => { this.uploadFonts(); })
+          Button('清空')
+            .fontSize(12).height(28).margin({ left: 8 }).padding({ left: 14, right: 14 })
+            .backgroundColor('#F0F0F0').fontColor('#333333')
+            .enabled(this.fontFiles.length > 0)
+            .onClick((): void => { this.clearFonts(); })
+        }
+        .width('100%')
+        .margin({ top: 16, bottom: 8 })
+
+        Column() {
+          Text(this.fontDir)
+            .fontSize(11).fontColor('#999999').width('100%')
+            .margin({ bottom: 10 }).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          if (this.fontFiles.length === 0) {
+            Text('尚未上传字体,客户端会落到位图 fallback')
+              .fontSize(13).fontColor('#999999').padding(12)
+          } else {
+            ForEach(this.fontFiles, (f: FontFile): void => {
+              Row() {
+                Column({ space: 2 }) {
+                  Text(f.name).fontSize(13).fontColor('#333333')
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(FontStore.formatSize(f.size))
+                    .fontSize(11).fontColor('#999999')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Button('删除')
+                  .fontSize(11).height(26).padding({ left: 10, right: 10 })
+                  .backgroundColor('#FFEEEE').fontColor('#E64545')
+                  .onClick((): void => { this.removeFont(f.name); })
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+            }, (f: FontFile): string => `${f.name}_${f.size}`)
+          }
+        }
+        .padding(14)
+        .backgroundColor('#FAFAFA').borderRadius(10)
+        .alignItems(HorizontalAlign.Start).width('100%')
 
         // —— 窗口缩放 ——
         Text('窗口缩放')

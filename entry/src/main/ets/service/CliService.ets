@@ -1,6 +1,7 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { LibStore } from './LibStore';
+import { FontStore } from './FontStore';
 
 export interface CliSubscriber {
   onLine: (line: string) => void;
@@ -75,7 +76,9 @@ export class CliService {
     }
     if (x64LibDir) ldPaths.push(x64LibDir);
     if (ldPaths.length > 0) env.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
-
+    if (this.context) {
+      for (const e of FontStore.buildEnv(this.context)) env.push(e);
+    }
     for (const e of extraEnv) env.push(e);
     return wl.launchCli(BOX64_PATH, argv, libPath, cwd, env);
   }

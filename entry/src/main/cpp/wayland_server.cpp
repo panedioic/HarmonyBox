@@ -440,6 +440,13 @@ void WaylandServer::DispatchModifiers(uint32_t d, uint32_t l, uint32_t lk, uint3
 
 void WaylandServer::DispatchMouseMotion(double x, double y) {
     if (!ptrFocus_) return;
+    // 输入坐标是"裁剪后的内容空间",客户端 surface 坐标是 buffer 全空间,
+    // 需要加上 window_geometry 的偏移补回 CSD 阴影/装饰区域。
+    WindowGeom g = GetWindowGeometry(ptrFocus_);
+    if (g.valid) {
+        x += g.x;
+        y += g.y;
+    }
     uint32_t t = NowMs();
     auto* c = wl_resource_get_client(ptrFocus_);
     for (auto* p : seat_.pointers) {
@@ -483,6 +490,11 @@ void WaylandServer::DispatchMouseAxis(double dx, double dy) {
 
 void WaylandServer::DispatchMouseEnter(double x, double y) {
     if (!ptrFocus_) return;
+    WindowGeom g = GetWindowGeometry(ptrFocus_);
+    if (g.valid) {
+        x += g.x;
+        y += g.y;
+    }
     uint32_t serial = NextSerial();
     auto* c = wl_resource_get_client(ptrFocus_);
     for (auto* p : seat_.pointers)

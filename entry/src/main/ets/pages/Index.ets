@@ -14,6 +14,7 @@ import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
 import { CliService } from '../service/CliService';
 import { LibStore } from '../service/LibStore';
+import { FontStore } from '../service/FontStore';
 
 @Entry
 @Component
@@ -252,6 +253,7 @@ struct Index {
     // wayland 环境变量 + 用户自定义环境变量
     const env: string[] = [];
     for (const e of wlSvc.getWaylandEnv()) env.push(e);
+    for (const e of FontStore.buildEnv(ctx)) env.push(e);
     for (const e of userEnv) env.push(e);
 
     const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, env);

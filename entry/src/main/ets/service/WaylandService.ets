@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { LibStore } from './LibStore';
 import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
+import { FontStore } from './FontStore';
 
 export interface WlBufferSize {
   w: number;
@@ -164,6 +165,9 @@ export class WaylandService {
     // 应用目录优先,然后是全局池
     const ldPath: string = this.buildLdPath(appDir);
     if (ldPath) env.push(`BOX64_LD_LIBRARY_PATH=${ldPath}`);
+    if (this.context) {
+      for (const e of FontStore.buildEnv(this.context)) env.push(e);
+    }
     for (const e of extraEnv) env.push(e);
 
     const pid: number = wl.launchClient(
