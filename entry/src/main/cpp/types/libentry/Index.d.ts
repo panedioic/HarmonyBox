@@ -32,3 +32,7 @@ export const setSizeCallback: (cb: (w: number, h: number) => void) => void;
 export const getLatestSize: () => { w: number; h: number };
 
 export const setMoveCallback: (cb: () => void) => void;
+
+export const setMaximizeCallback: (cb: () => void) => void;
+export const setUnmaximizeCallback: (cb: () => void) => void;
+export const setResizeCallback: (cb: (edges: number) => void) => void;

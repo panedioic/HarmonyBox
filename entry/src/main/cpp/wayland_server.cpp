@@ -588,3 +588,18 @@ void WaylandServer::ReleaseAllPointerButtons() {
     }
     wl_display_flush_clients(display_);
 }
+
+void WaylandServer::FireMaximizeRequest() {
+    ReleaseAllPointerButtons();
+    if (maximizeCallback_) maximizeCallback_();
+}
+
+void WaylandServer::FireUnmaximizeRequest() {
+    ReleaseAllPointerButtons();
+    if (unmaximizeCallback_) unmaximizeCallback_();
+}
+
+void WaylandServer::FireResizeRequest(uint32_t edges) {
+    ReleaseAllPointerButtons();
+    if (resizeCallback_) resizeCallback_(edges);
+}

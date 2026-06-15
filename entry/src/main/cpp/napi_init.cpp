@@ -739,6 +739,91 @@ static napi_value GetLatestSize(napi_env env, napi_callback_info /*info*/) {
     return result;
 }
 
+// for maximize window
+static napi_threadsafe_function g_maximizeTsfn = nullptr;
+static napi_threadsafe_function g_unmaximizeTsfn = nullptr;
+static napi_threadsafe_function g_resizeTsfn = nullptr;
+
+static void MaximizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* /*data*/) {
+    if (env && jsCb) {
+        napi_value undef;
+        napi_get_undefined(env, &undef);
+        napi_call_function(env, undef, jsCb, 0, nullptr, nullptr);
+    }
+}
+
+static void ResizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    uint32_t* edges = static_cast<uint32_t*>(data);
+    if (env && jsCb && edges) {
+        napi_value undef, arg;
+        napi_get_undefined(env, &undef);
+        napi_create_uint32(env, *edges, &arg);
+        napi_call_function(env, undef, jsCb, 1, &arg, nullptr);
+    }
+    delete edges;
+}
+
+static napi_value SetMaximizeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_maximizeTsfn) {
+        napi_release_threadsafe_function(g_maximizeTsfn, napi_tsfn_release);
+        g_maximizeTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLMaximize", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, MaximizeTsfnCallJs, &g_maximizeTsfn);
+
+    WaylandServer::GetInstance()->SetMaximizeCallback([]() {
+        if (g_maximizeTsfn) {
+            napi_call_threadsafe_function(g_maximizeTsfn, nullptr, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
+static napi_value SetUnmaximizeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_unmaximizeTsfn) {
+        napi_release_threadsafe_function(g_unmaximizeTsfn, napi_tsfn_release);
+        g_unmaximizeTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLUnmaximize", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, MaximizeTsfnCallJs, &g_unmaximizeTsfn);
+
+    WaylandServer::GetInstance()->SetUnmaximizeCallback([]() {
+        if (g_unmaximizeTsfn) {
+            napi_call_threadsafe_function(g_unmaximizeTsfn, nullptr, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
+static napi_value SetResizeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_resizeTsfn) {
+        napi_release_threadsafe_function(g_resizeTsfn, napi_tsfn_release);
+        g_resizeTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLResize", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, ResizeTsfnCallJs, &g_resizeTsfn);
+
+    WaylandServer::GetInstance()->SetResizeCallback([](uint32_t edges) {
+        if (g_resizeTsfn) {
+            uint32_t* e = new uint32_t(edges);
+            napi_call_threadsafe_function(g_resizeTsfn, e, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -760,6 +845,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setSizeCallback",    nullptr, SetSizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
         {"getLatestSize",      nullptr, GetLatestSize,      nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setMoveCallback",    nullptr, SetMoveCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setMaximizeCallback",    nullptr, SetMaximizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setUnmaximizeCallback",  nullptr, SetUnmaximizeCallback,  nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setResizeCallback",      nullptr, SetResizeCallback,      nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

@@ -93,6 +93,15 @@ public:
     void SetMoveCallback(std::function<void()> cb) { moveCallback_ = std::move(cb); }
     void FireMoveRequest();
     void ReleaseAllPointerButtons();
+    
+    // for maximize window
+    void SetMaximizeCallback(std::function<void()> cb) { maximizeCallback_ = std::move(cb); }
+    void SetUnmaximizeCallback(std::function<void()> cb) { unmaximizeCallback_ = std::move(cb); }
+    void SetResizeCallback(std::function<void(uint32_t)> cb) { resizeCallback_ = std::move(cb); }
+
+    void FireMaximizeRequest();
+    void FireUnmaximizeRequest();
+    void FireResizeRequest(uint32_t edges);
 
 private:
     WaylandServer() = default;
@@ -134,6 +143,11 @@ private:
     
     // for dragging
     std::function<void()> moveCallback_;
+    
+    // for maximize window
+    std::function<void()> maximizeCallback_;
+    std::function<void()> unmaximizeCallback_;
+    std::function<void(uint32_t)> resizeCallback_;
 };
 
 struct SurfaceState {

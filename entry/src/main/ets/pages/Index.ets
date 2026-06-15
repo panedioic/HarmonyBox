@@ -20,6 +20,15 @@ interface MovableWindow {
   startMoving?: () => Promise<void>;
 }
 
+interface MaximizableWindow {
+  maximize?: () => Promise<void>;
+  restore?: () => Promise<void>;
+}
+
+interface ResizableWindow {
+  startResizing?: (edges: number) => Promise<void>;
+}
+
 @Entry
 @Component
 struct Index {
@@ -39,6 +48,15 @@ struct Index {
     });
     WaylandService.getInstance().setExitListener((): void => {
       this.handleClientExited();
+    });
+    WaylandService.getInstance().setMaximizeListener((): void => {
+      this.handleWaylandMaximize();
+    });
+    WaylandService.getInstance().setUnmaximizeListener((): void => {
+      this.handleWaylandUnmaximize();
+    });
+    WaylandService.getInstance().setResizeListener((edges: number): void => {
+      this.handleWaylandResize(edges);
     });
   }
 
@@ -84,6 +102,59 @@ struct Index {
       });
     }
     // CLI 联动窗口在 windowEvent WINDOW_DESTROYED 链路里会被一起清理
+  }
+
+  private handleWaylandMaximize(): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    try {
+      const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
+      if (maximizable.maximize) {
+        maximizable.maximize().catch((e: BusinessError): void => {
+          console.error(`maximize failed: ${e.code} ${e.message}`);
+        });
+      }
+    } catch (e) {
+      console.error(`handleWaylandMaximize failed: ${JSON.stringify(e)}`);
+    }
+  }
+
+  private handleWaylandUnmaximize(): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    try {
+      const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
+      if (maximizable.restore) {
+        maximizable.restore().catch((e: BusinessError): void => {
+          console.error(`restore failed: ${e.code} ${e.message}`);
+        });
+      }
+    } catch (e) {
+      console.error(`handleWaylandUnmaximize failed: ${JSON.stringify(e)}`);
+    }
+  }
+
+  private handleWaylandResize(edges: number): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    try {
+      const resizable: ResizableWindow = guiWin as ResizableWindow;
+      if (resizable.startResizing) {
+        resizable.startResizing(edges).catch((e: BusinessError): void => {
+          console.error(`startResizing failed: ${e.code} ${e.message}`);
+        });
+      } else {
+        console.warn('window.startResizing not available');
+      }
+    } catch (e) {
+      console.error(`handleWaylandResize failed: ${JSON.stringify(e)}`);
+    }
   }
 
   private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {

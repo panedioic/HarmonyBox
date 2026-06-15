@@ -35,6 +35,9 @@ export class WaylandService {
   private moveListener: (() => void) | null = null;
   private exitListener: (() => void) | null = null;
   private useNativeDecor: boolean = true;
+  private maximizeListener: (() => void) | null = null;
+  private unmaximizeListener: (() => void) | null = null;
+  private resizeListener: ((edges: number) => void) | null = null;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -75,6 +78,21 @@ export class WaylandService {
       if (this.moveListener) this.moveListener();
     });
 
+    wl.setMaximizeCallback((): void => {
+      console.info('[WL] maximize request');
+      if (this.maximizeListener) this.maximizeListener();
+    });
+
+    wl.setUnmaximizeCallback((): void => {
+      console.info('[WL] unmaximize request');
+      if (this.unmaximizeListener) this.unmaximizeListener();
+    });
+
+    wl.setResizeCallback((edges: number): void => {
+      console.info(`[WL] resize request edges=0x${edges.toString(16)}`);
+      if (this.resizeListener) this.resizeListener(edges);
+    });
+
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;
     return ok;
@@ -104,6 +122,18 @@ export class WaylandService {
 
   setExitListener(cb: (() => void) | null): void {
     this.exitListener = cb;
+  }
+
+  setMaximizeListener(cb: (() => void) | null): void {
+    this.maximizeListener = cb;
+  }
+
+  setUnmaximizeListener(cb: (() => void) | null): void {
+    this.unmaximizeListener = cb;
+  }
+
+  setResizeListener(cb: ((edges: number) => void) | null): void {
+    this.resizeListener = cb;
   }
 
   getLatestBufferSize(): WlBufferSize {
