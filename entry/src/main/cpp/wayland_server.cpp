@@ -182,26 +182,52 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     // 3. 以下为主窗口的正常渲染搬运逻辑 (原代码保持不变)
     wl_shm_buffer* shm = wl_shm_buffer_get(s->pendingBuffer);
     if (shm) {
-        int32_t w = wl_shm_buffer_get_width(shm);
-        int32_t h = wl_shm_buffer_get_height(shm);
+        int32_t bufW = wl_shm_buffer_get_width(shm);
+        int32_t bufH = wl_shm_buffer_get_height(shm);
         int32_t stride = wl_shm_buffer_get_stride(shm);
+        
+        // ★ 按 xdg_surface.set_window_geometry 裁剪掉 CSD 阴影边距
+        WindowGeom g = self->GetWindowGeometry(surfRes);
+        int32_t srcX = 0, srcY = 0;
+        int32_t outW = bufW, outH = bufH;
+        if (g.valid) {
+            srcX = std::max(0, g.x);
+            srcY = std::max(0, g.y);
+            outW = std::min(g.w, bufW - srcX);
+            outH = std::min(g.h, bufH - srcY);
+            if (outW <= 0 || outH <= 0) {
+                srcX = 0; srcY = 0; outW = bufW; outH = bufH;
+            }
+        }
 
         wl_shm_buffer_begin_access(shm);
         const uint8_t* src = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm));
+        
         {
             std::lock_guard<std::mutex> lk(self->frameMutex_);
-            self->latestPixels_.resize(stride * h);
-            std::memcpy(self->latestPixels_.data(), src, stride * h);
-            self->latestW_ = w;
-            self->latestH_ = h;
+            const int dstStride = outW * 4;
+            self->latestPixels_.resize(dstStride * outH);
+            if (srcX == 0 && srcY == 0 && outW == bufW && outH == bufH
+                && stride == bufW * 4) {
+                std::memcpy(self->latestPixels_.data(), src, stride * outH);
+            } else {
+                for (int row = 0; row < outH; ++row) {
+                    const uint8_t* srcRow = src + (srcY + row) * stride + srcX * 4;
+                    std::memcpy(self->latestPixels_.data() + row * dstStride,
+                                srcRow, dstStride);
+                }
+            }
+            self->latestW_ = outW;
+            self->latestH_ = outH;
             self->dirty_ = true;
         }
         wl_shm_buffer_end_access(shm);
-        // ★ 新增:把 buffer 尺寸通知到 ArkTS,用于 resize 鸿蒙子窗口
-        if (self->lastNotifiedW_ != w || self->lastNotifiedH_ != h) {
-            self->lastNotifiedW_ = w;
-            self->lastNotifiedH_ = h;
-            if (self->sizeCallback_) self->sizeCallback_(w, h);
+        // 把 buffer 尺寸通知到 ArkTS,用于 resize 鸿蒙子窗口
+        // 用裁剪后的尺寸通知 ArkTS resize
+        if (self->lastNotifiedW_ != outW || self->lastNotifiedH_ != outH) {
+            self->lastNotifiedW_ = outW;
+            self->lastNotifiedH_ = outH;
+            if (self->sizeCallback_) self->sizeCallback_(outW, outH);
         }
     }
 
@@ -489,4 +515,28 @@ void WaylandServer::GetLatestSize(int& w, int& h) {
     std::lock_guard<std::mutex> lk(frameMutex_);
     w = latestW_;
     h = latestH_;
+}
+
+// for remove csd border
+void WaylandServer::SetWindowGeometry(wl_resource* surf,
+    int32_t x, int32_t y, int32_t w, int32_t h) {
+    if (!surf) return;
+    std::lock_guard<std::mutex> lk(geomMutex_);
+    WindowGeom g;
+    g.x = x; g.y = y; g.w = w; g.h = h;
+    g.valid = (w > 0 && h > 0);
+    geomMap_[surf] = g;
+}
+
+void WaylandServer::ClearWindowGeometry(wl_resource* surf) {
+    if (!surf) return;
+    std::lock_guard<std::mutex> lk(geomMutex_);
+    geomMap_.erase(surf);
+}
+
+WaylandServer::WindowGeom WaylandServer::GetWindowGeometry(wl_resource* surf) {
+    std::lock_guard<std::mutex> lk(geomMutex_);
+    auto it = geomMap_.find(surf);
+    if (it == geomMap_.end()) return WindowGeom();
+    return it->second;
 }

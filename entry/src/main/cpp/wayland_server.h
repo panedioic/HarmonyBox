@@ -8,6 +8,7 @@
 #include <functional>
 #include <atomic>
 #include <cstdint>
+#include <map>
 
 struct SeatState {
     wl_resource* seatRes = nullptr;
@@ -75,6 +76,18 @@ public:
     // fix window size
     void SetSizeCallback(std::function<void(int,int)> cb) { sizeCallback_ = std::move(cb); }
     void GetLatestSize(int& w, int& h);
+    
+    // remove csd border
+    struct WindowGeom {
+        int32_t x = 0;
+        int32_t y = 0;
+        int32_t w = 0;
+        int32_t h = 0;
+        bool valid = false;
+    };
+    void SetWindowGeometry(wl_resource* surf, int32_t x, int32_t y, int32_t w, int32_t h);
+    void ClearWindowGeometry(wl_resource* surf);
+    WindowGeom GetWindowGeometry(wl_resource* surf);
 
 private:
     WaylandServer() = default;
@@ -109,6 +122,10 @@ private:
     std::function<void(int,int)> sizeCallback_;
     int lastNotifiedW_ = -1;
     int lastNotifiedH_ = -1;
+    
+    // for remove csd border
+    std::mutex geomMutex_;
+    std::map<wl_resource*, WindowGeom> geomMap_;
 };
 
 struct SurfaceState {

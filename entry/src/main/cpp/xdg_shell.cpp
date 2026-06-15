@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "wayland_server.h"
+
 #undef LOG_TAG
 #define LOG_TAG "WLXdg"
 #include <hilog/log.h>
@@ -83,8 +85,17 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
 
 static void xs_get_popup(wl_client*, wl_resource*, uint32_t,
                           wl_resource*, wl_resource*) {}
-static void xs_set_window_geometry(wl_client*, wl_resource*,
-                                    int32_t, int32_t, int32_t, int32_t) {}
+
+// for fix csd border
+static void xs_set_window_geometry(wl_client*, wl_resource* xsRes,
+                                    int32_t x, int32_t y, int32_t w, int32_t h) {
+    auto* d = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xsRes));
+    if (d && d->wlSurface) {
+        WaylandServer::GetInstance()->SetWindowGeometry(d->wlSurface, x, y, w, h);
+        OH_LOG_INFO(LOG_APP, "set_window_geometry %{public}d,%{public}d "
+                             "%{public}dx%{public}d", x, y, w, h);
+    }
+}
 static void xs_ack_configure(wl_client*, wl_resource*, uint32_t serial) {
     OH_LOG_DEBUG(LOG_APP, "ack_configure serial=%{public}u", serial);
 }
@@ -97,8 +108,13 @@ static const struct xdg_surface_interface kSurfaceImpl = {
     .ack_configure       = xs_ack_configure,
 };
 
+// for fix csd border
 static void xs_resource_destroy(wl_resource* r) {
-    delete static_cast<XdgSurfaceData*>(wl_resource_get_user_data(r));
+    auto* d = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(r));
+    if (d && d->wlSurface) {
+        WaylandServer::GetInstance()->ClearWindowGeometry(d->wlSurface);
+    }
+    delete d;
 }
 
 // ── xdg_wm_base ──────────────────────────────────────
