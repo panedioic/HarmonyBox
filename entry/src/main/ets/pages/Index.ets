@@ -29,6 +29,11 @@ interface ResizableWindow {
   startResizing?: (edges: number) => Promise<void>;
 }
 
+interface HostSize {
+  w: number;
+  h: number;
+}
+
 @Entry
 @Component
 struct Index {
@@ -37,6 +42,9 @@ struct Index {
 
   private firstCommitDone: Set<string> = new Set();
   private maximizedApps: Set<string> = new Set();
+  private savedHostSizes: Map<string, HostSize> = new Map();
+  private maxOpUntil: number = 0;        // 这个时间戳之前忽略 windowSizeChange
+  private resizeDebounceTimer: number = -1;
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -120,6 +128,25 @@ struct Index {
     this.maximizedApps.add(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
+
+    // 1. 保存当前 host 尺寸,供 unmaximize 时还原
+    try {
+      const prop = guiWin.getWindowProperties();
+      const r = prop.windowRect;
+      this.savedHostSizes.set(appId, { w: r.width, h: r.height } as HostSize);
+      console.info(`[HBox] saved host size ${r.width}x${r.height}`);
+    } catch (e) { /* ignore */ }
+
+    // 2. 屏蔽接下来 800ms 内的 windowSizeChange,避免动画中间帧打断
+    this.maxOpUntil = Date.now() + 800;
+
+    // 3. 用 display 可用区域算目标 buf 尺寸,先告诉客户端
+    try {
+      const di = display.getDefaultDisplaySync();
+      this.sendConfigureFromHostSize(di.availableWidth, di.availableHeight, true);
+    } catch (e) { /* ignore */ }
+
+    // 4. 让 host 真正最大化
     try {
       const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
       if (maximizable.maximize) {
@@ -136,6 +163,16 @@ struct Index {
     this.maximizedApps.delete(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
+
+    this.maxOpUntil = Date.now() + 800;
+
+    // 用保存的 host 尺寸通知客户端
+    const saved: HostSize | undefined = this.savedHostSizes.get(appId);
+    if (saved) {
+      this.sendConfigureFromHostSize(saved.w, saved.h, false);
+    }
+    this.savedHostSizes.delete(appId);
+
     try {
       const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
       if (maximizable.restore) {
@@ -147,27 +184,18 @@ struct Index {
   }
 
   private handleHostResize(appId: string, hostW: number, hostH: number): void {
-    if (!this.firstCommitDone.has(appId)) return; // 跳过首帧期我们自己 resize 的回声
+    if (!this.firstCommitDone.has(appId)) return;
     if (hostW <= 0 || hostH <= 0) return;
+    if (Date.now() < this.maxOpUntil) return; // max/unmax 期间静默
 
-    const scale: number = WaylandService.getInstance().getUiScale();
-    const useDecor: boolean = WaylandService.getInstance().getUseNativeDecor();
-
-    let decorPx: number = 0;
-    if (useDecor) {
-      try {
-        const di = display.getDefaultDisplaySync();
-        const density: number = di.densityPixels ?? 1;
-        decorPx = Math.round(45 * density);
-      } catch (e) { /* ignore */ }
+    if (this.resizeDebounceTimer >= 0) {
+      clearTimeout(this.resizeDebounceTimer);
     }
-
-    const bufW: number = Math.max(1, Math.round(hostW / scale));
-    const bufH: number = Math.max(1, Math.round((hostH - decorPx) / scale));
-    const maximized: boolean = this.maximizedApps.has(appId);
-
-    console.info(`[HBox] host resize ${hostW}x${hostH} -> tell client ${bufW}x${bufH} max=${maximized}`);
-    WaylandService.getInstance().requestClientResize(bufW, bufH, maximized);
+    this.resizeDebounceTimer = setTimeout((): void => {
+      this.resizeDebounceTimer = -1;
+      const maximized: boolean = this.maximizedApps.has(appId);
+      this.sendConfigureFromHostSize(hostW, hostH, maximized);
+    }, 150);
   }
 
   private handleWaylandResize(edges: number): void {
@@ -191,6 +219,23 @@ struct Index {
     } catch (e) {
       console.warn(`handleWaylandResize error: ${JSON.stringify(e)}`);
     }
+  }
+
+  private sendConfigureFromHostSize(hostW: number, hostH: number, maximized: boolean): void {
+    const scale: number = WaylandService.getInstance().getUiScale();
+    const useDecor: boolean = WaylandService.getInstance().getUseNativeDecor();
+    let decorPx: number = 0;
+    if (useDecor) {
+      try {
+        const di = display.getDefaultDisplaySync();
+        const density: number = di.densityPixels ?? 1;
+        decorPx = Math.round(45 * density);
+      } catch (e) { /* ignore */ }
+    }
+    const bufW: number = Math.max(1, Math.round(hostW / scale));
+    const bufH: number = Math.max(1, Math.round((hostH - decorPx) / scale));
+    console.info(`[HBox] configure -> client: host=${hostW}x${hostH} buf=${bufW}x${bufH} max=${maximized}`);
+    WaylandService.getInstance().requestClientResize(bufW, bufH, maximized);
   }
 
   private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {

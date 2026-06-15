@@ -617,9 +617,30 @@ void WaylandServer::ClearActiveToplevel(wl_resource* tl) {
     }
 }
 
+namespace {
+struct ConfigureCtx {
+    int w;
+    int h;
+    bool maximized;
+};
+}
+
+static void idle_send_configure(void* data) {
+    auto* ctx = static_cast<ConfigureCtx*>(data);
+    WaylandServer::GetInstance()->DoSendToplevelConfigure(ctx->w, ctx->h, ctx->maximized);
+    delete ctx;
+}
+
 void WaylandServer::SendToplevelConfigure(int w, int h, bool maximized) {
-    if (!activeToplevel_ || !activeXdgSurface_ || !display_) return;
+    if (!display_) return;
     if (w <= 0 || h <= 0) return;
+    auto* ctx = new ConfigureCtx{w, h, maximized};
+    wl_event_loop* loop = wl_display_get_event_loop(display_);
+    wl_event_loop_add_idle(loop, idle_send_configure, ctx);
+}
+
+void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
+    if (!activeToplevel_ || !activeXdgSurface_ || !display_) return;
 
     wl_array states;
     wl_array_init(&states);
@@ -636,6 +657,6 @@ void WaylandServer::SendToplevelConfigure(int w, int h, bool maximized) {
     xdg_surface_send_configure(activeXdgSurface_, serial);
     wl_display_flush_clients(display_);
 
-    OH_LOG_INFO(LOG_APP, "send configure %{public}dx%{public}d max=%{public}d",
-                w, h, maximized ? 1 : 0);
+    OH_LOG_INFO(LOG_APP, "send configure %{public}dx%{public}d max=%{public}d serial=%{public}u",
+                w, h, maximized ? 1 : 0, serial);
 }

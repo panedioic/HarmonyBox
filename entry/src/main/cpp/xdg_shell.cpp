@@ -119,7 +119,7 @@ static void xs_set_window_geometry(wl_client*, wl_resource* xsRes,
     }
 }
 static void xs_ack_configure(wl_client*, wl_resource*, uint32_t serial) {
-    OH_LOG_DEBUG(LOG_APP, "ack_configure serial=%{public}u", serial);
+    OH_LOG_INFO(LOG_APP, "ack_configure serial=%{public}u", serial);
 }
 
 static const struct xdg_surface_interface kSurfaceImpl = {

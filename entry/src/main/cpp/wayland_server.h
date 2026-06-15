@@ -105,7 +105,8 @@ public:
     
     void SetActiveToplevel(wl_resource* tl, wl_resource* xs);
     void ClearActiveToplevel(wl_resource* tl);
-    void SendToplevelConfigure(int w, int h, bool maximized);
+    void SendToplevelConfigure(int w, int h, bool maximized);     // 任意线程可调
+    void DoSendToplevelConfigure(int w, int h, bool maximized);   // 仅 wl 线程调,内部使用
 
 private:
     WaylandServer() = default;
