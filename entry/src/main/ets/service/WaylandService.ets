@@ -144,6 +144,12 @@ export class WaylandService {
     }
   }
 
+  requestClientResize(bufW: number, bufH: number, maximized: boolean): void {
+    try {
+      wl.requestClientResize(bufW, bufH, maximized);
+    } catch (e) { /* ignore */ }
+  }
+
   isServerReady(): boolean { return this.serverReady; }
   isBox64Ready(): boolean { return this.box64Ready; }
   getCurrentAppId(): string | null { return this.currentAppId; }

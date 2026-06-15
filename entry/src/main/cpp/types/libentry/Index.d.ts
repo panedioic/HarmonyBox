@@ -36,3 +36,4 @@ export const setMoveCallback: (cb: () => void) => void;
 export const setMaximizeCallback: (cb: () => void) => void;
 export const setUnmaximizeCallback: (cb: () => void) => void;
 export const setResizeCallback: (cb: (edges: number) => void) => void;
+export const requestClientResize: (w: number, h: number, maximized: boolean) => void;

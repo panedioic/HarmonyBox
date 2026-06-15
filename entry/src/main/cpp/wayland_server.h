@@ -102,6 +102,10 @@ public:
     void FireMaximizeRequest();
     void FireUnmaximizeRequest();
     void FireResizeRequest(uint32_t edges);
+    
+    void SetActiveToplevel(wl_resource* tl, wl_resource* xs);
+    void ClearActiveToplevel(wl_resource* tl);
+    void SendToplevelConfigure(int w, int h, bool maximized);
 
 private:
     WaylandServer() = default;
@@ -148,6 +152,9 @@ private:
     std::function<void()> maximizeCallback_;
     std::function<void()> unmaximizeCallback_;
     std::function<void(uint32_t)> resizeCallback_;
+    
+    wl_resource* activeToplevel_ = nullptr;
+    wl_resource* activeXdgSurface_ = nullptr;
 };
 
 struct SurfaceState {

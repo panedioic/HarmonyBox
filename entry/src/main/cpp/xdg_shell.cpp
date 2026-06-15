@@ -83,7 +83,10 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
         client, &xdg_toplevel_interface,
         wl_resource_get_version(xsRes), id);
     d->xdgToplevel = tl;
-    wl_resource_set_implementation(tl, &kToplevelImpl, d, nullptr);
+    wl_resource_set_implementation(tl, &kToplevelImpl, d,
+        [](wl_resource* r) {
+            WaylandServer::GetInstance()->ClearActiveToplevel(r);
+        });
 
     // 先回 toplevel.configure（建议尺寸 0×0 = 客户端自决），再回 xdg_surface.configure
     struct wl_array states;
@@ -98,6 +101,7 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
     uint32_t serial = wl_display_next_serial(dpy);
     xdg_surface_send_configure(xsRes, serial);
     d->configureSent = true;
+    WaylandServer::GetInstance()->SetActiveToplevel(tl, xsRes);
     OH_LOG_INFO(LOG_APP, "xdg_surface configure sent serial=%{public}u", serial);
 }
 

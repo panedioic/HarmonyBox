@@ -824,6 +824,18 @@ static napi_value SetResizeCallback(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value RequestClientResize(napi_env env, napi_callback_info info) {
+    size_t argc = 3; napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t w = 0, h = 0;
+    bool maximized = false;
+    napi_get_value_int32(env, args[0], &w);
+    napi_get_value_int32(env, args[1], &h);
+    napi_get_value_bool(env, args[2], &maximized);
+    WaylandServer::GetInstance()->SendToplevelConfigure(w, h, maximized);
+    return nullptr;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -848,6 +860,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setMaximizeCallback",    nullptr, SetMaximizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setUnmaximizeCallback",  nullptr, SetUnmaximizeCallback,  nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setResizeCallback",      nullptr, SetResizeCallback,      nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"requestClientResize",   nullptr, RequestClientResize,   nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

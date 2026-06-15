@@ -35,6 +35,9 @@ struct Index {
   @State currentPage: string = PageType.LIBRARY;
   @State installedApps: AppInfo[] = [];
 
+  private firstCommitDone: Set<string> = new Set();
+  private maximizedApps: Set<string> = new Set();
+
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.installedApps = AppRegistry.load(ctx);
@@ -70,6 +73,13 @@ struct Index {
     if (!appId) return;
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
+
+    // 仅在首帧时让 host 跟随 buffer。之后 host 由用户/最大化控制,
+    // buffer 由我们通过 configure 反向通知客户端跟随 host。
+    if (this.firstCommitDone.has(appId)) {
+      return;
+    }
+    this.firstCommitDone.add(appId);
     this.applyWindowSize(guiWin, bufW, bufH);
   }
 
@@ -107,35 +117,57 @@ struct Index {
   private handleWaylandMaximize(): void {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
+    this.maximizedApps.add(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
     try {
       const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
       if (maximizable.maximize) {
         maximizable.maximize().catch((e: BusinessError): void => {
-          console.error(`maximize failed: ${e.code} ${e.message}`);
+          console.warn(`maximize failed: ${e.code} ${e.message}`);
         });
       }
-    } catch (e) {
-      console.error(`handleWaylandMaximize failed: ${JSON.stringify(e)}`);
-    }
+    } catch (e) { /* ignore */ }
   }
 
   private handleWaylandUnmaximize(): void {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
+    this.maximizedApps.delete(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
     try {
       const maximizable: MaximizableWindow = guiWin as MaximizableWindow;
       if (maximizable.restore) {
         maximizable.restore().catch((e: BusinessError): void => {
-          console.error(`restore failed: ${e.code} ${e.message}`);
+          console.warn(`restore failed: ${e.code} ${e.message}`);
         });
       }
-    } catch (e) {
-      console.error(`handleWaylandUnmaximize failed: ${JSON.stringify(e)}`);
+    } catch (e) { /* ignore */ }
+  }
+
+  private handleHostResize(appId: string, hostW: number, hostH: number): void {
+    if (!this.firstCommitDone.has(appId)) return; // 跳过首帧期我们自己 resize 的回声
+    if (hostW <= 0 || hostH <= 0) return;
+
+    const scale: number = WaylandService.getInstance().getUiScale();
+    const useDecor: boolean = WaylandService.getInstance().getUseNativeDecor();
+
+    let decorPx: number = 0;
+    if (useDecor) {
+      try {
+        const di = display.getDefaultDisplaySync();
+        const density: number = di.densityPixels ?? 1;
+        decorPx = Math.round(45 * density);
+      } catch (e) { /* ignore */ }
     }
+
+    const bufW: number = Math.max(1, Math.round(hostW / scale));
+    const bufH: number = Math.max(1, Math.round((hostH - decorPx) / scale));
+    const maximized: boolean = this.maximizedApps.has(appId);
+
+    console.info(`[HBox] host resize ${hostW}x${hostH} -> tell client ${bufW}x${bufH} max=${maximized}`);
+    WaylandService.getInstance().requestClientResize(bufW, bufH, maximized);
   }
 
   private handleWaylandResize(edges: number): void {
@@ -145,15 +177,19 @@ struct Index {
     if (!guiWin) return;
     try {
       const resizable: ResizableWindow = guiWin as ResizableWindow;
-      if (resizable.startResizing) {
-        resizable.startResizing(edges).catch((e: BusinessError): void => {
-          console.error(`startResizing failed: ${e.code} ${e.message}`);
-        });
+      if (resizable.startResizing && typeof resizable.startResizing === 'function') {
+        resizable.startResizing(edges)
+          .then((): void => {
+            console.info(`[WL] startResizing succeeded edges=0x${edges.toString(16)}`);
+          })
+          .catch((e: BusinessError): void => {
+            console.warn(`startResizing not supported or failed: ${e.code} ${e.message}`);
+          });
       } else {
-        console.warn('window.startResizing not available');
+        console.warn('window.startResizing not available on this device');
       }
     } catch (e) {
-      console.error(`handleWaylandResize failed: ${JSON.stringify(e)}`);
+      console.warn(`handleWaylandResize error: ${JSON.stringify(e)}`);
     }
   }
 
@@ -461,7 +497,7 @@ struct Index {
       const useNative: boolean = WaylandService.getInstance().getUseNativeDecor();
       const subWin = await main.createSubWindowWithOptions(
         `app_${app.id}_${Date.now()}`,
-        { title: app.name, decorEnabled: useNative, isModal: false }
+        { title: app.name, decorEnabled: useNative, isModal: false, maximizeSupported: true }
       );
       await subWin.loadContent('pages/AppRunner');
       const w: number = 800; const h: number = 600;
@@ -495,6 +531,9 @@ struct Index {
         }
       });
       runningWindows.set(key, subWin);
+      subWin.on('windowSizeChange', (size: window.Size): void => {
+        this.handleHostResize(app.id, size.width, size.height);
+      });
       await subWin.showWindow();
       // 首帧可能早于子窗口创建,这里主动同步一次最新 buffer 尺寸
       const sz: WlBufferSize  = WaylandService.getInstance().getLatestBufferSize();

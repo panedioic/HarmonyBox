@@ -1,7 +1,7 @@
 import wl from 'libentry.so';
 import { OH2EVDEV, modMaskOf, MOD_SHIFT, MOD_CTRL, MOD_ALT } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
-import { WaylandService } from '../service/WaylandService';
+import { WaylandService, WlBufferSize } from '../service/WaylandService';
 
 @Entry
 @Component
@@ -10,6 +10,8 @@ struct AppRunner {
   @State surfaceW: number = 800;
   @State surfaceH: number = 600;
   @State scaleNumber: number = 1.0;
+  @State surfacePxW: number = 1;
+  @State surfacePxH: number = 1;
 
   // ArkTS 自己维护修饰键状态
   private modMask: number = 0;
@@ -57,10 +59,11 @@ struct AppRunner {
     })
     // ── 鼠标 ──
     .onMouse((ev: MouseEvent): void => {
-      // host 窗口被放大了 scale 倍,所以 px 要除回 buffer 坐标系
-      const s: number = this.scaleNumber > 0 ? this.scaleNumber : 1.0;
-      const x: number = vp2px(ev.x) / s;
-      const y: number = vp2px(ev.y) / s;
+      // 比例映射:不依赖固定 scale,自动适配最大化/手动 resize
+      const sz: WlBufferSize = WaylandService.getInstance().getLatestBufferSize();
+      if (sz.w <= 0 || sz.h <= 0 || this.surfacePxW <= 0 || this.surfacePxH <= 0) return;
+      const x: number = vp2px(ev.x) * sz.w / this.surfacePxW;
+      const y: number = vp2px(ev.y) * sz.h / this.surfacePxH;
       switch (ev.action) {
         case MouseAction.Move:
         case MouseAction.Hover:
@@ -79,6 +82,10 @@ struct AppRunner {
     })
     .onHover((isHover: boolean): void => {
       wl.sendMouseHover(isHover);
+    })
+    .onAreaChange((_o: Area, n: Area): void => {
+      this.surfacePxW = vp2px(n.width as number);
+      this.surfacePxH = vp2px(n.height as number);
     })
   }
 }

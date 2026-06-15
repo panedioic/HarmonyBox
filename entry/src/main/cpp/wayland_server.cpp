@@ -1,5 +1,6 @@
 // wayland_server.cpp
 #include "wayland_server.h"
+#include "xdg-shell-server-protocol.h"
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
@@ -602,4 +603,39 @@ void WaylandServer::FireUnmaximizeRequest() {
 void WaylandServer::FireResizeRequest(uint32_t edges) {
     ReleaseAllPointerButtons();
     if (resizeCallback_) resizeCallback_(edges);
+}
+
+void WaylandServer::SetActiveToplevel(wl_resource* tl, wl_resource* xs) {
+    activeToplevel_ = tl;
+    activeXdgSurface_ = xs;
+}
+
+void WaylandServer::ClearActiveToplevel(wl_resource* tl) {
+    if (activeToplevel_ == tl) {
+        activeToplevel_ = nullptr;
+        activeXdgSurface_ = nullptr;
+    }
+}
+
+void WaylandServer::SendToplevelConfigure(int w, int h, bool maximized) {
+    if (!activeToplevel_ || !activeXdgSurface_ || !display_) return;
+    if (w <= 0 || h <= 0) return;
+
+    wl_array states;
+    wl_array_init(&states);
+    uint32_t* s1 = (uint32_t*)wl_array_add(&states, sizeof(uint32_t));
+    *s1 = XDG_TOPLEVEL_STATE_ACTIVATED;
+    if (maximized) {
+        uint32_t* s2 = (uint32_t*)wl_array_add(&states, sizeof(uint32_t));
+        *s2 = XDG_TOPLEVEL_STATE_MAXIMIZED;
+    }
+    xdg_toplevel_send_configure(activeToplevel_, w, h, &states);
+    wl_array_release(&states);
+
+    uint32_t serial = wl_display_next_serial(display_);
+    xdg_surface_send_configure(activeXdgSurface_, serial);
+    wl_display_flush_clients(display_);
+
+    OH_LOG_INFO(LOG_APP, "send configure %{public}dx%{public}d max=%{public}d",
+                w, h, maximized ? 1 : 0);
 }
