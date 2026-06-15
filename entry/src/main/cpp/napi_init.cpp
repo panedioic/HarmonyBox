@@ -639,6 +639,55 @@ static napi_value SendMouseHover(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// fix window size
+struct SizeEvent { int w; int h; };
+static napi_threadsafe_function g_sizeTsfn = nullptr;
+
+static void SizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    SizeEvent* ev = static_cast<SizeEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[2];
+        napi_get_undefined(env, &undef);
+        napi_create_int32(env, ev->w, &args[0]);
+        napi_create_int32(env, ev->h, &args[1]);
+        napi_call_function(env, undef, jsCb, 2, args, nullptr);
+    }
+    delete ev;
+}
+
+static napi_value SetSizeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_sizeTsfn) {
+        napi_release_threadsafe_function(g_sizeTsfn, napi_tsfn_release);
+        g_sizeTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLSize", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, SizeTsfnCallJs, &g_sizeTsfn);
+
+    WaylandServer::GetInstance()->SetSizeCallback([](int w, int h) {
+        if (g_sizeTsfn) {
+            SizeEvent* ev = new SizeEvent{w, h};
+            napi_call_threadsafe_function(g_sizeTsfn, ev, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
+static napi_value GetLatestSize(napi_env env, napi_callback_info /*info*/) {
+    int w = 0, h = 0;
+    WaylandServer::GetInstance()->GetLatestSize(w, h);
+    napi_value result, vw, vh;
+    napi_create_object(env, &result);
+    napi_create_int32(env, w, &vw);
+    napi_create_int32(env, h, &vh);
+    napi_set_named_property(env, result, "w", vw);
+    napi_set_named_property(env, result, "h", vh);
+    return result;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -657,6 +706,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"sendMouseButton", nullptr, SendMouseButton, nullptr,nullptr,nullptr, napi_default,nullptr},
         {"sendMouseAxis",   nullptr, SendMouseAxis,   nullptr,nullptr,nullptr, napi_default,nullptr},
         {"sendMouseHover",  nullptr, SendMouseHover,  nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setSizeCallback",    nullptr, SetSizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"getLatestSize",      nullptr, GetLatestSize,      nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

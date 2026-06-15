@@ -6,7 +6,7 @@ import { AppInfo, RuntimeMode, AppType } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { InstallService } from '../service/InstallService';
-import { WaylandService } from '../service/WaylandService';
+import { WaylandService, WlBufferSize  } from '../service/WaylandService';
 import { Sidebar } from '../components/Sidebar';
 import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
@@ -26,10 +26,49 @@ struct Index {
     this.installedApps = AppRegistry.load(ctx);
     WaylandService.getInstance().init(ctx);
     CliService.getInstance().init(ctx);
+    WaylandService.getInstance().setSizeListener((w: number, h: number): void => {
+      this.handleWaylandSizeChange(w, h);
+    });
   }
 
   aboutToDisappear(): void {
     WaylandService.getInstance().shutdown();
+  }
+
+  private handleWaylandSizeChange(bufW: number, bufH: number): void {
+    if (bufW <= 0 || bufH <= 0) return;
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    this.applyWindowSize(guiWin, bufW, bufH);
+  }
+
+  private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {
+    // window.resize 单位是 px;buffer 也是 px。需要给标题栏装饰留高度。
+    let decorPx: number = 56;
+    try {
+      const di = display.getDefaultDisplaySync();
+      const density: number = di.densityPixels ?? 1;
+      decorPx = Math.round(37 * density); // 默认 decor 高 ~37vp
+    } catch (e) { /* ignore */ }
+
+    const totalW: number = bufW;
+    const totalH: number = bufH + decorPx;
+
+    win.resize(totalW, totalH).then((): void => {
+      try {
+        const prop = win.getWindowProperties();
+        const di = display.getDisplayByIdSync(prop.displayId);
+        win.moveWindowToGlobal(
+          Math.round((di.availableWidth - totalW) / 2),
+          Math.round((di.availableHeight - totalH) / 2),
+          { displayId: prop.displayId }
+        ).catch((): void => { /* ignore */ });
+      } catch (e) { /* ignore */ }
+    }).catch((e: BusinessError): void => {
+      console.error(`resize gui window failed: ${e.code} ${e.message}`);
+    });
   }
 
   private guiKey(appId: string): string { return `${appId}::gui`; }
@@ -331,6 +370,11 @@ struct Index {
       });
       runningWindows.set(key, subWin);
       await subWin.showWindow();
+      // 首帧可能早于子窗口创建,这里主动同步一次最新 buffer 尺寸
+      const sz: WlBufferSize  = WaylandService.getInstance().getLatestBufferSize();
+      if (sz.w > 0 && sz.h > 0) {
+        this.applyWindowSize(subWin, sz.w, sz.h);
+      }
     } catch (e) {
       const err = e as BusinessError;
       console.error(`createAppWindow failed: ${err.code}, ${err.message}`);

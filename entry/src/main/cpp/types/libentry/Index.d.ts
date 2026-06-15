@@ -27,3 +27,6 @@ export const sendMouseMove: (x: number, y: number) => void;
 export const sendMouseButton: (button: number, pressed: boolean) => void;
 export const sendMouseAxis: (dx: number, dy: number) => void;
 export const sendMouseHover: (inside: boolean) => void;
+
+export const setSizeCallback: (cb: (w: number, h: number) => void) => void;
+export const getLatestSize: () => { w: number; h: number };

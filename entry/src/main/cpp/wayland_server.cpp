@@ -197,6 +197,12 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
             self->dirty_ = true;
         }
         wl_shm_buffer_end_access(shm);
+        // ★ 新增:把 buffer 尺寸通知到 ArkTS,用于 resize 鸿蒙子窗口
+        if (self->lastNotifiedW_ != w || self->lastNotifiedH_ != h) {
+            self->lastNotifiedW_ = w;
+            self->lastNotifiedH_ = h;
+            if (self->sizeCallback_) self->sizeCallback_(w, h);
+        }
     }
 
     wl_buffer_send_release(s->pendingBuffer);
@@ -475,5 +481,12 @@ void WaylandServer::ResetFirstCommit() {
     mainSurface_ = nullptr;
     kbFocus_ = nullptr;
     ptrFocus_ = nullptr;
+    lastNotifiedW_ = -1;   // ★
+    lastNotifiedH_ = -1;   // ★
 }
 
+void WaylandServer::GetLatestSize(int& w, int& h) {
+    std::lock_guard<std::mutex> lk(frameMutex_);
+    w = latestW_;
+    h = latestH_;
+}

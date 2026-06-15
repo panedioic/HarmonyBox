@@ -3,6 +3,11 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { LibStore } from './LibStore';
 
+export interface WlBufferSize {
+  w: number;
+  h: number;
+}
+
 const ACTIVE_TIMEOUT_MS: number = 15000;
 
 export class WaylandService {
@@ -23,6 +28,7 @@ export class WaylandService {
   private currentAppId: string | null = null;
   private activeWaiter: ((ok: boolean) => void) | null = null;
   private context: common.UIAbilityContext | null = null;
+  private sizeListener: ((w: number, h: number) => void) | null = null;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -46,9 +52,26 @@ export class WaylandService {
       }
     });
 
+    wl.setSizeCallback((w: number, h: number): void => {
+      console.info(`[WL] size=${w}x${h}`);
+      if (this.sizeListener) this.sizeListener(w, h);
+    });
+
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;
     return ok;
+  }
+
+  setSizeListener(cb: ((w: number, h: number) => void) | null): void {
+    this.sizeListener = cb;
+  }
+
+  getLatestBufferSize(): WlBufferSize {
+    try {
+      return wl.getLatestSize() as WlBufferSize;
+    } catch (e) {
+      return { w: 0, h: 0 };
+    }
   }
 
   isServerReady(): boolean { return this.serverReady; }

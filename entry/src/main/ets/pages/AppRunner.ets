@@ -54,10 +54,9 @@ struct AppRunner {
     })
     // ── 鼠标 ──
     .onMouse((ev: MouseEvent): void => {
-      // ev.x / ev.y 单位 vp,Wayland surface 用像素
-      // 简化:直接当像素传; 正式做应该用 px2vp 反向 + 按 buffer 大小缩放
-      const x: number = ev.x;
-      const y: number = ev.y;
+      // ArkUI MouseEvent.x/y 单位是 vp,Wayland surface 用 px
+      const x: number = vp2px(ev.x);
+      const y: number = vp2px(ev.y);
       switch (ev.action) {
         case MouseAction.Move:
         case MouseAction.Hover:

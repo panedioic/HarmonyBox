@@ -129,7 +129,10 @@ void EglRenderer::RenderLoop() {
                          GL_RGBA, GL_UNSIGNED_BYTE, px.data());
         }
 
-        glViewport(0, 0, width_, height_);
+        // glViewport(0, 0, width_, height_);
+        const int vpW = width_.load();
+        const int vpH = height_.load();
+        glViewport(0, 0, vpW, vpH);
         glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(prog_);

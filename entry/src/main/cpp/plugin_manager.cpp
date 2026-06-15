@@ -37,8 +37,11 @@ void PluginManager::OnSurfaceCreatedCB(OH_NativeXComponent* component, void* win
     self->renderer_.Init(reinterpret_cast<OHNativeWindow*>(window), (int)w, (int)h);
 }
 
-void PluginManager::OnSurfaceChangedCB(OH_NativeXComponent*, void*) {
-    // 这里可以做尺寸变化重建 surface，先忽略
+void PluginManager::OnSurfaceChangedCB(OH_NativeXComponent* component, void* window) {
+    auto* self = GetInstance();
+    uint64_t w = 0, h = 0;
+    OH_NativeXComponent_GetXComponentSize(component, window, &w, &h);
+    self->renderer_.OnResize((int)w, (int)h);
 }
 
 void PluginManager::OnSurfaceDestroyedCB(OH_NativeXComponent*, void*) {

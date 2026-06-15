@@ -70,6 +70,11 @@ public:
     static void pointer_release(wl_client*, wl_resource*);
     static void pointer_set_cursor(wl_client*, wl_resource*, uint32_t,
                                    wl_resource*, int32_t, int32_t);
+    
+
+    // fix window size
+    void SetSizeCallback(std::function<void(int,int)> cb) { sizeCallback_ = std::move(cb); }
+    void GetLatestSize(int& w, int& h);
 
 private:
     WaylandServer() = default;
@@ -99,6 +104,11 @@ private:
     uint32_t NowMs();
 
     wl_resource* mainSurface_ = nullptr; // 追踪主渲染窗口
+    
+    // fix window size
+    std::function<void(int,int)> sizeCallback_;
+    int lastNotifiedW_ = -1;
+    int lastNotifiedH_ = -1;
 };
 
 struct SurfaceState {
