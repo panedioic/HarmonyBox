@@ -662,3 +662,8 @@ void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
                          "max=%{public}d serial=%{public}u",
                 w, h, maximized ? 1 : 0, serial);
 }
+
+void WaylandServer::FireMinimizeRequest() {
+    ReleaseAllPointerButtons();
+    if (minimizeCallback_) minimizeCallback_();
+}

@@ -836,6 +836,30 @@ static napi_value RequestClientResize(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// for window minimize
+static napi_threadsafe_function g_minimizeTsfn = nullptr;
+
+// 复用了 MaximizeTsfnCallJs 因为它也是无参回调。
+static napi_value SetMinimizeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_minimizeTsfn) {
+        napi_release_threadsafe_function(g_minimizeTsfn, napi_tsfn_release);
+        g_minimizeTsfn = nullptr;
+    }
+    napi_value resName;
+    napi_create_string_utf8(env, "WLMinimize", NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, args[0], nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, MaximizeTsfnCallJs, &g_minimizeTsfn);
+
+    WaylandServer::GetInstance()->SetMinimizeCallback([]() {
+        if (g_minimizeTsfn) {
+            napi_call_threadsafe_function(g_minimizeTsfn, nullptr, napi_tsfn_blocking);
+        }
+    });
+    return nullptr;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -861,6 +885,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setUnmaximizeCallback",  nullptr, SetUnmaximizeCallback,  nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setResizeCallback",      nullptr, SetResizeCallback,      nullptr,nullptr,nullptr, napi_default,nullptr},
         {"requestClientResize",   nullptr, RequestClientResize,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"setMinimizeCallback",    nullptr, SetMinimizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

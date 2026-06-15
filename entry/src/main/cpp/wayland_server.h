@@ -107,6 +107,10 @@ public:
     void ClearActiveToplevel(wl_resource* tl);
     void SendToplevelConfigure(int w, int h, bool maximized);     // 任意线程可调
     void DoSendToplevelConfigure(int w, int h, bool maximized);   // 仅 wl 线程调,内部使用
+    
+    // for minimize window
+    void SetMinimizeCallback(std::function<void()> cb) { minimizeCallback_ = std::move(cb); }
+    void FireMinimizeRequest();
 
 private:
     WaylandServer() = default;
@@ -156,6 +160,9 @@ private:
     
     wl_resource* activeToplevel_ = nullptr;
     wl_resource* activeXdgSurface_ = nullptr;
+    
+    // for minimize window
+    std::function<void()> minimizeCallback_;
 };
 
 struct SurfaceState {

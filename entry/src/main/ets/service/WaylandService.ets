@@ -41,6 +41,7 @@ export class WaylandService {
   private hostResizeBeginListener: ((edges: number) => void) | null = null;
   private hostResizeDragListener: ((edges: number, dxPx: number, dyPx: number) => void) | null = null;
   private hostResizeEndListener: (() => void) | null = null;
+  private minimizeListener: (() => void) | null = null;
 
   init(context: common.UIAbilityContext): boolean {
     this.context = context;
@@ -94,6 +95,11 @@ export class WaylandService {
     wl.setResizeCallback((edges: number): void => {
       console.info(`HBOX_WIN_RESIZE_REQ_RECV edges=0x${edges.toString(16)}`);
       if (this.resizeListener) this.resizeListener(edges);
+    });
+
+    wl.setMinimizeCallback((): void => {
+      console.info('HBOX_GUI_MIN_REQ_ETS');
+      if (this.minimizeListener) this.minimizeListener();
     });
 
     const ok: boolean = wl.startWaylandServer(this.sockPath);
@@ -157,6 +163,10 @@ export class WaylandService {
   }
   notifyHostResizeEnd(): void {
     if (this.hostResizeEndListener) this.hostResizeEndListener();
+  }
+
+  setMinimizeListener(cb: (() => void) | null): void {
+    this.minimizeListener = cb;
   }
 
   getLatestBufferSize(): WlBufferSize {

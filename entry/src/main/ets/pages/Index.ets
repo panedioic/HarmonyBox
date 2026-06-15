@@ -44,11 +44,17 @@ interface ResizeStart {
   startH: number;
 }
 
+interface RestorableWindow {
+  showWindow?: () => Promise<void>;
+  raiseToAppTop?: () => Promise<void>;
+}
+
 @Entry
 @Component
 struct Index {
   @State currentPage: string = PageType.LIBRARY;
   @State installedApps: AppInfo[] = [];
+  @State runningAppIds: string[] = [];
 
   private firstCommitDone: Set<string> = new Set();
   private maximizedApps: Set<string> = new Set();
@@ -87,6 +93,9 @@ struct Index {
       });
     WaylandService.getInstance().setHostResizeEndListener((): void => {
       this.handleHostResizeEnd();
+    });
+    WaylandService.getInstance().setMinimizeListener((): void => {
+      this.handleWaylandMinimize();
     });
   }
 
@@ -315,6 +324,33 @@ struct Index {
     this.maxOpUntil = Date.now() + 300;
   }
 
+  private handleWaylandMinimize(): void {
+    const appId: string | null = WaylandService.getInstance().getCurrentAppId();
+    if (!appId) return;
+    const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
+    if (!guiWin) return;
+    // 子窗口的 minimize() 实际效果是隐藏,不进 dock
+    guiWin.minimize().then((): void => {
+      console.info(`HBOX_GUI_MIN_DONE app=${appId}`);
+    }).catch((e: BusinessError): void => {
+      console.warn(`HBOX_GUI_MIN_FAIL code=${e.code} msg=${e.message}`);
+    });
+  }
+
+  private restoreHiddenWindow(win: window.Window, appId: string): void {
+    const r: RestorableWindow = win as RestorableWindow;
+    if (r.showWindow) {
+      r.showWindow().then((): void => {
+        console.info(`HBOX_GUI_RESTORE_DONE app=${appId}`);
+        if (r.raiseToAppTop) {
+          r.raiseToAppTop().catch((): void => { /* ignore */ });
+        }
+      }).catch((e: BusinessError): void => {
+        console.warn(`HBOX_GUI_RESTORE_FAIL code=${e.code} msg=${e.message}`);
+      });
+    }
+  }
+
   private sendConfigureFromHostSize(hostW: number, hostH: number, maximized: boolean): void {
     const scale: number = WaylandService.getInstance().getUiScale();
     const useDecor: boolean = WaylandService.getInstance().getUseNativeDecor();
@@ -376,11 +412,35 @@ struct Index {
     return runningWindows.get(this.guiKey(appId)) ?? runningWindows.get(this.cliKey(appId));
   }
 
+  private addRunningId(id: string): void {
+    if (!this.runningAppIds.includes(id)) {
+      this.runningAppIds = [...this.runningAppIds, id];
+    }
+  }
+
+  private removeRunningIdIfGone(id: string): void {
+    const hasGui: boolean = runningWindows.get(this.guiKey(id)) !== undefined;
+    const hasCli: boolean = runningWindows.get(this.cliKey(id)) !== undefined;
+    if (!hasGui && !hasCli) {
+      this.runningAppIds = this.runningAppIds.filter((x: string): boolean => x !== id);
+    }
+  }
+
   launchApp = (app: AppInfo): void => {
+    const existing: window.Window | undefined = this.getAnyRunningWindow(app.id);
+    if (existing) {
+      this.restoreHiddenWindow(existing, app.id);
+      return;
+    }
     this.openAppWindow(app, false);
   }
 
   launchAppWithLog = (app: AppInfo): void => {
+    const existing: window.Window | undefined = this.getAnyRunningWindow(app.id);
+    if (existing) {
+      this.restoreHiddenWindow(existing, app.id);
+      return;
+    }
     this.openAppWindow(app, true);
   }
 
@@ -449,22 +509,13 @@ struct Index {
       return;
     }
 
-    // 已经打开过 → 置顶
-    const existing = runningWindows.get(app.id);
-    if (existing) {
-      try {
-        await existing.showWindow();
-        await existing.raiseToAppTop?.();
-      } catch (error) {
-        // TODO: Implement error handling.
-      }
+    // CLI 模式:只起 CLI 窗口
+    if (app.runtimeMode === RuntimeMode.CLI) {
+      await this.openCliWindow(app);
       return;
     }
 
-    if (app.runtimeMode === RuntimeMode.CLI) {
-      await this.openCliWindow(app);
-    }
-
+    // GUI 模式
     if (withLog) {
       await this.openGuiWithLog(app);
     } else {
@@ -569,6 +620,8 @@ struct Index {
     await this.createAppWindow(app, pid);
   }
 
+
+
   private async createCliWindow(
     app: AppInfo, pid: number, attachedToGui: boolean
   ): Promise<void> {
@@ -586,11 +639,13 @@ struct Index {
         }
       );
       await subWin.loadContent('pages/CliRunner');
-      const w: number = 1440; const h: number = 960;
+
+      const w: number = 1440;
+      const h: number = 960;
       await subWin.resize(w, h);
+
       const prop = main.getWindowProperties();
       const di = display.getDisplayByIdSync(prop.displayId);
-      // GUI 联动模式:CLI 窗口左移一些避免完全遮挡 GUI
       const offset: number = attachedToGui ? 200 : 0;
       await subWin.moveWindowToGlobal(
         Math.round((di.availableWidth - w) / 2 - offset),
@@ -599,26 +654,27 @@ struct Index {
       );
       await subWin.setWindowCornerRadius?.(8);
       await subWin.setWindowBackgroundColor('#FF0E0E0E');
+
       const key: string = this.cliKey(app.id);
       subWin.on('windowEvent', (event: window.WindowEventType): void => {
         if (event === window.WindowEventType.WINDOW_DESTROYED) {
           runningWindows.remove(key);
-          // CLI 窗口被关 → 杀掉进程,GUI 也会随之退出
           CliService.getInstance().stop(pid);
           if (attachedToGui) {
             WaylandService.getInstance().releaseSlot(app.id);
-            // 顺手关掉 GUI 窗口(如果已开)
-            const guiWin = runningWindows.get(this.guiKey(app.id));
+            const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(app.id));
             if (guiWin) {
-              guiWin.destroyWindow().catch(() => {
-                // TODO: Implement error handling.
-              });
+              guiWin.destroyWindow().catch((): void => { /* ignore */ });
               runningWindows.remove(this.guiKey(app.id));
             }
           }
+          this.removeRunningIdIfGone(app.id);
         }
       });
+
       runningWindows.set(key, subWin);
+      this.addRunningId(app.id);
+
       await subWin.showWindow();
     } catch (e) {
       const err = e as BusinessError;
@@ -627,6 +683,7 @@ struct Index {
       if (attachedToGui) WaylandService.getInstance().releaseSlot(app.id);
     }
   }
+
   private async createAppWindow(app: AppInfo, cliPid?: number): Promise<void> {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
@@ -640,9 +697,12 @@ struct Index {
         { title: app.name, decorEnabled: useNative, isModal: false, maximizeSupported: true }
       );
       await subWin.loadContent('pages/AppRunner');
-      const w: number = 800; const h: number = 600;
+
       const fallbackScale: number = WaylandService.getInstance().getUiScale();
+      const w: number = 800;
+      const h: number = 600;
       await subWin.resize(Math.round(w * fallbackScale), Math.round(h * fallbackScale));
+
       const prop = main.getWindowProperties();
       const di = display.getDisplayByIdSync(prop.displayId);
       await subWin.moveWindowToGlobal(
@@ -650,8 +710,10 @@ struct Index {
         Math.round((di.availableHeight - h * fallbackScale) / 2),
         { displayId: prop.displayId }
       );
-      await subWin.setWindowCornerRadius?.(useNative ? 8 : 4);
+
+      await subWin.setWindowCornerRadius?.(useNative ? 8 : 0);
       await subWin.setWindowBackgroundColor('#FF000000');
+
       const key: string = this.guiKey(app.id);
       subWin.on('windowEvent', (event: window.WindowEventType): void => {
         if (event === window.WindowEventType.WINDOW_DESTROYED) {
@@ -659,24 +721,30 @@ struct Index {
           WaylandService.getInstance().releaseSlot(app.id);
           if (cliPid !== undefined && cliPid > 0) {
             CliService.getInstance().stop(cliPid);
-            // 顺手关 CLI 窗口
-            const cliWin = runningWindows.get(this.cliKey(app.id));
+            const cliWin: window.Window | undefined = runningWindows.get(this.cliKey(app.id));
             if (cliWin) {
-              cliWin.destroyWindow().catch(() => {
-                // TODO: Implement error handling.
-              });
+              cliWin.destroyWindow().catch((): void => { /* ignore */ });
               runningWindows.remove(this.cliKey(app.id));
             }
           }
+          this.firstCommitDone.delete(app.id);
+          this.maximizedApps.delete(app.id);
+          this.savedHostSizes.delete(app.id);
+          this.removeRunningIdIfGone(app.id);
         }
       });
+
       runningWindows.set(key, subWin);
+      this.addRunningId(app.id);
+
       subWin.on('windowSizeChange', (size: window.Size): void => {
         this.handleHostResize(app.id, size.width, size.height);
       });
+
       await subWin.showWindow();
-      // 首帧可能早于子窗口创建,这里主动同步一次最新 buffer 尺寸
-      const sz: WlBufferSize  = WaylandService.getInstance().getLatestBufferSize();
+
+      // 首帧可能早于子窗口创建,主动同步一次最新 buffer 尺寸
+      const sz: WlBufferSize = WaylandService.getInstance().getLatestBufferSize();
       if (sz.w > 0 && sz.h > 0) {
         this.applyWindowSize(subWin, sz.w, sz.h);
       }
@@ -687,11 +755,34 @@ struct Index {
     }
   }
 
+  private closeGuiWindows(appId: string): void {
+    const gKey: string = this.guiKey(appId);
+    const cKey: string = this.cliKey(appId);
+
+    const guiWin: window.Window | undefined = runningWindows.get(gKey);
+    if (guiWin) {
+      guiWin.destroyWindow().catch((): void => { /* ignore */ });
+      runningWindows.remove(gKey);
+    }
+    const cliWin: window.Window | undefined = runningWindows.get(cKey);
+    if (cliWin) {
+      cliWin.destroyWindow().catch((): void => { /* ignore */ });
+      runningWindows.remove(cKey);
+    }
+
+    WaylandService.getInstance().releaseSlot(appId);
+    this.firstCommitDone.delete(appId);
+    this.maximizedApps.delete(appId);
+    this.savedHostSizes.delete(appId);
+    this.removeRunningIdIfGone(appId);
+  }
+
   @Builder
   PageContent() {
     if (this.currentPage === PageType.LIBRARY) {
       LibraryPage({
         apps: $installedApps,
+        runningIds: this.runningAppIds,
         onLaunch: this.launchApp,
         onLaunchWithLog: this.launchAppWithLog,
         onDelete: this.deleteApp,

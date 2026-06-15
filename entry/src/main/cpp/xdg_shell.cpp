@@ -52,11 +52,16 @@ static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t serial, u
     WaylandServer::GetInstance()->FireResizeRequest(edges);
 }
 
+// for minimize window
+static void tl_set_minimized(wl_client*, wl_resource*) {
+    OH_LOG_INFO(LOG_APP, "HBOX_GUI_MIN_REQ");
+    WaylandServer::GetInstance()->FireMinimizeRequest();
+}
+
 static void tl_set_max_size(wl_client*, wl_resource*, int32_t, int32_t) {}
 static void tl_set_min_size(wl_client*, wl_resource*, int32_t, int32_t) {}
 static void tl_set_fullscreen(wl_client*, wl_resource*, wl_resource*) {}
 static void tl_unset_fullscreen(wl_client*, wl_resource*) {}
-static void tl_set_minimized(wl_client*, wl_resource*) {}
 
 static const struct xdg_toplevel_interface kToplevelImpl = {
     .destroy          = tl_destroy,

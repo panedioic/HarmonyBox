@@ -6,6 +6,7 @@ import { EditAppDialog } from './EditAppDialog';
 @Component
 export struct LibraryPage {
   @Link apps: AppInfo[];
+  @Prop runningIds: string[] = [];
   onLaunch: (app: AppInfo) => void = () => {};
   onLaunchWithLog: (app: AppInfo) => void = () => {};
   onDelete: (app: AppInfo) => void = () => {};
@@ -45,6 +46,7 @@ export struct LibraryPage {
             ForEach(this.apps, (app: AppInfo, index: number): void => {
               AppCard({
                 app: app,
+                isRunning: this.runningIds.includes(app.id),
                 onLaunch: this.onLaunch,
                 onLaunchWithLog: this.onLaunchWithLog,
                 onDelete: this.onDelete,
@@ -76,6 +78,7 @@ struct AppCard {
   onExport: (app: AppInfo) => void = () => {};
   onUpdate: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
+  @Prop isRunning: boolean = false;
 
   // dialog 控制器在 build 上下文里创建,把 app 和 onSave 直接绑过去
   private editDialog: CustomDialogController = new CustomDialogController({
@@ -139,21 +142,39 @@ struct AppCard {
   build() {
     Column() {
       Stack() {
-        Text(this.app.icon).fontSize(32)
+        Stack() {
+          Text(this.app.icon).fontSize(32)
+        }
+        .width(64).height(64)
+        .backgroundColor('#F0F0F0')
+        .borderRadius(14)
+
+        if (this.isRunning) {
+          Circle()
+            .width(12).height(12)
+            .fill('#5DD46E')
+            .stroke('#FFFFFF')
+            .strokeWidth(2)
+            .offset({ x: 26, y: -26 })
+        }
       }
-      .width(64)
-      .height(64)
-      .backgroundColor('#F0F0F0')
-      .borderRadius(14)
       .margin({ bottom: 12 })
 
-      Text(this.app.name)
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .maxLines(2)
-        .textAlign(TextAlign.Center)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
+      Row({ space: 4 }) {
+        if (this.isRunning) {
+          Text('●')
+            .fontSize(9)
+            .fontColor('#5DD46E')
+        }
+        Text(this.app.name)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .maxLines(2)
+          .textAlign(TextAlign.Center)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
     }
     .width(140)
     .height(150)
