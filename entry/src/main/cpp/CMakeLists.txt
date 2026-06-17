@@ -1,5 +1,40 @@
 # the minimum version of CMake.
 cmake_minimum_required(VERSION 3.5.0)
+
+# ───────── 预置 prebuilt .so 检查 ─────────
+# 如不需要请整段注释掉
+set(HBOX_PREBUILT_LIBS_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH}")
+
+set(HBOX_REQUIRED_LIBS
+    libexpat.so
+    libffi.so
+    libwayland-client.so
+    libwayland-cursor.so
+    libwayland-egl.so
+    libwayland-server.so
+)
+
+set(HBOX_MISSING_LIBS "")
+foreach(lib ${HBOX_REQUIRED_LIBS})
+    if(NOT EXISTS "${HBOX_PREBUILT_LIBS_DIR}/${lib}")
+        list(APPEND HBOX_MISSING_LIBS ${lib})
+    endif()
+endforeach()
+
+if(HBOX_MISSING_LIBS)
+    message(FATAL_ERROR
+        "\n[HarmonyBox] Missing prebuilt dependency libraries. Please compile and place them in:\n"
+        "  ${HBOX_PREBUILT_LIBS_DIR}\n"
+        "Missing files:\n"
+        "  ${HBOX_MISSING_LIBS}\n"
+        "To skip this check, please comment out the [HBOX_PREBUILT_LIBS_DIR] section in CMakeLists.txt.\n"
+    )
+endif()
+
+message(STATUS "[HarmonyBox] prebuilt libs ok at ${HBOX_PREBUILT_LIBS_DIR}")
+# ─────────────────────────────────────────
+
 project(HarmonyBox)
 
 set(CMAKE_CXX_STANDARD 17)
