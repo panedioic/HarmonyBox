@@ -2,6 +2,7 @@ import wl from 'libentry.so';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { InstallService } from './InstallService';
+import { LibStore } from './LibStore';
 
 const WINE_DIR_NAME: string = 'wine';
 const PREFIX_DIR_NAME: string = 'wineprefix';
@@ -89,15 +90,51 @@ export class WineService {
     if (!status.installed) return '';
     const libPath: string = (ctx as common.UIAbilityContext).applicationInfo.nativeLibraryPath ?? '';
     const argv: string[] = [BOX64_PATH, status.binPath, '--version'];
-    const env: string[] = WineService.buildLaunchEnv(ctx);
+
+    // 完整 env:wine 自己的 lib + 全局 x64libs + WINEPREFIX 这一套
+    const ldPaths: string[] = WineService.buildLdPaths(ctx);
+    const x64Libs: string = LibStore.getDir(ctx);
+    if (x64Libs) ldPaths.push(x64Libs);
+
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`,
+      `BOX64_NOBANNER=1`
+    ];
+    for (const e of WineService.buildLaunchEnv(ctx)) env.push(e);
+
     try {
       const r = await wl.execCapture(BOX64_PATH, argv, libPath, env);
-      const text: string = (r.stdout || '').trim();
-      if (!text) return r.code === 0 ? '已安装' : `已安装 (exit ${r.code})`;
-      return text.split('\n')[0].trim();
+      const out: string = r.stdout || '';
+      const v: string = WineService.pickVersionLine(out);
+      if (v.length > 0) return v;
+      if (r.code === 0) return '已安装';
+      return `已安装 (exit ${r.code})`;
     } catch (e) {
       return '已安装 (版本读取失败)';
     }
+  }
+
+  // 从 stdout 里挑出真正的版本行,过滤 sh/wine/box64 的报错噪音
+  private static pickVersionLine(stdout: string): string {
+    const lines: string[] = stdout.split('\n');
+    for (const raw of lines) {
+      const line: string = raw.trim();
+      if (line.length === 0) continue;
+      // 1. wine 版本行: 形如 "wine-9.0" 或 "wine-9.0 (Staging)"
+      if (/^wine[-\s]/i.test(line)) return line;
+    }
+    // 2. fallback:跳过明显是错误的行,选第一个看起来像版本的
+    for (const raw of lines) {
+      const line: string = raw.trim();
+      if (line.length === 0) continue;
+      if (line.startsWith('sh:')) continue;
+      if (line.startsWith('wine:')) continue;
+      if (line.toLowerCase().includes('error')) continue;
+      if (line.toLowerCase().includes('cannot')) continue;
+      if (line.toLowerCase().includes('not found')) continue;
+      return line;
+    }
+    return '';
   }
 
   // 给 wine 应用启动用的 env
