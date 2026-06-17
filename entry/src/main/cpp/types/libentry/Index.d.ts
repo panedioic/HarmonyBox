@@ -7,7 +7,9 @@ export const startWaylandServer: (sockPath: string) => boolean;
 export const stopClient: () => void;
 export const stopAll: () => void;
 export const setStateCallback: (cb: (state: string) => void) => void;
-export const execCapture: (exePath: string, argv: string[], libPath: string) => Promise<ExecResult>;
+export const execCapture: (
+  exe: string, argv: string[], libPath: string, extraEnv?: string[]
+) => Promise<{ code: number; stdout: string }>;
 export const stopCli: (pid: number) => void;
 export const setCliCallback: (cb: (pid: number, event: string, data: string) => void) => void;
 
@@ -39,3 +41,5 @@ export const setResizeCallback: (cb: (edges: number) => void) => void;
 export const requestClientResize: (w: number, h: number, maximized: boolean) => void;
 
 export const setMinimizeCallback: (cb: () => void) => void;
+
+export const chmodDirFiles: (dir: string) => number;

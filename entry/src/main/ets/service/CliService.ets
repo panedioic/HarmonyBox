@@ -2,6 +2,7 @@ import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { LibStore } from './LibStore';
 import { FontStore } from './FontStore';
+import { WineService } from './WineService';
 
 export interface CliSubscriber {
   onLine: (line: string) => void;
@@ -60,26 +61,36 @@ export class CliService {
     extraArgs: string[],
     cwd: string,
     extraEnv: string[] = [],
-    appDir: string = ''
+    appDir: string = '',
+    useWine: boolean = false
   ): number {
     if (!this.context) return -1;
     const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
-    const argv: string[] = [BOX64_PATH, exeAbsPath];
+    const wineBin: string = WineService.getBinPath(this.context);
+
+    const argv: string[] = useWine
+      ? [BOX64_PATH, wineBin, exeAbsPath]
+      : [BOX64_PATH, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
 
     const env: string[] = [];
     const x64LibDir: string = LibStore.getDir(this.context);
     const ldPaths: string[] = [];
-    if (appDir) {
-      ldPaths.push(appDir);
-      ldPaths.push(`${appDir}/lib`);
-    }
+    if (appDir) { ldPaths.push(appDir); ldPaths.push(`${appDir}/lib`); }
     if (x64LibDir) ldPaths.push(x64LibDir);
+    if (useWine) {
+      for (const p of WineService.buildLdPaths(this.context)) ldPaths.push(p);
+    }
     if (ldPaths.length > 0) env.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
+
+    if (useWine) {
+      for (const e of WineService.buildLaunchEnv(this.context)) env.push(e);
+    }
     if (this.context) {
       for (const e of FontStore.buildEnv(this.context)) env.push(e);
     }
     for (const e of extraEnv) env.push(e);
+
     return wl.launchCli(BOX64_PATH, argv, libPath, cwd, env);
   }
 

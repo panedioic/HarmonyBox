@@ -1,6 +1,6 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
-import { AppInfo, AppType, AppConfig, RuntimeMode } from './AppInfo';
+import { AppInfo, AppType, AppConfig, RuntimeMode, migrateAppType } from './AppInfo';
 
 const REGISTRY_FILE: string = 'apps.json';
 
@@ -23,7 +23,8 @@ export class AppRegistry {
       const data = JSON.parse(content) as RegistryFile;
       const list: AppInfo[] = data.apps || [];
       return list.map((a: AppInfo) => new AppInfo(
-        a.id, a.name, a.icon, a.type,
+        a.id, a.name, a.icon,
+        migrateAppType(a.type as string),
         a.runtimeMode || RuntimeMode.GUI,
         a.execPath, a.installDir, a.installedAt,
         a.config || { envVars: '', args: '' } as AppConfig

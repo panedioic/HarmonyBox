@@ -2,7 +2,7 @@ import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { Theme, PageType } from '../common/Theme';
-import { AppInfo, RuntimeMode, AppType } from '../model/AppInfo';
+import { AppInfo, RuntimeMode, AppType, appTypeLabel } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { InstallService } from '../service/InstallService';
@@ -504,8 +504,8 @@ struct Index {
 
   async openAppWindow(app: AppInfo, withLog: boolean): Promise<void> {
     // 仅支持 LINUX64
-    if (app.type !== AppType.LINUX64) {
-      this.toast(`暂不支持 $\{appTypeLabel(app.type)}`, 1500);
+    if (app.type !== AppType.LINUX && app.type !== AppType.WINDOWS) {
+      this.toast(`暂不支持 ${appTypeLabel(app.type)}`, 1500);
       return;
     }
 
@@ -549,7 +549,8 @@ struct Index {
       .split(/\s+/).filter((s: string): boolean => s.length > 0)
     const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
-    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot, userEnv);
+    const useWine: boolean = app.type === AppType.WINDOWS;
+    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot, userEnv, installRoot, useWine);
     if (pid <= 0) {
       this.toast('启动 CLI 失败', 1500);
       return;
@@ -571,7 +572,8 @@ struct Index {
     const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
     this.toast(`正在启动 ${app.name}...`, 1200);
-    const code: number = await wlSvc.launch(app.id, exeAbs, userArgs, userEnv);
+    const useWine: boolean = app.type === AppType.WINDOWS;
+    const code: number = await wlSvc.launch(app.id, exeAbs, userArgs, userEnv, installRoot, useWine);
     if (code <= 0) {
       this.toast(`${app.name} 启动失败: ${this.launchErrorText(code)}`, 2500);
       return;
@@ -602,7 +604,8 @@ struct Index {
     for (const e of FontStore.buildEnv(ctx)) env.push(e);
     for (const e of userEnv) env.push(e);
 
-    const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, env);
+    const useWine: boolean = app.type === AppType.WINDOWS;
+    const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, env, installRoot, useWine);
     if (pid <= 0) {
       wlSvc.releaseSlot(app.id);
       this.toast('启动失败', 1500);

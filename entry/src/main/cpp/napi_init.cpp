@@ -243,6 +243,7 @@ struct ExecCtx {
     std::string exe;
     std::vector<std::string> argv;
     std::string libPath;
+    std::vector<std::string> extraEnv;
     int code = -1;
     std::string out;
     napi_async_work work = nullptr;
@@ -263,19 +264,23 @@ static void ExecExecuteCB(napi_env, void* data) {
         if (pipefd[1] > 2) close(pipefd[1]);
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
 
-        std::string envLdp = "LD_LIBRARY_PATH=" + c->libPath;
-        std::string envHome = "HOME=/data/storage/el2/base";
-        char* envp[] = {
-            (char*)envLdp.c_str(),
-            (char*)envHome.c_str(),
-            nullptr
+        std::vector<std::string> envHolder = {
+            "LD_LIBRARY_PATH=" + c->libPath,
+            "HOME=/data/storage/el2/base"
         };
+        for (const auto& e : c->extraEnv) {
+            if (!e.empty()) envHolder.push_back(e);
+        }
+        std::vector<char*> envp;
+        envp.reserve(envHolder.size() + 1);
+        for (auto& s : envHolder) envp.push_back(const_cast<char*>(s.c_str()));
+        envp.push_back(nullptr);
 
         std::vector<char*> cargv;
         cargv.reserve(c->argv.size() + 1);
         for (auto& s : c->argv) cargv.push_back(const_cast<char*>(s.c_str()));
         cargv.push_back(nullptr);
-        execve(c->exe.c_str(), cargv.data(), envp);
+        execve(c->exe.c_str(), cargv.data(), envp.data());
         _exit(127);
     }
     if (pid < 0) {
@@ -319,7 +324,7 @@ static void ExecCompleteCB(napi_env env, napi_status, void* data) {
 }
 
 static napi_value ExecCapture(napi_env env, napi_callback_info info) {
-    size_t argc = 3; napi_value args[3];
+    size_t argc = 4; napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     ExecCtx* c = new ExecCtx();
@@ -340,6 +345,23 @@ static napi_value ExecCapture(napi_env env, napi_callback_info info) {
 
     napi_get_value_string_utf8(env, args[2], buf, sizeof(buf), &len);
     c->libPath = buf;
+    
+    napi_value extraEnvVal;
+    if (argc >= 4) {
+        extraEnvVal = args[3];
+        bool isArr = false;
+        napi_is_array(env, extraEnvVal, &isArr);
+        if (isArr) {
+            uint32_t en = 0;
+            napi_get_array_length(env, extraEnvVal, &en);
+            for (uint32_t i = 0; i < en; ++i) {
+                napi_value el; napi_get_element(env, extraEnvVal, i, &el);
+                char b[2048] = {0};
+                napi_get_value_string_utf8(env, el, b, sizeof(b), &len);
+                c->extraEnv.emplace_back(b);
+            }
+        }
+    }
 
     napi_value promise;
     napi_create_promise(env, &c->deferred, &promise);
@@ -860,6 +882,28 @@ static napi_value SetMinimizeCallback(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value ChmodDirFiles(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char dir[1024] = {0}; size_t len;
+    napi_get_value_string_utf8(env, args[0], dir, sizeof(dir), &len);
+
+    DIR* d = opendir(dir);
+    int count = 0;
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            std::string p = std::string(dir) + "/" + e->d_name;
+            if (chmod(p.c_str(), 0755) == 0) count++;
+        }
+        closedir(d);
+    }
+    OH_LOG_INFO(LOG_APP, "chmod %{public}d files under %{public}s", count, dir);
+    napi_value r; napi_create_int32(env, count, &r);
+    return r;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -886,6 +930,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setResizeCallback",      nullptr, SetResizeCallback,      nullptr,nullptr,nullptr, napi_default,nullptr},
         {"requestClientResize",   nullptr, RequestClientResize,   nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setMinimizeCallback",    nullptr, SetMinimizeCallback,    nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"chmodDirFiles",      nullptr, ChmodDirFiles,      nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

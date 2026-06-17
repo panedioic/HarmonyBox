@@ -4,6 +4,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { LibStore } from './LibStore';
 import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
 import { FontStore } from './FontStore';
+import { WineService } from './WineService';
 
 export interface WlBufferSize {
   w: number;
@@ -246,41 +247,37 @@ export class WaylandService {
     exeAbsPath: string,
     extraArgs: string[],
     extraEnv: string[] = [],
-    appDir: string = ''
+    appDir: string = '',
+    useWine: boolean = false
   ): Promise<number> {
     if (!this.serverReady) return -1;
     if (!this.box64Ready) return -3;
     if (!this.claimSlot(appId)) return -2;
 
-    const argv: string[] = [this.box64Path, exeAbsPath];
+    const wineBin: string = this.context ? WineService.getBinPath(this.context) : '';
+    const argv: string[] = useWine
+      ? [this.box64Path, wineBin, exeAbsPath]
+      : [this.box64Path, exeAbsPath];
     for (const a of extraArgs) argv.push(a);
 
     const env: string[] = [];
-    // 应用目录优先,然后是全局池
-    const ldPath: string = this.buildLdPath(appDir);
+    const ldPath: string = this.buildLdPath(appDir, useWine);
     if (ldPath) env.push(`BOX64_LD_LIBRARY_PATH=${ldPath}`);
-    if (this.context) {
-      for (const e of FontStore.buildEnv(this.context)) env.push(e);
+    if (useWine && this.context) {
+      for (const e of WineService.buildLaunchEnv(this.context)) env.push(e);
     }
     for (const e of extraEnv) env.push(e);
 
     const pid: number = wl.launchClient(
       this.box64Path, argv, this.sockPath, this.libPath, env
     );
-    if (pid <= 0) {
-      this.releaseSlot(appId);
-      return -4;
-    }
-
+    if (pid <= 0) { this.releaseSlot(appId); return -4; }
     const ok: boolean = await this.waitActive(ACTIVE_TIMEOUT_MS);
-    if (!ok) {
-      this.releaseSlot(appId);
-      return -5;
-    }
+    if (!ok) { this.releaseSlot(appId); return -5; }
     return pid;
   }
 
-  private buildLdPath(appDir: string): string {
+  private buildLdPath(appDir: string, includeWine: boolean = false): string {
     const parts: string[] = [];
     if (appDir) {
       parts.push(appDir);
@@ -289,6 +286,9 @@ export class WaylandService {
     if (this.context) {
       const x64: string = LibStore.getDir(this.context);
       if (x64) parts.push(x64);
+      if (includeWine) {
+        for (const p of WineService.buildLdPaths(this.context)) parts.push(p);
+      }
     }
     return parts.join(':');
   }

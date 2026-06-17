@@ -5,6 +5,7 @@ import { ToolEnvStore, Box64Env, UiPrefs } from '../model/ToolEnvStore';
 import { LibStore, LibFile } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
 import { FontStore, FontFile } from '../service/FontStore';
+import { WineService, WineStatus } from '../service/WineService';
 
 @Component
 export struct SettingsPage {
@@ -18,6 +19,11 @@ export struct SettingsPage {
   @State fontFiles: FontFile[] = [];
   @State fontDir: string = '';
   @State useNativeDecor: boolean = true;
+  @State wineStatus: ToolStatus = {
+    id: 'wine', name: 'wine', url: '',
+    installed: false, path: '', version: ''
+  } as ToolStatus;
+  @State wineBusy: boolean = false;
 
   private scaleOptions: number[] = [1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -30,6 +36,7 @@ export struct SettingsPage {
     this.uiScale = uiPrefs.scale;
     this.useNativeDecor = uiPrefs.useNativeDecor;
     this.refreshFonts();
+    this.refreshWine();
   }
 
   refreshTools(): void {
@@ -55,6 +62,56 @@ export struct SettingsPage {
       } as ToolStatus;
       this.tools = next;
     }
+    this.refreshWine();
+  }
+
+  private refreshWine(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.wineStatus = ToolDetector.probeWine(ctx);
+    if (this.wineStatus.installed) {
+      WineService.fetchVersion(ctx).then((v: string): void => {
+        this.wineStatus = {
+          id: this.wineStatus.id, name: this.wineStatus.name,
+          url: this.wineStatus.url, installed: this.wineStatus.installed,
+          path: this.wineStatus.path, version: v
+        } as ToolStatus;
+      });
+    }
+  }
+
+  private async installWine(): Promise<void> {
+    if (this.wineBusy) return;
+    this.wineBusy = true;
+    this.savedHint = '正在安装 wine,请勿离开此页...';
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const err: string = await WineService.pickAndInstall(ctx);
+      if (err === '') {
+        this.savedHint = 'wine 安装完成';
+        this.refreshWine();
+      } else {
+        this.savedHint = err;
+      }
+    } finally {
+      this.wineBusy = false;
+      setTimeout((): void => { this.savedHint = ''; }, 3000);
+    }
+  }
+
+  private uninstallWine(): void {
+    AlertDialog.show({
+      title: '卸载 wine',
+      message: '将删除沙箱内的 wine 目录与 wineprefix,无法撤销。',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: {
+        value: '卸载', fontColor: '#E64545',
+        action: (): void => {
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          WineService.uninstall(ctx);
+          this.refreshWine();
+        }
+      }
+    });
   }
 
   openUrl(url: string): void {
@@ -321,6 +378,46 @@ export struct SettingsPage {
           }, (t: ToolStatus): string => `${t.id}_${t.installed}_${t.version}`)
         }
         .width('100%')
+
+        // —— Wine 子区块 ——
+        Row() {
+          Column({ space: 2 }) {
+            Text('Wine')
+              .fontSize(15).fontWeight(FontWeight.Medium)
+            Text(this.wineStatus.installed
+              ? `已安装  ${this.wineStatus.version}`
+              : '未安装')
+              .fontSize(11)
+              .fontColor(this.wineStatus.installed ? '#1A8F4D' : '#999999')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Button(this.wineStatus.installed ? '重新安装' : '安装 wine')
+            .fontSize(12).height(28).padding({ left: 14, right: 14 })
+            .backgroundColor(Theme.HM_BLUE)
+            .enabled(!this.wineBusy)
+            .onClick((): void => { this.installWine(); })
+          if (this.wineStatus.installed) {
+            Button('卸载')
+              .fontSize(12).height(28).margin({ left: 8 }).padding({ left: 14, right: 14 })
+              .backgroundColor('#F0F0F0').fontColor('#333333')
+              .onClick((): void => { this.uninstallWine(); })
+          }
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor('#FAFAFA').borderRadius(10)
+        .margin({ top: 16, bottom: 8 })
+
+        if (this.wineStatus.installed) {
+          Text(`沙箱路径: ${this.wineStatus.path}`)
+            .fontSize(11).fontColor('#999999')
+            .width('100%')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .margin({ bottom: 12 })
+        }
 
         // —— X86_64 共享库 ——
         Row() {

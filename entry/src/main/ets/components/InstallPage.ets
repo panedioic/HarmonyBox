@@ -8,7 +8,7 @@ import { InstallService } from '../service/InstallService';
 
 @Component
 export struct InstallPage {
-  @State selectedType: AppType = AppType.LINUX64;
+  @State selectedType: AppType = AppType.LINUX;
   @State runtimeMode: RuntimeMode = RuntimeMode.GUI;
   @State sourceFolderUri: string = '';
   @State sourceFolderName: string = '';
@@ -23,12 +23,7 @@ export struct InstallPage {
 
   onInstalled: (app: AppInfo) => void = () => {};
 
-  private allTypes: AppType[] = [
-    AppType.WIN32, AppType.WIN64,
-    AppType.LINUX32, AppType.LINUX64,
-    AppType.HARMONY
-  ];
-
+  private allTypes: AppType[] = [AppType.WINDOWS, AppType.LINUX, AppType.HARMONY];
   private allModes: RuntimeMode[] = [RuntimeMode.GUI, RuntimeMode.CLI];
 
   async chooseFolder(): Promise<void> {
@@ -141,7 +136,7 @@ export struct InstallPage {
     this.appIcon = '📦';
     this.envVars = '';
     this.launchArgs = '';
-    this.selectedType = AppType.LINUX64;
+    this.selectedType = AppType.LINUX;
     this.runtimeMode = RuntimeMode.GUI;
   }
 
@@ -210,7 +205,7 @@ export struct InstallPage {
           }
           .width('100%')
 
-          Text('目前仅支持 64 位 Linux 应用,其他类型即将到来')
+          Text('目前支持 Linux 与 Windows 应用程序,其他类型即将到来')
             .fontSize(12)
             .fontColor('#999999')
 
