@@ -57,15 +57,21 @@ add_library(wayland_client_lib SHARED IMPORTED GLOBAL)
 set_target_properties(wayland_client_lib PROPERTIES
     IMPORTED_LOCATION ${NATIVERENDER_ROOT_PATH}/../../../libs/${OHOS_ARCH}/libwayland-client.so)
 
-# ── 主 .so：只剩 server + UI bridge ──
 add_library(entry SHARED
+    napi_init.cpp
     napi_init.cpp
     plugin_manager.cpp
     egl_renderer.cpp
     wayland_server.cpp
     xdg_shell.cpp
     xdg-shell-protocol.c
+    napi_utils.cpp
+    fs_utils.cpp
+    process_runner.cpp
+    client_napi.cpp
+    input_window_napi.cpp
 )
+
 target_link_libraries(entry PUBLIC
     libace_napi.z.so
     libace_ndk.z.so
