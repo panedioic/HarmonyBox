@@ -13,6 +13,7 @@ set(HBOX_REQUIRED_LIBS
     libwayland-cursor.so
     libwayland-egl.so
     libwayland-server.so
+    libbox64.so
 )
 
 set(HBOX_MISSING_LIBS "")
