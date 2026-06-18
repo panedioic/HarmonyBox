@@ -19,6 +19,23 @@
 #define LOG_TAG "WL_HBox"
 #include <hilog/log.h>
 
+// ArkTS 端按老的 box64-binary 形态传 argv: [BOX64_PATH, target, ...args]
+// 切到动态库后,argv[0] 那个 box64 占位被忽略,argv[1] 当作 elfPath。
+void SplitBox64Argv(const std::vector<std::string>& argvStrs,
+                    const std::string& exeFallback,
+                    std::string& elfPath,
+                    std::vector<std::string>& guestArgs) {
+    if (argvStrs.size() >= 2) {
+        elfPath = argvStrs[1];
+        guestArgs.assign(argvStrs.begin() + 2, argvStrs.end());
+    } else if (argvStrs.size() == 1) {
+        // 兼容: 调用方只传了一个目标
+        elfPath = argvStrs[0];
+    } else {
+        elfPath = exeFallback;
+    }
+}
+
 namespace {
 
 // ====== single GUI client tracking ======
@@ -187,12 +204,15 @@ napi_value LaunchClient(napi_env env, napi_callback_info info) {
     size_t argc = 5; napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    std::string exe      = napiutil::GetStringArg(env, args[0]);
+    std::string exe      = napiutil::GetStringArg(env, args[0]); // 旧 box64 路径,忽略
     auto        argvStrs = napiutil::GetStringArrayArg(env, args[1]);
-    if (argvStrs.empty()) argvStrs.push_back(exe);
     std::string sockPath = napiutil::GetStringArg(env, args[2]);
     std::string libPath  = napiutil::GetStringArg(env, args[3]);
     auto        extraEnv = napiutil::GetStringArrayArg(env, args[4]);
+
+    std::string elfPath;
+    std::vector<std::string> guestArgs;
+    SplitBox64Argv(argvStrs, exe, elfPath, guestArgs);
 
     auto fullEnv = BuildBox64Env(sockPath, libPath, extraEnv);
 
@@ -206,7 +226,8 @@ napi_value LaunchClient(napi_env env, napi_callback_info info) {
         OH_LOG_INFO(LOG_APP, "client reader exited, fired state=exited");
     };
 
-    int pid = proc::RunBox64(exe, argvStrs, fullEnv, /*cwd*/ "", &sink, nullptr);
+    int pid = proc::RunBox64(elfPath, guestArgs, fullEnv, /*cwd*/ "",
+                             &sink, nullptr);
     if (pid > 0) g_clientPid = pid;
 
     napi_value r; napi_create_int32(env, pid, &r);
@@ -236,11 +257,17 @@ napi_value ExecCapture(napi_env env, napi_callback_info info) {
 
     std::string exe      = napiutil::GetStringArg(env, args[0]);
     auto        argvStrs = napiutil::GetStringArrayArg(env, args[1]);
-    if (argvStrs.empty()) argvStrs.push_back(exe);
     std::string libPath  = napiutil::GetStringArg(env, args[2]);
     std::vector<std::string> extraEnv;
     if (argc >= 4) extraEnv = napiutil::GetStringArrayArg(env, args[3]);
 
+    std::string elfPath;
+    std::vector<std::string> guestArgs;
+    SplitBox64Argv(argvStrs, exe, elfPath, guestArgs);
+
+    // ExecCapture 的现有调用方都是 box64 (DebugPage 等),所以这里也走 RunBox64。
+    // 复用 BuildExecEnv 提供的最小 env 默认值,extraEnv 由调用方控制
+    // (BOX64_LD_LIBRARY_PATH / BOX64_PATH 等)。
     auto fullEnv = BuildExecEnv(libPath, extraEnv);
 
     auto* ctx = new ExecCaptureCtx();
@@ -260,9 +287,9 @@ napi_value ExecCapture(napi_env env, napi_callback_info info) {
         napi_call_threadsafe_function(ctx->tsfn, ctx, napi_tsfn_blocking);
     };
 
-    int pid = proc::RunCommand(exe, argvStrs, fullEnv, /*cwd*/ "", nullptr, &sink);
+    int pid = proc::RunBox64(elfPath, guestArgs, fullEnv, /*cwd*/ "",
+                             nullptr, &sink);
     if (pid < 0) {
-        // spawn 失败,直接以 code=-1 resolve
         ctx->code = -1;
         napi_call_threadsafe_function(ctx->tsfn, ctx, napi_tsfn_blocking);
     }

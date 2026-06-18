@@ -251,7 +251,7 @@ export class WaylandService {
     useWine: boolean = false
   ): Promise<number> {
     if (!this.serverReady) return -1;
-    if (!this.box64Ready) return -3;
+    // if (!this.box64Ready) return -3;
     if (!this.claimSlot(appId)) return -2;
 
     const wineBin: string = this.context ? WineService.getBinPath(this.context) : '';

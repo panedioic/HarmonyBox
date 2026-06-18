@@ -80,4 +80,5 @@ target_link_libraries(entry PUBLIC
     libGLESv3.so
     libhilog_ndk.z.so
     wayland_server_lib
+    dl
 )

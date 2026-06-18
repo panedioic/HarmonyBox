@@ -561,7 +561,7 @@ struct Index {
   private async openGuiWindow(app: AppInfo): Promise<void> {
     const wlSvc = WaylandService.getInstance();
     if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
-    if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
+    // if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
     if (wlSvc.getCurrentAppId()) { this.toast('已有 GUI 应用在运行', 1800); return; }
 
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -586,7 +586,7 @@ struct Index {
     const cliSvc = CliService.getInstance();
 
     if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
-    if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
+    // if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
     if (!wlSvc.claimSlot(app.id)) { this.toast('已有 GUI 应用在运行', 1800); return; }
 
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;

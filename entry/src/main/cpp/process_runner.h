@@ -18,22 +18,31 @@ struct CaptureSink {
     std::function<void(int exitCode, std::string output)> onDone;
 };
 
-// stream / capture:至多一个非空。
-//   - 任一非空:子进程 stdout/stderr 接管道,后台线程读取并回调对应 sink。
-//   - 都为空:子进程 stdout/stderr 重定向到 /dev/null,父侧不开管道,纯 fire-and-forget。
-//   - 都非空:返回 -1,视为非法。
+
+// 通过 libbox64.so 动态库运行 x86_64 ELF。
 //
-// env 由调用方完整组装好(LD_LIBRARY_PATH / XDG_RUNTIME_DIR 等都在外面拼)。
-// cwd 为空表示不 chdir。
+// 关键约束: 父进程绝不能 dlopen libbox64.so。一旦父进程加载了它,
+// OHOS LSM 会让该进程及其后续所有 fork 子进程失去 PROT_EXEC 权限,
+// dynarec / ET_EXEC 加载都会失败。所以只在 fork 出来的子进程里
+// dlopen libbox64.so + dlsym(box64_run) 后调用。
+//
+// 子进程会:
+//   1. setenv 把 env 中的 KEY=VALUE 写入 environ
+//   2. munmap 低 4GB 的 anon / ark VM 区域,给 ET_EXEC link base 腾位置
+//   3. dlopen libbox64.so (依次尝试: 短名 / LD_LIBRARY_PATH 各目录 / 写死路径)
+//   4. 调用 box64_run(argc, argv, environ),其中 argv = ["box64", elfPath, guestArgs...]
+//
+// stream / capture 至多一个非空; 都为 nullptr 时 stdout/stderr 重定向到 /dev/null。
 //
 // 返回 pid (>0) 或 -1。
-int RunBox64(const std::string& exe,
-             const std::vector<std::string>& argv,
+int RunBox64(const std::string& elfPath,
+             const std::vector<std::string>& guestArgs,
              const std::vector<std::string>& env,
              const std::string& cwd,
              StreamSink* stream,
              CaptureSink* capture);
 
+// 通过 execve 运行原生 ARM 可执行文件。
 int RunCommand(const std::string& exe,
                const std::vector<std::string>& argv,
                const std::vector<std::string>& env,
