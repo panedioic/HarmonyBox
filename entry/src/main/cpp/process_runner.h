@@ -54,24 +54,31 @@ int RunCommand(const std::string& exe,
 // 先 SIGTERM,800ms 后还活着补 SIGKILL。
 void TerminateProcess(pid_t pid);
 
-// ============ NAPI wrappers ============
+// ====== 新一代 NAPI 入口 (供 napi_init 注册) ======
 //
-// JS 签名:
-//   runBox64(exe: string,
-//            argv: string[],
-//            env:  string[],
-//            cwd:  string,
-//            cb?:  (pid: number, event: 'out') => void): number
-//
-//   runCommand(...同上)
-//
-//   terminate(pid: number): void
-//
-// cb 省略或传 null/undefined  → 子进程 stdout/stderr 重定向到 /dev/null。
-// cb 是函数                   → 按行回调 'out',进程结束回调 'exit' (data = exit code 字符串)。
-// 返回值: pid (>0) 或 -1。
+// runBox64(elfPath: string, argv: string[], env: string[], cwd?: string): number
+//   - elfPath: 目标 x86_64 ELF 路径(仅用于 chmod 兜底和日志)
+//   - argv:    透传给 box64_run。约定 argv[0] 任意(建议 "box64"),
+//              argv[1] = elfPath, argv[2..] = guest args。
+//              传空数组时自动用 ["box64", elfPath]。
+//   - env:     "KEY=VAL" 数组,完整 env,在子进程里 setenv 后 box64_run
+//              通过 environ 读取。调用方自己组(LD_LIBRARY_PATH /
+//              XDG_RUNTIME_DIR / BOX64_* 等都在 ArkTS 侧拼)。
+//   - cwd:     可选,空串 = 不 chdir。
+//   返回: pid (>0) 或 -1。stdout/stderr → hilog [box64:pid]。
+//   不做 GUI client 跟踪,不触发 state 回调,纯底层启动。
 napi_value RunBox64Napi  (napi_env env, napi_callback_info info);
+
+// runCommand(exe: string, argv: string[], env: string[], cwd?: string): number
+//   - exe:  native 二进制路径
+//   - argv: 传空数组时自动用 [exe]
+//   - env:  完整 env
+//   - cwd:  可选
+//   返回: pid (>0) 或 -1。stdout/stderr → hilog [cmd:pid]。
 napi_value RunCommandNapi(napi_env env, napi_callback_info info);
+
+// terminate(pid: number): void
+//   先 SIGTERM,800ms 后还活着就 SIGKILL。pid <= 0 时静默忽略。
 napi_value TerminateNapi (napi_env env, napi_callback_info info);
 
 } // namespace proc
