@@ -447,13 +447,77 @@ void TerminateProcess(pid_t pid) {
     }).detach();
 }
 
+} // namespace proc
+
 // ============================================
-// NAPI wrappers (新一代低层 API)
+// per-call run callback (匿名 namespace 内)
 // ============================================
+namespace {
+
+struct RunEvent {
+    std::string event;   // "out" | "exit"
+    std::string data;
+};
+
+void RunCallbackTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    RunEvent* ev = static_cast<RunEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[2];
+        napi_get_undefined(env, &undef);
+        napi_create_string_utf8(env, ev->event.c_str(), NAPI_AUTO_LENGTH, &args[0]);
+        napi_create_string_utf8(env, ev->data.c_str(),  NAPI_AUTO_LENGTH, &args[1]);
+        napi_call_function(env, undef, jsCb, 2, args, nullptr);
+    }
+    delete ev;
+}
+
+// arg 是 function 才创建 tsfn,否则返回 nullptr (调用方判空区分模式)
+napi_threadsafe_function MaybeCreateRunTsfn(
+    napi_env env, napi_value arg, const char* resNameStr) {
+    if (!arg) return nullptr;
+    napi_valuetype t = napi_undefined;
+    napi_typeof(env, arg, &t);
+    if (t != napi_function) return nullptr;
+    napi_threadsafe_function tsfn = nullptr;
+    napi_value resName;
+    napi_create_string_utf8(env, resNameStr, NAPI_AUTO_LENGTH, &resName);
+    napi_create_threadsafe_function(env, arg, nullptr, resName,
+        0, 1, nullptr, nullptr, nullptr, RunCallbackTsfnCallJs, &tsfn);
+    return tsfn;
+}
+
+// tsfn 非空: line/exit 都转发到 JS,exit 后释放 tsfn
+// tsfn 为空: line 走 hilog,exit 不通知 (老行为)
+void ConfigureSink(proc::StreamSink& sink,
+                   napi_threadsafe_function tsfn,
+                   const char* hilogTag) {
+    if (tsfn) {
+        sink.onLine = [tsfn](pid_t /*pid*/, const std::string& line) {
+            auto* ev = new RunEvent{"out", line};
+            napi_call_threadsafe_function(tsfn, ev, napi_tsfn_blocking);
+        };
+        sink.onExit = [tsfn](pid_t /*pid*/, int code) {
+            auto* ev = new RunEvent{"exit", std::to_string(code)};
+            napi_call_threadsafe_function(tsfn, ev, napi_tsfn_blocking);
+            // exit 一次性,触发后释放;已排队的 "out" 仍会被消费
+            napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        };
+    } else {
+        sink.onLine = [hilogTag](pid_t pid, const std::string& line) {
+            OH_LOG_INFO(LOG_APP, "[%{public}s:%{public}d] %{public}s",
+                        hilogTag, (int)pid, line.c_str());
+        };
+        // onExit 不设
+    }
+}
+
+} // anonymous namespace
+
+namespace proc {
 
 napi_value RunBox64Napi(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4] = {nullptr, nullptr, nullptr, nullptr};
+    size_t argc = 5;
+    napi_value args[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     std::string elfPath = napiutil::GetStringArg(env, args[0]);
@@ -461,18 +525,23 @@ napi_value RunBox64Napi(napi_env env, napi_callback_info info) {
     auto envList        = napiutil::GetStringArrayArg(env, args[2]);
     std::string cwd     = (argc >= 4) ? napiutil::GetStringArg(env, args[3]) : "";
 
+    napi_threadsafe_function tsfn = (argc >= 5)
+        ? MaybeCreateRunTsfn(env, args[4], "RunBox64Cb")
+        : nullptr;
+
     if (argvStrs.empty()) {
         argvStrs.push_back("box64");
         if (!elfPath.empty()) argvStrs.push_back(elfPath);
     }
 
     StreamSink sink;
-    sink.onLine = [](pid_t pid, const std::string& line) {
-        OH_LOG_INFO(LOG_APP, "[box64:%{public}d] %{public}s",
-                    (int)pid, line.c_str());
-    };
+    ConfigureSink(sink, tsfn, "box64");
 
     int pid = RunBox64(elfPath, argvStrs, envList, cwd, &sink, nullptr);
+    if (pid <= 0 && tsfn) {
+        // 启动失败,sink 永远不会触发 onExit,在这里兜底释放 tsfn
+        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+    }
 
     napi_value r;
     napi_create_int32(env, pid, &r);
@@ -480,8 +549,8 @@ napi_value RunBox64Napi(napi_env env, napi_callback_info info) {
 }
 
 napi_value RunCommandNapi(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4] = {nullptr, nullptr, nullptr, nullptr};
+    size_t argc = 5;
+    napi_value args[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     std::string exe   = napiutil::GetStringArg(env, args[0]);
@@ -489,29 +558,32 @@ napi_value RunCommandNapi(napi_env env, napi_callback_info info) {
     auto envList      = napiutil::GetStringArrayArg(env, args[2]);
     std::string cwd   = (argc >= 4) ? napiutil::GetStringArg(env, args[3]) : "";
 
+    napi_threadsafe_function tsfn = (argc >= 5)
+        ? MaybeCreateRunTsfn(env, args[4], "RunCommandCb")
+        : nullptr;
+
     if (argvStrs.empty()) argvStrs.push_back(exe);
 
     StreamSink sink;
-    sink.onLine = [](pid_t pid, const std::string& line) {
-        OH_LOG_INFO(LOG_APP, "[cmd:%{public}d] %{public}s",
-                    (int)pid, line.c_str());
-    };
+    ConfigureSink(sink, tsfn, "cmd");
 
     int pid = RunCommand(exe, argvStrs, envList, cwd, &sink, nullptr);
+    if (pid <= 0 && tsfn) {
+        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+    }
 
     napi_value r;
     napi_create_int32(env, pid, &r);
     return r;
 }
 
+// TerminateNapi 不变
 napi_value TerminateNapi(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
     int32_t pid = 0;
     if (argc >= 1) napi_get_value_int32(env, args[0], &pid);
-
     TerminateProcess((pid_t)pid);
     return nullptr;
 }

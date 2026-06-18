@@ -92,7 +92,8 @@ export const runBox64: (
   elfPath: string,
   argv: string[],
   env: string[],
-  cwd?: string
+  cwd?: string,
+  cb?: (event: string, data: string) => void
 ) => number;
 
 /**
@@ -104,7 +105,8 @@ export const runCommand: (
   exe: string,
   argv: string[],
   env: string[],
-  cwd?: string
+  cwd?: string,
+  cb?: (event: string, data: string) => void
 ) => number;
 
 /**
@@ -122,7 +124,8 @@ export const sendModifiers: (
   depressed: number,
   latched: number,
   locked: number,
-  group: number
+  group: number,
+  callback?: (event: string,) => number
 ) => void;
 
 export const sendMouseMove: (x: number, y: number) => void;

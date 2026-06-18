@@ -67,28 +67,7 @@ export class CliService {
       this.box64Ready = false;
     }
 
-    wl.setCliCallback((pid: number, ev: string, data: string): void => {
-      if (ev === 'out') {
-        let buf: string[] | undefined = this.buffers.get(pid);
-        if (!buf) {
-          buf = [];
-          this.buffers.set(pid, buf);
-        }
-        buf.push(data);
-        if (buf.length > MAX_BUFFER_LINES) {
-          buf.splice(0, buf.length - MAX_BUFFER_LINES);
-        }
-        const sub = this.subscribers.get(pid);
-        if (sub) sub.onLine(data);
-      } else if (ev === 'exit') {
-        const code: number = parseInt(data, 10);
-        const realCode: number = isNaN(code) ? -1 : code;
-        this.exited.set(pid, realCode);
-        const sub = this.subscribers.get(pid);
-        if (sub) sub.onExit(realCode);
-      }
-    });
-
+    // 不再需要 wl.setCliCallback —— 用每次 runBox64 调用时的 per-call 回调取代
     this.installed = true;
   }
 
@@ -109,7 +88,7 @@ export class CliService {
 
     const wlSvc = WaylandService.getInstance();
 
-    // 1) GUI 模式先占槽,失败立即返回
+    // 1. GUI 模式先占槽,失败立即返回
     if (opts.gui) {
       if (!wlSvc.isServerReady()) {
         return { pid: -1, code: -1, errorMsg: 'Wayland 服务未就绪' };
@@ -122,18 +101,22 @@ export class CliService {
       }
     }
 
-    // 2) 拼 argv / env
+    // 2. 拼 argv / env
     const argv: string[] = this.buildArgv(opts);
     const env: string[] = this.buildEnv(opts);
-    const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
 
-    // 3) 选 napi 入口
     let pid: number = -1;
     try {
       if (opts.streaming) {
-        pid = wl.launchCli(BOX64_PATH, argv, libPath, opts.cwd, env);
+        // streaming: 走新 runBox64 + per-call 回调
+        const cb = (event: string, data: string): void => {
+          this.handleStreamEvent(pid, event, data);
+        };
+        pid = wl.runBox64(BOX64_PATH, argv, env, opts.cwd, cb);
       } else {
-        // gui=true && streaming=false: 走单例 client 通道,拿 state 事件
+        // gui=true && streaming=false: 仍走 launchClient,
+        // 因为 state="exited" 路径还在 C++ 侧的 g_clientPid 链路里
+        const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
         pid = wl.launchClient(BOX64_PATH, argv, wlSvc.getSockPath(), libPath, env);
       }
     } catch (e) {
@@ -142,10 +125,33 @@ export class CliService {
 
     if (pid <= 0) {
       if (opts.gui && opts.appId) wlSvc.releaseSlot(opts.appId);
-      return { pid: -1, code: -4, errorMsg: '启动失败 (fork/exec)' };
+      return { pid: -1, code: -4, errorMsg: '启动失败' };
     }
 
     return { pid, code: 0, errorMsg: '' };
+  }
+
+  // 把单次回调事件写进 buffer/subscribers map,供 CliRunner 订阅
+  private handleStreamEvent(pid: number, event: string, data: string): void {
+    if (event === 'out') {
+      let buf: string[] | undefined = this.buffers.get(pid);
+      if (!buf) {
+        buf = [];
+        this.buffers.set(pid, buf);
+      }
+      buf.push(data);
+      if (buf.length > MAX_BUFFER_LINES) {
+        buf.splice(0, buf.length - MAX_BUFFER_LINES);
+      }
+      const sub = this.subscribers.get(pid);
+      if (sub) sub.onLine(data);
+    } else if (event === 'exit') {
+      const code: number = parseInt(data, 10);
+      const realCode: number = isNaN(code) ? -1 : code;
+      this.exited.set(pid, realCode);
+      const sub = this.subscribers.get(pid);
+      if (sub) sub.onExit(realCode);
+    }
   }
 
   // =========================================================
@@ -172,7 +178,8 @@ export class CliService {
 
   stop(pid: number): void {
     if (pid <= 0) return;
-    try { wl.stopCli(pid); } catch (e) { /* ignore */ }
+    // 用新的 terminate (SIGTERM + 800ms 后 SIGKILL),比原 stopCli 多一层兜底
+    try { wl.terminate(pid); } catch (e) { /* ignore */ }
   }
 
   // =========================================================
