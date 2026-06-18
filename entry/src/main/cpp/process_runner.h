@@ -1,4 +1,5 @@
 #pragma once
+#include "napi/native_api.h"
 #include <string>
 #include <vector>
 #include <functional>
@@ -52,5 +53,25 @@ int RunCommand(const std::string& exe,
 
 // 先 SIGTERM,800ms 后还活着补 SIGKILL。
 void TerminateProcess(pid_t pid);
+
+// ============ NAPI wrappers ============
+//
+// JS 签名:
+//   runBox64(exe: string,
+//            argv: string[],
+//            env:  string[],
+//            cwd:  string,
+//            cb?:  (pid: number, event: 'out') => void): number
+//
+//   runCommand(...同上)
+//
+//   terminate(pid: number): void
+//
+// cb 省略或传 null/undefined  → 子进程 stdout/stderr 重定向到 /dev/null。
+// cb 是函数                   → 按行回调 'out',进程结束回调 'exit' (data = exit code 字符串)。
+// 返回值: pid (>0) 或 -1。
+napi_value RunBox64Napi  (napi_env env, napi_callback_info info);
+napi_value RunCommandNapi(napi_env env, napi_callback_info info);
+napi_value TerminateNapi (napi_env env, napi_callback_info info);
 
 } // namespace proc

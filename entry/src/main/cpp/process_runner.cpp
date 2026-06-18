@@ -1,3 +1,4 @@
+#include "napi_utils.h"
 #include "process_runner.h"
 #include "fs_utils.h"
 
@@ -444,6 +445,121 @@ void TerminateProcess(pid_t pid) {
                 "pid=%{public}d not exited in 800ms, SIGKILL", pid);
         }
     }).detach();
+}
+
+// 每次 runBox64/runCommand 调用独立持有的事件对象
+struct NapiProcEvent {
+    pid_t pid;
+    std::string event;   // "out" | "exit"
+    std::string data;
+};
+
+void NapiProcCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    auto* ev = static_cast<NapiProcEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[3];
+        napi_get_undefined(env, &undef);
+        napi_create_int32       (env, ev->pid,                                 &args[0]);
+        napi_create_string_utf8 (env, ev->event.c_str(), NAPI_AUTO_LENGTH,     &args[1]);
+        napi_create_string_utf8 (env, ev->data.c_str(),  NAPI_AUTO_LENGTH,     &args[2]);
+        napi_call_function(env, undef, jsCb, 3, args, nullptr);
+    }
+    delete ev;
+}
+
+// 如果 args[idx] 是函数,创建 tsfn 并返回;否则返回 nullptr。
+napi_threadsafe_function MaybeCreateProcTsfn(napi_env env,
+                                             napi_value cb,
+                                             const char* resName) {
+    if (cb == nullptr) return nullptr;
+    napi_valuetype t = napi_undefined;
+    napi_typeof(env, cb, &t);
+    if (t != napi_function) return nullptr;
+
+    napi_value name;
+    napi_create_string_utf8(env, resName, NAPI_AUTO_LENGTH, &name);
+    napi_threadsafe_function tsfn = nullptr;
+    napi_create_threadsafe_function(env, cb, nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, NapiProcCallJs, &tsfn);
+    return tsfn;
+}
+
+// 把 tsfn 包装成 StreamSink。tsfn 在 onExit 里释放。
+proc::StreamSink MakeSinkFromTsfn(napi_threadsafe_function tsfn) {
+    proc::StreamSink sink;
+    sink.onLine = [tsfn](pid_t pid, const std::string& line) {
+        auto* ev = new NapiProcEvent{pid, "out", line};
+        napi_call_threadsafe_function(tsfn, ev, napi_tsfn_blocking);
+    };
+    sink.onExit = [tsfn](pid_t pid, int code) {
+        auto* ev = new NapiProcEvent{pid, "exit", std::to_string(code)};
+        napi_call_threadsafe_function(tsfn, ev, napi_tsfn_blocking);
+        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+    };
+    return sink;
+}
+
+// 通用入口: kind 决定走 RunBox64 还是 RunCommand
+enum class RunKind { Box64, Command };
+
+napi_value RunNapiImpl(napi_env env, napi_callback_info info, RunKind kind) {
+    size_t argc = 5;
+    napi_value args[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string exe      = napiutil::GetStringArg(env, args[0]);
+    auto        argv     = napiutil::GetStringArrayArg(env, args[1]);
+    auto        envv     = napiutil::GetStringArrayArg(env, args[2]);
+    std::string cwd      = napiutil::GetStringArg(env, args[3]);
+    napi_value  cbVal    = (argc >= 5) ? args[4] : nullptr;
+
+    if (argv.empty()) argv.push_back(exe);
+
+    const char* resName = (kind == RunKind::Box64) ? "RunBox64Cb" : "RunCommandCb";
+    napi_threadsafe_function tsfn = MaybeCreateProcTsfn(env, cbVal, resName);
+
+    int pid;
+    if (tsfn) {
+        proc::StreamSink sink = MakeSinkFromTsfn(tsfn);
+        pid = (kind == RunKind::Box64)
+            ? proc::RunBox64  (exe, argv, envv, cwd, &sink, nullptr)
+            : proc::RunCommand(exe, argv, envv, cwd, &sink, nullptr);
+        if (pid < 0) {
+            // spawn 失败,onExit 不会被触发,这里手动释放 tsfn 防泄漏
+            napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        }
+    } else {
+        pid = (kind == RunKind::Box64)
+            ? proc::RunBox64  (exe, argv, envv, cwd, nullptr, nullptr)
+            : proc::RunCommand(exe, argv, envv, cwd, nullptr, nullptr);
+    }
+
+    napi_value r;
+    napi_create_int32(env, pid, &r);
+    return r;
+}
+
+} // anonymous namespace
+
+namespace proc {
+
+napi_value RunBox64Napi(napi_env env, napi_callback_info info) {
+    return RunNapiImpl(env, info, RunKind::Box64);
+}
+
+napi_value RunCommandNapi(napi_env env, napi_callback_info info) {
+    return RunNapiImpl(env, info, RunKind::Command);
+}
+
+napi_value TerminateNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t pid = 0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &pid);
+    if (pid > 0) TerminateProcess((pid_t)pid);
+    return nullptr;
 }
 
 } // namespace proc

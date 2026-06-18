@@ -4,6 +4,7 @@
 #include "client_napi.h"
 #include "input_window_napi.h"
 #include "fs_utils.h"
+#include "process_runner.h"
 
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
@@ -20,6 +21,11 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"launchCli",           nullptr, clientnapi::LaunchCli,          nullptr,nullptr,nullptr, napi_default,nullptr},
         {"stopCli",             nullptr, clientnapi::StopCli,            nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setCliCallback",      nullptr, clientnapi::SetCliCallback,     nullptr,nullptr,nullptr, napi_default,nullptr},
+        
+        // ---- 新统一进程接口 ----
+        {"runBox64",            nullptr, proc::RunBox64Napi,             nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"runCommand",          nullptr, proc::RunCommandNapi,           nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"terminate",           nullptr, proc::TerminateNapi,            nullptr,nullptr,nullptr, napi_default,nullptr},
 
         // ---- input ----
         {"sendKey",             nullptr, iwnapi::SendKey,                nullptr,nullptr,nullptr, napi_default,nullptr},
