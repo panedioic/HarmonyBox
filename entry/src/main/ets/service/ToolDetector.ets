@@ -94,18 +94,6 @@ export class ToolDetector {
   static async fetchVersion(
     context: common.UIAbilityContext, spec: ToolSpec, path: string
   ): Promise<string> {
-    if (spec.versionArgs.length === 0) return '已安装';
-    const libPath: string = context.applicationInfo.nativeLibraryPath ?? '';
-    try {
-      const argv: string[] = [path];
-      for (const a of spec.versionArgs) argv.push(a);
-      const r = await wl.execCapture(path, argv, libPath);
-      const text: string = (r.stdout || '').trim();
-      if (!text) return r.code === 0 ? '已安装' : `已安装 (exit ${r.code})`;
-      const firstLine: string = spec.parseFirstLine ? text.split('\n')[0].trim() : text;
-      return firstLine.length > 80 ? firstLine.substring(0, 80) + '…' : firstLine;
-    } catch (e) {
-      return '已安装 (版本读取失败)';
-    }
+    return "暂不支持";
   }
 }

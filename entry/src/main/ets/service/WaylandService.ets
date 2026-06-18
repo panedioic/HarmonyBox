@@ -1,10 +1,6 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
-import { LibStore } from './LibStore';
 import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
-import { FontStore } from './FontStore';
-import { WineService } from './WineService';
 
 export interface WlBufferSize {
   w: number;
@@ -15,7 +11,6 @@ const ACTIVE_TIMEOUT_MS: number = 15000;
 
 export class WaylandService {
   private static instance: WaylandService | null = null;
-  private uiScale: number = 1.0;
 
   static getInstance(): WaylandService {
     if (!WaylandService.instance) {
@@ -24,42 +19,40 @@ export class WaylandService {
     return WaylandService.instance;
   }
 
+  // ===== state =====
   private serverReady: boolean = false;
   private sockPath: string = '';
-  private libPath: string = '';
-  private box64Path: string = '/data/service/hnp/bin/box64';
-  private box64Ready: boolean = false;
   private currentAppId: string | null = null;
   private activeWaiter: ((ok: boolean) => void) | null = null;
-  private context: common.UIAbilityContext | null = null;
+
+  // ===== UI prefs =====
+  private uiScale: number = 1.0;
+  private useNativeDecor: boolean = true;
+
+  // ===== listeners =====
   private sizeListener: ((w: number, h: number) => void) | null = null;
   private moveListener: (() => void) | null = null;
   private exitListener: (() => void) | null = null;
-  private useNativeDecor: boolean = true;
   private maximizeListener: (() => void) | null = null;
   private unmaximizeListener: (() => void) | null = null;
   private resizeListener: ((edges: number) => void) | null = null;
-  private hostResizeBeginListener: ((edges: number) => void) | null = null;
-  private hostResizeDragListener: ((edges: number, dxPx: number, dyPx: number) => void) | null = null;
-  private hostResizeEndListener: (() => void) | null = null;
   private minimizeListener: (() => void) | null = null;
+  private hostResizeBeginListener: ((edges: number) => void) | null = null;
+  private hostResizeDragListener:
+  ((edges: number, dxPx: number, dyPx: number) => void) | null = null;
+  private hostResizeEndListener: (() => void) | null = null;
 
-  init(context: common.UIAbilityContext): boolean {
-    this.context = context;
+  // =========================================================
+  // lifecycle
+  // =========================================================
+  init(ctx: common.UIAbilityContext): boolean {
     if (this.serverReady) return true;
 
-    this.sockPath = `${context.filesDir}/wl-sock`;
-    this.libPath = context.applicationInfo.nativeLibraryPath ?? '';
+    this.sockPath = `${ctx.filesDir}/wl-sock`;
 
-    const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(context);
+    const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = prefs.scale;
     this.useNativeDecor = prefs.useNativeDecor;
-
-    try {
-      this.box64Ready = fs.accessSync(this.box64Path);
-    } catch (e) {
-      this.box64Ready = false;
-    }
 
     wl.setStateCallback((s: string): void => {
       console.info(`[WL] state=${s}`);
@@ -68,38 +61,27 @@ export class WaylandService {
         this.activeWaiter = null;
         w(true);
       }
-      if (s === 'exited') {
-        if (this.exitListener) this.exitListener();
+      if (s === 'exited' && this.exitListener) {
+        this.exitListener();
       }
     });
 
     wl.setSizeCallback((w: number, h: number): void => {
-      console.info(`[WL] size=${w}x${h}`);
       if (this.sizeListener) this.sizeListener(w, h);
     });
-
     wl.setMoveCallback((): void => {
-      console.info('[WL] move request');
       if (this.moveListener) this.moveListener();
     });
-
     wl.setMaximizeCallback((): void => {
-      console.info('[WL] maximize request');
       if (this.maximizeListener) this.maximizeListener();
     });
-
     wl.setUnmaximizeCallback((): void => {
-      console.info('[WL] unmaximize request');
       if (this.unmaximizeListener) this.unmaximizeListener();
     });
-
     wl.setResizeCallback((edges: number): void => {
-      console.info(`HBOX_WIN_RESIZE_REQ_RECV edges=0x${edges.toString(16)}`);
       if (this.resizeListener) this.resizeListener(edges);
     });
-
     wl.setMinimizeCallback((): void => {
-      console.info('HBOX_GUI_MIN_REQ_ETS');
       if (this.minimizeListener) this.minimizeListener();
     });
 
@@ -108,13 +90,26 @@ export class WaylandService {
     return ok;
   }
 
-  getUiScale(): number {
-    return this.uiScale;
+  shutdown(): void {
+    if (!this.serverReady) return;
+    try { wl.stopAll(); } catch (e) { /* ignore */ }
+    this.serverReady = false;
+    this.currentAppId = null;
+    this.activeWaiter = null;
   }
 
-  getUseNativeDecor(): boolean {
-    return this.useNativeDecor;
-  }
+  // =========================================================
+  // state queries
+  // =========================================================
+  isServerReady(): boolean { return this.serverReady; }
+  getCurrentAppId(): string | null { return this.currentAppId; }
+  getSockPath(): string { return this.sockPath; }
+
+  // =========================================================
+  // UI prefs
+  // =========================================================
+  getUiScale(): number { return this.uiScale; }
+  getUseNativeDecor(): boolean { return this.useNativeDecor; }
 
   reloadUiPrefs(ctx: common.Context): void {
     const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
@@ -122,76 +117,9 @@ export class WaylandService {
     this.useNativeDecor = prefs.useNativeDecor;
   }
 
-  setSizeListener(cb: ((w: number, h: number) => void) | null): void {
-    this.sizeListener = cb;
-  }
-
-  setMoveListener(cb: (() => void) | null): void {
-    this.moveListener = cb;
-  }
-
-  setExitListener(cb: (() => void) | null): void {
-    this.exitListener = cb;
-  }
-
-  setMaximizeListener(cb: (() => void) | null): void {
-    this.maximizeListener = cb;
-  }
-
-  setUnmaximizeListener(cb: (() => void) | null): void {
-    this.unmaximizeListener = cb;
-  }
-
-  setResizeListener(cb: ((edges: number) => void) | null): void {
-    this.resizeListener = cb;
-  }
-
-  setHostResizeBeginListener(cb: ((edges: number) => void) | null): void {
-    this.hostResizeBeginListener = cb;
-  }
-  setHostResizeDragListener(cb: ((edges: number, dxPx: number, dyPx: number) => void) | null): void {
-    this.hostResizeDragListener = cb;
-  }
-  setHostResizeEndListener(cb: (() => void) | null): void {
-    this.hostResizeEndListener = cb;
-  }
-
-  fireHostResizeBegin(edges: number): void {
-    if (this.hostResizeBeginListener) this.hostResizeBeginListener(edges);
-  }
-  notifyHostResizeDrag(edges: number, dxPx: number, dyPx: number): void {
-    if (this.hostResizeDragListener) this.hostResizeDragListener(edges, dxPx, dyPx);
-  }
-  notifyHostResizeEnd(): void {
-    if (this.hostResizeEndListener) this.hostResizeEndListener();
-  }
-
-  setMinimizeListener(cb: (() => void) | null): void {
-    this.minimizeListener = cb;
-  }
-
-  getLatestBufferSize(): WlBufferSize {
-    try {
-      return wl.getLatestSize() as WlBufferSize;
-    } catch (e) {
-      return { w: 0, h: 0 };
-    }
-  }
-
-  requestClientResize(bufW: number, bufH: number, maximized: boolean): void {
-    try {
-      wl.requestClientResize(bufW, bufH, maximized);
-    } catch (e) { /* ignore */ }
-  }
-
-  isServerReady(): boolean { return this.serverReady; }
-  isBox64Ready(): boolean { return this.box64Ready; }
-  getCurrentAppId(): string | null { return this.currentAppId; }
-  getBox64Path(): string { return this.box64Path; }
-  getSockPath(): string { return this.sockPath; }
-  getLibPath(): string { return this.libPath; }
-
-  // 获取 wayland 客户端需要的环境变量
+  // =========================================================
+  // wayland env (供 CliService 在 GUI 模式下注入)
+  // =========================================================
   getWaylandEnv(): string[] {
     if (!this.sockPath) return [];
     const idx: number = this.sockPath.lastIndexOf('/');
@@ -204,7 +132,9 @@ export class WaylandService {
     ];
   }
 
-  // 占用 GUI 槽位:成功返回 true,已被占用返回 false
+  // =========================================================
+  // GUI slot
+  // =========================================================
   claimSlot(appId: string): boolean {
     if (!this.serverReady) return false;
     if (this.currentAppId) return false;
@@ -212,16 +142,16 @@ export class WaylandService {
     return true;
   }
 
-  // 释放槽位,并通知 server 重置首帧标记(允许下次 active 触发)
+  // 释放槽位:同时杀掉 launchClient 跟踪的单例 GUI client。
+  // launchCli (streaming) 启动的进程不在 g_clientPid 里,本调用对它无影响,
+  // 调用方需要自己再 cliSvc.stop(pid)。
   releaseSlot(appId: string): void {
-    if (this.currentAppId === appId) {
-      this.currentAppId = null;
-      this.activeWaiter = null;
-      try { wl.stopClient(); } catch (e) { /* ignore */ }
-    }
+    if (this.currentAppId !== appId) return;
+    this.currentAppId = null;
+    this.activeWaiter = null;
+    try { wl.stopClient(); } catch (e) { /* ignore */ }
   }
 
-  // 等待客户端首帧到达
   waitActive(timeoutMs: number = ACTIVE_TIMEOUT_MS): Promise<boolean> {
     return new Promise((resolve: (v: boolean) => void): void => {
       let resolved: boolean = false;
@@ -239,80 +169,55 @@ export class WaylandService {
     });
   }
 
-  // 旧路径:不带日志,直接 launchClient 等 active
-  // 返回 >0 = pid, -1 = server 未就绪, -2 = 槽位已占, -3 = box64 未就绪,
-  //       -4 = launch 失败, -5 = 等 active 超时
-  async launch(
-    appId: string,
-    exeAbsPath: string,
-    extraArgs: string[],
-    extraEnv: string[] = [],
-    appDir: string = '',
-    useWine: boolean = false
-  ): Promise<number> {
-    if (!this.serverReady) return -1;
-    // if (!this.box64Ready) return -3;
-    if (!this.claimSlot(appId)) return -2;
+  // =========================================================
+  // listeners (套薄壳保留旧 API,内部一行转发)
+  // =========================================================
+  setSizeListener(cb: ((w: number, h: number) => void) | null): void {
+    this.sizeListener = cb;
+  }
+  setMoveListener(cb: (() => void) | null): void { this.moveListener = cb; }
+  setExitListener(cb: (() => void) | null): void { this.exitListener = cb; }
+  setMaximizeListener(cb: (() => void) | null): void { this.maximizeListener = cb; }
+  setUnmaximizeListener(cb: (() => void) | null): void { this.unmaximizeListener = cb; }
+  setResizeListener(cb: ((edges: number) => void) | null): void { this.resizeListener = cb; }
+  setMinimizeListener(cb: (() => void) | null): void { this.minimizeListener = cb; }
 
-    const wineBin: string = this.context ? WineService.getBinPath(this.context) : '';
-    const argv: string[] = useWine
-      ? [this.box64Path, wineBin, exeAbsPath]
-      : [this.box64Path, exeAbsPath];
-    for (const a of extraArgs) argv.push(a);
-
-    const env: string[] = [];
-    const ldPath: string = this.buildLdPath(appDir, useWine);
-    if (ldPath) env.push(`BOX64_LD_LIBRARY_PATH=${ldPath}`);
-    if (useWine && this.context) {
-      for (const e of WineService.buildLaunchEnv(this.context)) env.push(e);
-    }
-    for (const e of extraEnv) env.push(e);
-
-    const pid: number = wl.launchClient(
-      this.box64Path, argv, this.sockPath, this.libPath, env
-    );
-    if (pid <= 0) { this.releaseSlot(appId); return -4; }
-    const ok: boolean = await this.waitActive(ACTIVE_TIMEOUT_MS);
-    if (!ok) { this.releaseSlot(appId); return -5; }
-    return pid;
+  setHostResizeBeginListener(cb: ((edges: number) => void) | null): void {
+    this.hostResizeBeginListener = cb;
+  }
+  setHostResizeDragListener(
+    cb: ((edges: number, dxPx: number, dyPx: number) => void) | null
+  ): void {
+    this.hostResizeDragListener = cb;
+  }
+  setHostResizeEndListener(cb: (() => void) | null): void {
+    this.hostResizeEndListener = cb;
   }
 
-  private buildLdPath(appDir: string, includeWine: boolean = false): string {
-    const parts: string[] = [];
-    if (appDir) {
-      parts.push(appDir);
-      parts.push(`${appDir}/lib`);
-    }
-    if (this.context) {
-      const x64: string = LibStore.getDir(this.context);
-      if (x64) parts.push(x64);
-      if (includeWine) {
-        for (const p of WineService.buildLdPaths(this.context)) parts.push(p);
-      }
-    }
-    return parts.join(':');
+  fireHostResizeBegin(edges: number): void {
+    if (this.hostResizeBeginListener) this.hostResizeBeginListener(edges);
+  }
+  notifyHostResizeDrag(edges: number, dxPx: number, dyPx: number): void {
+    if (this.hostResizeDragListener) this.hostResizeDragListener(edges, dxPx, dyPx);
+  }
+  notifyHostResizeEnd(): void {
+    if (this.hostResizeEndListener) this.hostResizeEndListener();
   }
 
-  // 暴露给 GUI+Log 模式用
-  buildAppLdPath(appDir: string): string {
-    return this.buildLdPath(appDir);
-  }
-
-  // 主动停掉当前客户端
-  stopCurrent(): void {
-    if (this.currentAppId) {
-      try { wl.stopClient(); } catch (e) { /* ignore */ }
-      this.currentAppId = null;
-      this.activeWaiter = null;
+  // =========================================================
+  // buffer / configure
+  // =========================================================
+  getLatestBufferSize(): WlBufferSize {
+    try {
+      return wl.getLatestSize() as WlBufferSize;
+    } catch (e) {
+      return { w: 0, h: 0 };
     }
   }
 
-  shutdown(): void {
-    if (this.serverReady) {
-      try { wl.stopAll(); } catch (e) { /* ignore */ }
-      this.serverReady = false;
-      this.currentAppId = null;
-      this.activeWaiter = null;
-    }
+  requestClientResize(bufW: number, bufH: number, maximized: boolean): void {
+    try {
+      wl.requestClientResize(bufW, bufH, maximized);
+    } catch (e) { /* ignore */ }
   }
 }

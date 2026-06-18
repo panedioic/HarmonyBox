@@ -6,47 +6,27 @@ import { AppInfo, RuntimeMode, AppType, appTypeLabel } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { runningWindows } from '../model/RunningWindow';
 import { InstallService } from '../service/InstallService';
-import { WaylandService, WlBufferSize  } from '../service/WaylandService';
+import { WaylandService, WlBufferSize } from '../service/WaylandService';
+import { CliService, LaunchResult } from '../service/CliService';
+import { LibStore } from '../service/LibStore';
 import { Sidebar } from '../components/Sidebar';
 import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
-import { CliService } from '../service/CliService';
-import { LibStore } from '../service/LibStore';
-import { FontStore } from '../service/FontStore';
 
-interface MovableWindow {
-  startMoving?: () => Promise<void>;
-}
-
-interface MaximizableWindow {
-  maximize?: () => Promise<void>;
-  restore?: () => Promise<void>;
-}
-
-interface ResizableWindow {
-  startResizing?: (edges: number) => Promise<void>;
-}
-
-interface HostSize {
-  w: number;
-  h: number;
-  x: number;
-  y: number;
-}
-
-interface ResizeStart {
-  edges: number;
-  startX: number;
-  startY: number;
-  startW: number;
-  startH: number;
-}
-
+interface MovableWindow { startMoving?: () => Promise<void>; }
+interface ResizableWindow { startResizing?: (edges: number) => Promise<void>; }
 interface RestorableWindow {
   showWindow?: () => Promise<void>;
   raiseToAppTop?: () => Promise<void>;
+}
+
+interface HostSize { w: number; h: number; x: number; y: number; }
+interface ResizeStart {
+  edges: number;
+  startX: number; startY: number;
+  startW: number; startH: number;
 }
 
 @Entry
@@ -59,7 +39,7 @@ struct Index {
   private firstCommitDone: Set<string> = new Set();
   private maximizedApps: Set<string> = new Set();
   private savedHostSizes: Map<string, HostSize> = new Map();
-  private maxOpUntil: number = 0;        // 这个时间戳之前忽略 windowSizeChange
+  private maxOpUntil: number = 0;
   private resizeDebounceTimer: number = -1;
   private resizeStart: ResizeStart | null = null;
   private resizeDragLastConfigure: number = 0;
@@ -69,52 +49,40 @@ struct Index {
     this.installedApps = AppRegistry.load(ctx);
     WaylandService.getInstance().init(ctx);
     CliService.getInstance().init(ctx);
-    WaylandService.getInstance().setSizeListener((w: number, h: number): void => {
+
+    const wlSvc = WaylandService.getInstance();
+    wlSvc.setSizeListener((w: number, h: number): void => {
       this.handleWaylandSizeChange(w, h);
     });
-    WaylandService.getInstance().setMoveListener((): void => {
-      this.handleWaylandMoveRequest();
-    });
-    WaylandService.getInstance().setExitListener((): void => {
-      this.handleClientExited();
-    });
-    WaylandService.getInstance().setMaximizeListener((): void => {
-      this.handleWaylandMaximize();
-    });
-    WaylandService.getInstance().setUnmaximizeListener((): void => {
-      this.handleWaylandUnmaximize();
-    });
-    WaylandService.getInstance().setResizeListener((edges: number): void => {
+    wlSvc.setMoveListener((): void => { this.handleWaylandMoveRequest(); });
+    wlSvc.setExitListener((): void => { this.handleClientExited(); });
+    wlSvc.setMaximizeListener((): void => { this.handleWaylandMaximize(); });
+    wlSvc.setUnmaximizeListener((): void => { this.handleWaylandUnmaximize(); });
+    wlSvc.setResizeListener((edges: number): void => {
       this.handleWaylandResize(edges);
     });
-    WaylandService.getInstance().setHostResizeDragListener(
+    wlSvc.setHostResizeDragListener(
       (edges: number, dxPx: number, dyPx: number): void => {
         this.handleHostResizeDrag(edges, dxPx, dyPx);
       });
-    WaylandService.getInstance().setHostResizeEndListener((): void => {
-      this.handleHostResizeEnd();
-    });
-    WaylandService.getInstance().setMinimizeListener((): void => {
-      this.handleWaylandMinimize();
-    });
+    wlSvc.setHostResizeEndListener((): void => { this.handleHostResizeEnd(); });
+    wlSvc.setMinimizeListener((): void => { this.handleWaylandMinimize(); });
   }
 
   aboutToDisappear(): void {
     WaylandService.getInstance().shutdown();
   }
 
+  // =========================================================
+  // wayland event handlers (内容未变)
+  // =========================================================
   private handleWaylandSizeChange(bufW: number, bufH: number): void {
     if (bufW <= 0 || bufH <= 0) return;
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
-
-    // 仅在首帧时让 host 跟随 buffer。之后 host 由用户/最大化控制,
-    // buffer 由我们通过 configure 反向通知客户端跟随 host。
-    if (this.firstCommitDone.has(appId)) {
-      return;
-    }
+    if (this.firstCommitDone.has(appId)) return;
     this.firstCommitDone.add(appId);
     this.applyWindowSize(guiWin, bufW, bufH);
   }
@@ -147,18 +115,16 @@ struct Index {
         console.error(`destroy gui window failed: ${e.code} ${e.message}`);
       });
     }
-    // CLI 联动窗口在 windowEvent WINDOW_DESTROYED 链路里会被一起清理
   }
 
   private handleWaylandMaximize(): void {
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (!appId) return;
-    if (this.maximizedApps.has(appId)) return; // 防止重复
+    if (this.maximizedApps.has(appId)) return;
     this.maximizedApps.add(appId);
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
 
-    // 1. 保存当前尺寸+位置(用于 unmax 还原)
     try {
       const prop = guiWin.getWindowProperties();
       const r = prop.windowRect;
@@ -170,7 +136,6 @@ struct Index {
 
     this.maxOpUntil = Date.now() + 1000;
 
-    // 2. 取屏幕可用尺寸
     let availW: number = 0;
     let availH: number = 0;
     try {
@@ -180,10 +145,8 @@ struct Index {
     } catch (e) { /* ignore */ }
     if (availW <= 0 || availH <= 0) return;
 
-    // 3. 先告诉客户端目标 buffer 尺寸
     this.sendConfigureFromHostSize(availW, availH, true);
 
-    // 4. 用 resize + move 模拟最大化(避免 native maximize/restore 在子窗口的限制)
     guiWin.resize(availW, availH).then((): void => {
       guiWin.moveWindowToGlobal(0, 0).catch((): void => { /* ignore */ });
       console.info(`HBOX_WIN_RESIZE_MAX_DONE ${availW}x${availH}`);
@@ -209,10 +172,8 @@ struct Index {
       return;
     }
 
-    // 1. 先告诉客户端
     this.sendConfigureFromHostSize(saved.w, saved.h, false);
 
-    // 2. 还原 host 尺寸+位置
     guiWin.resize(saved.w, saved.h).then((): void => {
       guiWin.moveWindowToGlobal(saved.x, saved.y).catch((): void => { /* ignore */ });
       console.info(`HBOX_WIN_RESIZE_UNMAX_DONE ${saved.w}x${saved.h} @${saved.x},${saved.y}`);
@@ -268,7 +229,6 @@ struct Index {
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
 
-    // xdg_toplevel.resize_edge: top=1, bottom=2, left=4, right=8
     let newX: number = s.startX;
     let newY: number = s.startY;
     let newW: number = s.startW;
@@ -289,15 +249,12 @@ struct Index {
       newH = minH;
     }
 
-    // 1. resize host
     guiWin.resize(newW, newH).then((): void => {
       guiWin.moveWindowToGlobal(newX, newY).catch((): void => { /* ignore */ });
     }).catch((e: BusinessError): void => {
       console.warn(`HBOX_GUI_RESIZE_DRAG_HOST_FAIL code=${e.code}`);
     });
 
-    // 2. 节流 configure 给客户端,让它跟着重画 buffer。
-    //    每 80ms 最多一次,够 weston-terminal 反应,又不会刷爆事件循环。
     const now: number = Date.now();
     if (now - this.resizeDragLastConfigure >= 80) {
       this.resizeDragLastConfigure = now;
@@ -307,7 +264,6 @@ struct Index {
 
   private handleHostResizeEnd(): void {
     console.info('HBOX_GUI_RESIZE_DRAG_INDEX_END');
-    // 松手时无条件再 configure 一次最终尺寸,确保客户端落到准确值
     const appId: string | null = WaylandService.getInstance().getCurrentAppId();
     if (appId) {
       const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
@@ -320,7 +276,6 @@ struct Index {
     }
     this.resizeStart = null;
     this.resizeDragLastConfigure = 0;
-    // 让 windowSizeChange 那条 debounce 路径也短暂静默,避免和我们 configure 打架
     this.maxOpUntil = Date.now() + 300;
   }
 
@@ -329,7 +284,6 @@ struct Index {
     if (!appId) return;
     const guiWin: window.Window | undefined = runningWindows.get(this.guiKey(appId));
     if (!guiWin) return;
-    // 子窗口的 minimize() 实际效果是隐藏,不进 dock
     guiWin.minimize().then((): void => {
       console.info(`HBOX_GUI_MIN_DONE app=${appId}`);
     }).catch((e: BusinessError): void => {
@@ -352,8 +306,9 @@ struct Index {
   }
 
   private sendConfigureFromHostSize(hostW: number, hostH: number, maximized: boolean): void {
-    const scale: number = WaylandService.getInstance().getUiScale();
-    const useDecor: boolean = WaylandService.getInstance().getUseNativeDecor();
+    const wlSvc = WaylandService.getInstance();
+    const scale: number = wlSvc.getUiScale();
+    const useDecor: boolean = wlSvc.getUseNativeDecor();
     let decorPx: number = 0;
     if (useDecor) {
       try {
@@ -364,9 +319,9 @@ struct Index {
     }
     const bufW: number = Math.max(1, Math.round(hostW / scale));
     const bufH: number = Math.max(1, Math.round((hostH - decorPx) / scale));
-    console.info(`HBOX_WIN_RESIZE_CFG_OUT host=${hostW}x${hostH} decor=${decorPx} `
-      + `scale=${scale} buf=${bufW}x${bufH} max=${maximized}`);
-    WaylandService.getInstance().requestClientResize(bufW, bufH, maximized);
+    console.info(`HBOX_WIN_RESIZE_CFG_OUT host=${hostW}x${hostH} decor=${decorPx} ` +
+      `scale=${scale} buf=${bufW}x${bufH} max=${maximized}`);
+    wlSvc.requestClientResize(bufW, bufH, maximized);
   }
 
   private applyWindowSize(win: window.Window, bufW: number, bufH: number): void {
@@ -405,6 +360,9 @@ struct Index {
     });
   }
 
+  // =========================================================
+  // running window helpers
+  // =========================================================
   private guiKey(appId: string): string { return `${appId}::gui`; }
   private cliKey(appId: string): string { return `${appId}::cli`; }
 
@@ -426,6 +384,9 @@ struct Index {
     }
   }
 
+  // =========================================================
+  // app actions
+  // =========================================================
   launchApp = (app: AppInfo): void => {
     const existing: window.Window | undefined = this.getAnyRunningWindow(app.id);
     if (existing) {
@@ -455,9 +416,7 @@ struct Index {
     for (const k of [this.guiKey(app.id), this.cliKey(app.id)]) {
       const w = runningWindows.get(k);
       if (w) {
-        w.destroyWindow().catch(() => {
-          // TODO: Implement error handling.
-        });
+        w.destroyWindow().catch((): void => { /* ignore */ });
         runningWindows.remove(k);
       }
     }
@@ -502,128 +461,74 @@ struct Index {
     return out;
   }
 
-  async openAppWindow(app: AppInfo, withLog: boolean): Promise<void> {
-    // 仅支持 LINUX64
-    if (app.type !== AppType.LINUX && app.type !== AppType.WINDOWS) {
-      this.toast(`暂不支持 ${appTypeLabel(app.type)}`, 1500);
-      return;
-    }
-
-    // CLI 模式:只起 CLI 窗口
-    if (app.runtimeMode === RuntimeMode.CLI) {
-      await this.openCliWindow(app);
-      return;
-    }
-
-    // GUI 模式
-    if (withLog) {
-      await this.openGuiWithLog(app);
-    } else {
-      await this.openGuiWindow(app);
-    }
-  }
-
   private toast(msg: string, dur: number = 1500): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: msg, duration: dur });
     } catch (e) { /* ignore */ }
   }
 
-  private launchErrorText(code: number): string {
-    if (code === -1) return 'Wayland 服务未就绪';
-    if (code === -2) return '已有应用在运行';
-    if (code === -3) return 'box64 未就绪';
-    if (code === -4) return 'fork/exec 失败';
-    if (code === -5) return '客户端未在 15 秒内提交首帧';
-    return `code=${code}`;
-  }
-
-  private async openCliWindow(app: AppInfo): Promise<void> {
-    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const svc = CliService.getInstance();
-    svc.init(ctx);
-
-    const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
-    const exeAbs: string = `${installRoot}/${app.execPath}`;
-    const userArgs: string[] = (app.config.args || '')
-      .split(/\s+/).filter((s: string): boolean => s.length > 0)
-    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
-
-    const useWine: boolean = app.type === AppType.WINDOWS;
-    const pid: number = svc.launchBox64(exeAbs, userArgs, installRoot, userEnv, installRoot, useWine);
-    if (pid <= 0) {
-      this.toast('启动 CLI 失败', 1500);
+  // =========================================================
+  // 唯一启动入口:三种模式合并
+  //   - app.runtimeMode === CLI                     -> 纯 CLI: 流式日志,无 GUI 窗口
+  //   - app.runtimeMode === GUI && !withLog         -> 纯 GUI: 无日志窗口,state 事件追踪
+  //   - app.runtimeMode === GUI && withLog          -> GUI+日志: 流式日志 + GUI 窗口
+  // =========================================================
+  private async openAppWindow(app: AppInfo, withLog: boolean): Promise<void> {
+    if (app.type !== AppType.LINUX && app.type !== AppType.WINDOWS) {
+      this.toast(`暂不支持 ${appTypeLabel(app.type)}`, 1500);
       return;
     }
-    await this.createCliWindow(app, pid, false);
-  }
-
-  private async openGuiWindow(app: AppInfo): Promise<void> {
-    const wlSvc = WaylandService.getInstance();
-    if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
-    // if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
-    if (wlSvc.getCurrentAppId()) { this.toast('已有 GUI 应用在运行', 1800); return; }
 
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
-    const exeAbs: string = `${ctx.filesDir}/${app.installDir}/${app.execPath}`;
-    const userArgs: string[] = (app.config.args || '')
-      .split(/\s+/).filter((s: string): boolean => s.length > 0);
-    const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
-
-    this.toast(`正在启动 ${app.name}...`, 1200);
-    const useWine: boolean = app.type === AppType.WINDOWS;
-    const code: number = await wlSvc.launch(app.id, exeAbs, userArgs, userEnv, installRoot, useWine);
-    if (code <= 0) {
-      this.toast(`${app.name} 启动失败: ${this.launchErrorText(code)}`, 2500);
-      return;
-    }
-    await this.createAppWindow(app);
-  }
-
-  private async openGuiWithLog(app: AppInfo): Promise<void> {
-    const wlSvc = WaylandService.getInstance();
     const cliSvc = CliService.getInstance();
-
-    if (!wlSvc.isServerReady()) { this.toast('Wayland 服务未就绪', 1500); return; }
-    // if (!wlSvc.isBox64Ready()) { this.toast('box64 未就绪', 1800); return; }
-    if (!wlSvc.claimSlot(app.id)) { this.toast('已有 GUI 应用在运行', 1800); return; }
-
-    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     cliSvc.init(ctx);
 
+    const isCliMode: boolean = app.runtimeMode === RuntimeMode.CLI;
+    const isGui: boolean = !isCliMode;
+    const showLog: boolean = isCliMode || withLog;
+
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
     const exeAbs: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
     const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
 
-    // wayland 环境变量 + 用户自定义环境变量
-    const env: string[] = [];
-    for (const e of wlSvc.getWaylandEnv()) env.push(e);
-    for (const e of FontStore.buildEnv(ctx)) env.push(e);
-    for (const e of userEnv) env.push(e);
-
-    const useWine: boolean = app.type === AppType.WINDOWS;
-    const pid: number = cliSvc.launchBox64(exeAbs, userArgs, installRoot, env, installRoot, useWine);
-    if (pid <= 0) {
-      wlSvc.releaseSlot(app.id);
-      this.toast('启动失败', 1500);
-      return;
-    }
-
-    await this.createCliWindow(app, pid, true);
     this.toast(`正在启动 ${app.name}...`, 1200);
 
-    const ok: boolean = await wlSvc.waitActive(15000);
-    if (!ok) {
-      this.toast('客户端未在 15s 内连接 Wayland', 2500);
+    const result: LaunchResult = cliSvc.launchBox64({
+      appId: app.id,
+      exeAbsPath: exeAbs,
+      extraArgs: userArgs,
+      cwd: installRoot,
+      extraEnv: userEnv,
+      appDir: installRoot,
+      useWine: app.type === AppType.WINDOWS,
+      gui: isGui,
+      streaming: showLog
+    });
+
+    if (result.code !== 0) {
+      this.toast(`${app.name} 启动失败: ${result.errorMsg}`, 2500);
       return;
     }
-    await this.createAppWindow(app, pid);
+
+    // 1) streaming 模式:先开 CLI 窗口,这样 wayland 还在握手时也能看到日志
+    if (showLog) {
+      await this.createCliWindow(app, result.pid, isGui);
+    }
+
+    // 2) GUI 模式:等 wayland active,再开主窗口
+    if (isGui) {
+      const ok: boolean = await WaylandService.getInstance().waitActive();
+      if (!ok) {
+        cliSvc.stop(result.pid);
+        WaylandService.getInstance().releaseSlot(app.id);
+        this.toast('客户端未在 15s 内连接 Wayland', 2500);
+        return;
+      }
+      await this.createAppWindow(app, showLog ? result.pid : undefined);
+    }
   }
-
-
 
   private async createCliWindow(
     app: AppInfo, pid: number, attachedToGui: boolean
@@ -746,7 +651,6 @@ struct Index {
 
       await subWin.showWindow();
 
-      // 首帧可能早于子窗口创建,主动同步一次最新 buffer 尺寸
       const sz: WlBufferSize = WaylandService.getInstance().getLatestBufferSize();
       if (sz.w > 0 && sz.h > 0) {
         this.applyWindowSize(subWin, sz.w, sz.h);
@@ -758,28 +662,9 @@ struct Index {
     }
   }
 
-  private closeGuiWindows(appId: string): void {
-    const gKey: string = this.guiKey(appId);
-    const cKey: string = this.cliKey(appId);
-
-    const guiWin: window.Window | undefined = runningWindows.get(gKey);
-    if (guiWin) {
-      guiWin.destroyWindow().catch((): void => { /* ignore */ });
-      runningWindows.remove(gKey);
-    }
-    const cliWin: window.Window | undefined = runningWindows.get(cKey);
-    if (cliWin) {
-      cliWin.destroyWindow().catch((): void => { /* ignore */ });
-      runningWindows.remove(cKey);
-    }
-
-    WaylandService.getInstance().releaseSlot(appId);
-    this.firstCommitDone.delete(appId);
-    this.maximizedApps.delete(appId);
-    this.savedHostSizes.delete(appId);
-    this.removeRunningIdIfGone(appId);
-  }
-
+  // =========================================================
+  // UI
+  // =========================================================
   @Builder
   PageContent() {
     if (this.currentPage === PageType.LIBRARY) {
