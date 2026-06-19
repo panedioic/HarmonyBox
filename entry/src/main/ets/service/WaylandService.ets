@@ -142,6 +142,13 @@ export class WaylandService {
     return true;
   }
 
+  // CliService 在 GUI 进程退出时调用,等价于原来 C++ state="exited" 走的路径
+  fireGuiExit(appId: string): void {
+    if (this.currentAppId === appId && this.exitListener) {
+      this.exitListener();
+    }
+  }
+
   // 释放槽位:同时杀掉 launchClient 跟踪的单例 GUI client。
   // launchCli (streaming) 启动的进程不在 g_clientPid 里,本调用对它无影响,
   // 调用方需要自己再 cliSvc.stop(pid)。
@@ -149,7 +156,7 @@ export class WaylandService {
     if (this.currentAppId !== appId) return;
     this.currentAppId = null;
     this.activeWaiter = null;
-    try { wl.stopClient(); } catch (e) { /* ignore */ }
+    // try { wl.stopClient(); } catch (e) { /* ignore */ }
   }
 
   waitActive(timeoutMs: number = ACTIVE_TIMEOUT_MS): Promise<boolean> {

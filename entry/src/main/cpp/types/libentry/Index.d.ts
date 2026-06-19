@@ -79,8 +79,10 @@ export const setCliCallback: (
 
 /**
  * 用 libbox64.so + dlopen 在子进程内运行 x86_64 ELF。
- * - argv[0] 任意标签字符串,argv[1] = elfPath,argv[2..] = guest args。
+ * - argv 是执行目标文件的参数列表。其中：
+ *   argv[0] 必须为 "box64", argv[1] 为 elf path, argv[2..] = guest args。
  *   传空数组时自动用 ["box64", elfPath]。
+ *   后续也许会考虑只需要传目标参数即可。
  * - env 是完整 "KEY=VAL" 列表,调用方自己组(LD_LIBRARY_PATH /
  *   XDG_RUNTIME_DIR / BOX64_* 等都在 ArkTS 拼)。
  * - cwd 可选,空串 = 不 chdir。

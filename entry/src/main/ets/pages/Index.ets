@@ -526,7 +526,7 @@ struct Index {
         this.toast('客户端未在 15s 内连接 Wayland', 2500);
         return;
       }
-      await this.createAppWindow(app, showLog ? result.pid : undefined);
+      await this.createAppWindow(app, result.pid);
     }
   }
 

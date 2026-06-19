@@ -345,11 +345,12 @@ int SpawnBox64(const std::string& elfPath,
         unmap_low_anon_regions();
 
         // 构造 argv: [ "box64", elfPath, guestArgs... ]
-        const int total_argc = 2 + (int)guestArgs.size();
+        // 之后再考虑要不要改成ts侧不需要传box64和elfpath
+        const int total_argc = (int)guestArgs.size();
         std::vector<const char*> srcs;
         srcs.reserve(total_argc);
-        srcs.push_back("box64");
-        srcs.push_back(elfPath.c_str());
+        // srcs.push_back("box64");
+        // srcs.push_back(elfPath.c_str());
         for (const auto& s : guestArgs) srcs.push_back(s.c_str());
 
         // 把所有字符串拷到一块连续 buffer,确保生命周期覆盖整个 box64_run

@@ -107,17 +107,22 @@ export class CliService {
 
     let pid: number = -1;
     try {
-      if (opts.streaming) {
-        // streaming: 走新 runBox64 + per-call 回调
-        const cb = (event: string, data: string): void => {
-          this.handleStreamEvent(pid, event, data);
-        };
-        pid = wl.runBox64(BOX64_PATH, argv, env, opts.cwd, cb);
-      } else {
-        // gui=true && streaming=false: 仍走 launchClient,
-        // 因为 state="exited" 路径还在 C++ 侧的 g_clientPid 链路里
-        const libPath: string = this.context.applicationInfo.nativeLibraryPath ?? '';
-        pid = wl.launchClient(BOX64_PATH, argv, wlSvc.getSockPath(), libPath, env);
+      // gui=true && streaming=false: 不再走 launchClient,统一用 runBox64,
+      // 自己当 subscriber 把 exit 信号路由到 WaylandService
+      const cb = (event: string, data: string): void => {
+        this.handleStreamEvent(pid, event, data);
+      };
+      pid = wl.runBox64(opts.exeAbsPath, argv, env, opts.cwd, cb);
+      if (pid > 0 && opts.gui && opts.appId) {
+        const appId = opts.appId;
+        this.subscribe(pid, {
+          onLine: (): void => { /* B 模式丢弃日志 */ },
+          onExit: (): void => {
+            this.unsubscribe(pid);
+            this.clear(pid);
+            WaylandService.getInstance().fireGuiExit(appId);
+          }
+        });
       }
     } catch (e) {
       pid = -1;
