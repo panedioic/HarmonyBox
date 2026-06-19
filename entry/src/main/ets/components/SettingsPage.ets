@@ -6,6 +6,18 @@ import { LibStore, LibFile } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
 import { FontStore, FontFile } from '../service/FontStore';
 import { WineService, WineStatus } from '../service/WineService';
+import { ResourceService, ResourceProbe } from '../service/ResourceService';
+
+interface ResourceStatus {
+  id: string;
+  name: string;
+  url: string;
+  installed: boolean;
+  path: string;
+  version: string;
+  install: () => void;
+  uninstall: () => void
+}
 
 @Component
 export struct SettingsPage {
@@ -24,6 +36,8 @@ export struct SettingsPage {
     installed: false, path: '', version: ''
   } as ToolStatus;
   @State wineBusy: boolean = false;
+  @State installing: boolean = false;
+  @State resources: ResourceStatus[] = [];
 
   private scaleOptions: number[] = [1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -37,6 +51,40 @@ export struct SettingsPage {
     this.useNativeDecor = uiPrefs.useNativeDecor;
     this.refreshFonts();
     this.refreshWine();
+    const westonProbe: ResourceProbe = ResourceService.probe(ctx, 'weston');
+    const xkbProbe: ResourceProbe = ResourceService.probe(ctx, 'xkb');
+    this.resources = [
+      {
+        id: 'wine',
+        name: 'wine',
+        url: '',
+        path: this.wineStatus.path,
+        installed: this.wineStatus.installed,
+        version: this.wineStatus.version,
+        install: (): void => { this.installWine(); },
+        uninstall: (): void => { this.uninstallWine(); }
+      },
+      {
+        id: 'weston',
+        name: 'weston',
+        url: '',
+        path: westonProbe.path,
+        installed: westonProbe.installed,
+        version: '',
+        install: (): void => { this.uploadDir('weston', 'weston'); },
+        uninstall: (): void => { this.removeDir('weston', 'weston'); }
+      },
+      {
+        id: 'xkb',
+        name: 'xkbcommon',
+        url: '',
+        path: xkbProbe.path,
+        installed: xkbProbe.installed,
+        version: '',
+        install: (): void => { this.uploadDir('xkb', 'xkbcommon'); },
+        uninstall: (): void => { this.removeDir('xkb', 'xkbcommon'); }
+      }
+    ];
   }
 
   refreshTools(): void {
@@ -112,6 +160,59 @@ export struct SettingsPage {
         }
       }
     });
+  }
+
+  // 通用安装/卸载资源目录方法
+  private async uploadDir(name: string, display: string): Promise<void> {
+    if (this.wineBusy || this.installing) return;
+    this.installing = true;
+    this.savedHint = `正在安装 ${display},请勿离开此页...`;
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const err: string = await ResourceService.pickAndInstall(ctx, name);
+      if (err === '') {
+        this.savedHint = `${display} 安装完成`;
+        this.refreshResources();
+      } else {
+        this.savedHint = err;
+      }
+    } finally {
+      this.installing = false;
+      setTimeout((): void => { this.savedHint = ''; }, 3000);
+    }
+  }
+
+  private removeDir(name: string, display: string): void {
+    AlertDialog.show({
+      title: `卸载 ${display}`,
+      message: '将删除沙箱内的目录与文件,无法撤销。',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: {
+        value: '卸载', fontColor: '#E64545',
+        action: (): void => {
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          ResourceService.uninstall(ctx, name);
+          this.refreshResources();
+        }
+      }
+    });
+  }
+
+  private refreshResources(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const next: ResourceStatus[] = this.resources.slice();
+    for (let i = 0; i < next.length; i++) {
+      const t: ResourceStatus = next[i];
+      if (t.id === 'wine') continue; // wine 用自己的 refreshWine 流程
+      const probe: ResourceProbe = ResourceService.probe(ctx, t.id);
+      next[i] = {
+        id: t.id, name: t.name, url: t.url,
+        installed: probe.installed, path: probe.path,
+        version: '',
+        install: t.install, uninstall: t.uninstall
+      } as ResourceStatus;
+    }
+    this.resources = next;
   }
 
   openUrl(url: string): void {
@@ -316,6 +417,43 @@ export struct SettingsPage {
     .margin({ bottom: 12 })
   }
 
+  @Builder
+  ResourceRow(t: ResourceStatus) {
+    Column({ space: 6 }) {
+      // —— Wine 子区块 ——
+      Row() {
+        Column({ space: 2 }) {
+          Text(t.name)
+            .fontSize(15).fontWeight(FontWeight.Medium)
+          Text(t.installed
+            ? `已安装  ${t.version} （沙箱路径: ${t.path}）`
+            : `未安装`)
+            .fontSize(11)
+            .fontColor(t.installed ? '#1A8F4D' : '#999999')
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Button(t.installed ? '重新安装' : `安装 ${t.name}`)
+          .width(t.installed ? '8%' : '14%')
+          .fontSize(12).height(28).padding({ left: 14, right: 14 })
+          .backgroundColor(Theme.HM_BLUE)
+          .enabled(!this.wineBusy && !this.installing)
+          .onClick((): void => { t.install(); })
+        if (t.installed) {
+          Button('卸载')
+            .fontSize(12).height(28).margin({ left: 8 }).padding({ left: 14, right: 14 })
+            .backgroundColor('#F0F0F0').fontColor('#333333')
+            .onClick((): void => { t.uninstall(); })
+        }
+      }
+      .width('100%')
+      .padding(14)
+      .backgroundColor('#FAFAFA').borderRadius(10)
+      .margin({ bottom: 10 })
+    }
+  }
+
   build() {
     Scroll() {
       Column() {
@@ -324,7 +462,7 @@ export struct SettingsPage {
           .fontWeight(FontWeight.Bold)
           .margin({ bottom: 8 })
 
-        Text('此版本不包含 wine、box64、box86、elf-loader 等运行时,需要自行安装。')
+        Text('此版本已内置 box64，其余工具可自行按需安装。')
           .fontSize(13)
           .fontColor('#666666')
           .margin({ bottom: 4 })
@@ -379,44 +517,27 @@ export struct SettingsPage {
         }
         .width('100%')
 
-        // —— Wine 子区块 ——
+        // —— 资源列表 ——
         Row() {
-          Column({ space: 2 }) {
-            Text('Wine')
-              .fontSize(15).fontWeight(FontWeight.Medium)
-            Text(this.wineStatus.installed
-              ? `已安装  ${this.wineStatus.version}`
-              : '未安装')
-              .fontSize(11)
-              .fontColor(this.wineStatus.installed ? '#1A8F4D' : '#999999')
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Button(this.wineStatus.installed ? '重新安装' : '安装 wine')
-            .fontSize(12).height(28).padding({ left: 14, right: 14 })
-            .backgroundColor(Theme.HM_BLUE)
-            .enabled(!this.wineBusy)
-            .onClick((): void => { this.installWine(); })
-          if (this.wineStatus.installed) {
-            Button('卸载')
-              .fontSize(12).height(28).margin({ left: 8 }).padding({ left: 14, right: 14 })
-              .backgroundColor('#F0F0F0').fontColor('#333333')
-              .onClick((): void => { this.uninstallWine(); })
-          }
+          Text('运行时资源')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .layoutWeight(1)
+          Button('刷新')
+            .fontSize(12)
+            .height(28)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#F0F0F0')
+            .fontColor('#333333')
+            .onClick((): void => { this.refreshTools(); })
         }
         .width('100%')
-        .padding(14)
-        .backgroundColor('#FAFAFA').borderRadius(10)
-        .margin({ top: 16, bottom: 8 })
+        .margin({ bottom: 10 })
 
-        if (this.wineStatus.installed) {
-          Text(`沙箱路径: ${this.wineStatus.path}`)
-            .fontSize(11).fontColor('#999999')
-            .width('100%')
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .margin({ bottom: 12 })
+        Column() {
+          ForEach(this.resources, (t: ResourceStatus): void => {
+            this.ResourceRow(t)
+          }, (t: ResourceStatus): string => `${t.id}_${t.installed}`)
         }
 
         // —— X86_64 共享库 ——
