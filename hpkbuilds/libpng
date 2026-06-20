@@ -1,0 +1,138 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# libpng HPKBUILD - 为鸿蒙交叉编译适配 (Blender/OpenEXR 依赖项)
+#
+# 关键修改:
+#   1. 强制设置 SONAME 为 libpng16.so.16
+#      OHOS toolchain 默认不生成 versioned SONAME，会让下游链接器把绝对路径
+#      塞进 DT_NEEDED，事后再 patchelf 修复在 box64 native dlopen 下不稳定。
+#   2. 关闭 ld-version-script
+#      避免在符号上加 @PNG16_0 版本后缀，box64 wrapper 不识别带版本符号。
+# -----------------------------------------------------------------------------
+
+pkgname=libpng
+pkgver=1.6.39
+pkgdesc="libpng is the official PNG reference library"
+url="http://www.libpng.org/pub/png/libpng.html"
+archs=("arm64-v8a")
+license=("Libpng-2.0")
+
+# libpng 依赖 zlib
+depends=("zlib")
+makedepends=("cmake" "ninja")
+
+# 使用 Gitee 镜像
+source="https://gitee.com/mirrors/libpng/repository/archive/v${pkgver}.zip"
+autounpack=true
+downloadpackage=true
+buildtools="cmake"
+builddir=libpng       # Gitee zip 解压后通常目录名为 libpng
+packagename=libpng-v${pkgver}.zip
+
+# -----------------------------------------------------------------------------
+# prepare()
+# -----------------------------------------------------------------------------
+prepare() {
+    echo "[libpng] Preparing source..."
+
+    # 自动重命名解压目录（适配 Gitee 可能出现的变体名）
+    if [ ! -d "$builddir" ]; then
+        local decoded_dir=$(ls -d libpng* 2>/dev/null | grep -v '\.zip' | head -n 1)
+        [ -n "$decoded_dir" ] && mv "$decoded_dir" "$builddir"
+    fi
+
+    mkdir -p "$builddir/build-$ARCH"
+    echo "[libpng] Prepare completed. ARCH=$ARCH" >> "$buildlog"
+}
+
+# ============================================================================
+# build() - 使用 CMake 绕过 configure 和 host 识别问题
+# ============================================================================
+build() {
+    local build_dir="$builddir/build-$ARCH"
+    local install_dir="${LYCIUM_ROOT}/usr/${pkgname}/${ARCH}"
+    local zlib_dir="${LYCIUM_ROOT}/usr/zlib/${ARCH}"
+
+    echo "[libpng] Building for $ARCH..." | tee -a "$buildlog"
+
+    mkdir -p "$install_dir"
+    cd "$build_dir" || return 1
+
+    # 核心配置：明确指定 zlib 路径，否则 CMake 可能找到宿主机的 zlib
+    cmake .. \
+        -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK/native/build/cmake/ohos.toolchain.cmake" \
+        -DOHOS_ARCH="$ARCH" \
+        -DOHOS_PLATFORM=OHOS \
+        -DOHOS_STL=c++_shared \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$install_dir" \
+        \
+        -DPNG_SHARED=ON \
+        -DPNG_STATIC=ON \
+        -DPNG_TESTS=OFF \
+        -DPNG_EXECUTABLES=OFF \
+        -Dld-version-script=OFF \
+        \
+        -DZLIB_INCLUDE_DIR="$zlib_dir/include" \
+        -DZLIB_LIBRARY="$zlib_dir/lib/libz.so" \
+        \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-soname,libpng16.so.16" \
+        >> "$buildlog" 2>&1
+
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo "[libpng] CMake configuration failed" >> "$buildlog"
+        return $ret
+    fi
+
+    ninja -j$(nproc) >> "$buildlog" 2>&1
+    ret=$?
+
+    cd "$OLDPWD"
+    return $ret
+}
+
+# ============================================================================
+# package()
+# ============================================================================
+package() {
+    local build_dir="$builddir/build-$ARCH"
+    cd "$build_dir" || return 1
+
+    ninja install >> "$buildlog" 2>&1
+    local ret=$?
+
+    local install_dir="${LYCIUM_ROOT}/usr/${pkgname}/${ARCH}"
+
+    # CMake 默认产物可能是 libpng16.so（无版本号），但我们强制了 SONAME=libpng16.so.16
+    # 把文件重命名成与 SONAME 一致，并补全软链接
+    if [ -f "$install_dir/lib/libpng16.so" ] && \
+       [ ! -f "$install_dir/lib/libpng16.so.16" ]; then
+        mv "$install_dir/lib/libpng16.so" "$install_dir/lib/libpng16.so.16"
+        ln -sf libpng16.so.16 "$install_dir/lib/libpng16.so"
+    fi
+
+    # OpenEXR 等下游期望找 libpng.so，做兼容软链接
+    if [ -f "$install_dir/lib/libpng16.so" ] && [ ! -L "$install_dir/lib/libpng.so" ]; then
+        ln -sf libpng16.so "$install_dir/lib/libpng.so"
+    fi
+
+    cd "$OLDPWD"
+    return $ret
+}
+
+# ============================================================================
+# check()
+# ============================================================================
+check() {
+    echo "[libpng] Skipping runtime checks for cross-compilation"
+    return 0
+}
+
+# ============================================================================
+# cleanbuild()
+# ============================================================================
+cleanbuild() {
+    rm -rf "$builddir"
+}

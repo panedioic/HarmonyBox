@@ -1,0 +1,247 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# libwayland HPKBUILD - 鸿蒙交叉编译适配
+# -----------------------------------------------------------------------------
+
+pkgname=libwayland
+pkgver=1.22.0
+pkgdesc="Wayland is a protocol for a compositor to talk to its clients"
+url="https://wayland.freedesktop.org/"
+archs=("arm64-v8a")
+license=("MIT")
+depends=("libffi" "expat")
+makedepends=("meson" "ninja" "pkg-config")
+
+source="https://gitlab.freedesktop.org/wayland/wayland/-/releases/${pkgver}/downloads/wayland-${pkgver}.tar.xz"
+autounpack=true
+downloadpackage=true
+buildtools="meson"
+
+builddir=wayland-${pkgver}
+packagename=wayland-${pkgver}.tar.xz
+
+# -----------------------------------------------------------------------------
+# 内部：宿主机 wayland-scanner 安装路径（绝对路径，meson 需要）
+# -----------------------------------------------------------------------------
+_host_prefix() {
+    realpath -m "${builddir}/host-install"
+}
+
+_host_pcdir() {
+    local p
+    p="$(_host_prefix)"
+    # wayland 把 wayland-scanner.pc 装在 share/pkgconfig 还是 lib/pkgconfig 取决于版本
+    if [ -f "$p/share/pkgconfig/wayland-scanner.pc" ]; then
+        echo "$p/share/pkgconfig"
+    else
+        echo "$p/lib/pkgconfig"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# prepare(): 解压 + 构建并安装宿主机版 wayland-scanner
+# -----------------------------------------------------------------------------
+prepare() {
+    echo "[libwayland] Preparing source..."
+
+    if [ ! -d "$builddir" ]; then
+        local decoded_dir
+        decoded_dir=$(ls -d wayland-* 2>/dev/null | grep -v '\.tar' | head -n 1)
+        [ -n "$decoded_dir" ] && [ "$decoded_dir" != "$builddir" ] && mv "$decoded_dir" "$builddir"
+    fi
+
+    local host_prefix
+    host_prefix="$(_host_prefix)"
+
+    # 已经装过 wayland-scanner.pc 就跳过
+    if [ ! -f "$host_prefix/share/pkgconfig/wayland-scanner.pc" ] && \
+       [ ! -f "$host_prefix/lib/pkgconfig/wayland-scanner.pc" ]; then
+
+        echo "[libwayland] Building HOST wayland-scanner -> $host_prefix" | tee -a "$buildlog"
+        rm -rf "$builddir/host-build" "$host_prefix"
+        mkdir -p "$builddir/host-build"
+
+        # 关键：宿主机版本必须用干净的环境，不要被交叉编译的 PKG_CONFIG_LIBDIR 污染
+        env -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_PATH -u PKG_CONFIG_SYSROOT_DIR \
+            meson setup "$builddir/host-build" "$builddir" \
+                --prefix="$host_prefix" \
+                --libdir=lib \
+                --buildtype=release \
+                -Dscanner=true \
+                -Dlibraries=false \
+                -Dtests=false \
+                -Ddocumentation=false \
+                -Ddtd_validation=false \
+                >> "$buildlog" 2>&1 || {
+            echo "[libwayland] ERROR: HOST meson setup failed" >> "$buildlog"
+            return 1
+        }
+
+        env -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_PATH -u PKG_CONFIG_SYSROOT_DIR \
+            ninja -C "$builddir/host-build" install >> "$buildlog" 2>&1 || {
+            echo "[libwayland] ERROR: HOST install failed" >> "$buildlog"
+            return 1
+        }
+
+        echo "[libwayland] HOST wayland-scanner installed." >> "$buildlog"
+    fi
+
+    # 验证 host pc 文件
+    if [ ! -f "$(_host_pcdir)/wayland-scanner.pc" ]; then
+        echo "[libwayland] ERROR: host wayland-scanner.pc still missing!" >> "$buildlog"
+        find "$host_prefix" -name 'wayland-scanner*' >> "$buildlog" 2>&1
+        return 1
+    fi
+
+    mkdir -p "$builddir/build-$ARCH"
+}
+
+# -----------------------------------------------------------------------------
+# 生成 meson cross file
+# -----------------------------------------------------------------------------
+_generate_cross_file() {
+    local cross_file="$1"
+    local libffi_dir="${LYCIUM_ROOT}/usr/libffi/${ARCH}"
+    local expat_dir="${LYCIUM_ROOT}/usr/expat/${ARCH}"
+
+    cat > "$cross_file" <<EOF
+[binaries]
+c          = ['$OHOS_SDK/native/llvm/bin/clang', '--target=aarch64-linux-ohos', '--sysroot=$OHOS_SDK/native/sysroot']
+cpp        = ['$OHOS_SDK/native/llvm/bin/clang++', '--target=aarch64-linux-ohos', '--sysroot=$OHOS_SDK/native/sysroot']
+ar         = '$OHOS_SDK/native/llvm/bin/llvm-ar'
+strip      = '$OHOS_SDK/native/llvm/bin/llvm-strip'
+ranlib     = '$OHOS_SDK/native/llvm/bin/llvm-ranlib'
+pkg-config = '/usr/bin/pkg-config'
+
+[built-in options]
+c_args        = ['-fPIC', '-O2', '-DOHOS_NDK', '-D__MUSL__=1']
+cpp_args      = ['-fPIC', '-O2', '-DOHOS_NDK', '-D__MUSL__=1']
+c_link_args   = []
+cpp_link_args = []
+
+[properties]
+needs_exe_wrapper = true
+# 注意：刻意不设 sys_root，否则 pkg-config 会把 sysroot 加在所有 .pc 路径前
+pkg_config_libdir = '$libffi_dir/lib/pkgconfig:$expat_dir/lib/pkgconfig'
+
+[host_machine]
+system     = 'linux'
+cpu_family = 'aarch64'
+cpu        = 'aarch64'
+endian     = 'little'
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# build()
+# -----------------------------------------------------------------------------
+build() {
+    local build_dir="$builddir/build-$ARCH"
+    local install_dir="${LYCIUM_ROOT}/usr/${pkgname}/${ARCH}"
+    local libffi_dir="${LYCIUM_ROOT}/usr/libffi/${ARCH}"
+    local expat_dir="${LYCIUM_ROOT}/usr/expat/${ARCH}"
+
+    # 依赖检查
+    if [ ! -f "$libffi_dir/lib/libffi.so" ] && [ ! -f "$libffi_dir/lib/libffi.a" ]; then
+        echo "[libwayland] ERROR: libffi not found at $libffi_dir/lib/" >> "$buildlog"
+        return 1
+    fi
+    if [ ! -f "$expat_dir/lib/libexpat.so" ] && [ ! -f "$expat_dir/lib/libexpat.a" ]; then
+        echo "[libwayland] ERROR: expat not found at $expat_dir/lib/" >> "$buildlog"
+        return 1
+    fi
+    if [ ! -f "$(_host_pcdir)/wayland-scanner.pc" ]; then
+        echo "[libwayland] ERROR: host wayland-scanner.pc not installed (run prepare again)" >> "$buildlog"
+        return 1
+    fi
+
+    echo "[libwayland] Building for $ARCH..." | tee -a "$buildlog"
+    mkdir -p "$install_dir"
+
+    local cross_file="$builddir/cross-$ARCH.txt"
+    _generate_cross_file "$cross_file"
+
+    # 关键：
+    # - PKG_CONFIG_PATH 给 native (build machine) 查询用，指向 host wayland-scanner.pc
+    # - PKG_CONFIG_LIBDIR 不 export，避免污染 native 查询
+    #   (host/target 侧 pkg-config 路径由 cross file 的 pkg_config_libdir 提供)
+    unset PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
+    export PKG_CONFIG_PATH="$(_host_pcdir)"
+    unset PKG_CONFIG_LIBDIR
+    export PKG_CONFIG_PATH="$(_host_pcdir)"
+    export PKG_CONFIG_SYSROOT_DIR=""    # 显式置空，防被 envset.sh 设置污染
+
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+
+    meson setup "$build_dir" "$builddir" \
+        --cross-file "$cross_file" \
+        --prefix="$install_dir" \
+        --libdir=lib \
+        --buildtype=release \
+        --default-library=both \
+        -Dscanner=false \
+        -Dlibraries=true \
+        -Dtests=false \
+        -Ddocumentation=false \
+        -Ddtd_validation=false \
+        >> "$buildlog" 2>&1
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo "[libwayland] ERROR: meson setup failed" >> "$buildlog"
+        [ -f "$build_dir/meson-logs/meson-log.txt" ] && \
+            cat "$build_dir/meson-logs/meson-log.txt" >> "$buildlog"
+        return $ret
+    fi
+
+    ninja -C "$build_dir" -j"$(nproc)" >> "$buildlog" 2>&1
+    ret=$?
+
+    unset PKG_CONFIG_PATH
+
+    if [ $ret -ne 0 ]; then
+        echo "[libwayland] ERROR: ninja build failed" >> "$buildlog"
+        return $ret
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# package()
+# -----------------------------------------------------------------------------
+package() {
+    local build_dir="$builddir/build-$ARCH"
+    local install_dir="${LYCIUM_ROOT}/usr/${pkgname}/${ARCH}"
+
+    echo "[libwayland] Installing to $install_dir..." >> "$buildlog"
+    ninja -C "$build_dir" install >> "$buildlog" 2>&1 || return 1
+
+    # 顺便把 host wayland-scanner 也部署一份，方便后续 GTK/libxkbcommon 等使用
+    mkdir -p "$install_dir/host-bin"
+    if [ -f "$(_host_prefix)/bin/wayland-scanner" ]; then
+        cp "$(_host_prefix)/bin/wayland-scanner" "$install_dir/host-bin/"
+    fi
+
+    # 验证关键产物
+    local missing=()
+    [ ! -f "$install_dir/lib/libwayland-client.so" ] && \
+    [ ! -f "$install_dir/lib/libwayland-client.a" ] && missing+=("libwayland-client")
+    [ ! -f "$install_dir/lib/libwayland-server.so" ] && \
+    [ ! -f "$install_dir/lib/libwayland-server.a" ] && missing+=("libwayland-server")
+    [ ! -f "$install_dir/include/wayland-client.h" ] && missing+=("wayland-client.h")
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        echo "[libwayland] ERROR: missing artifacts: ${missing[*]}" >> "$buildlog"
+        return 1
+    fi
+    return 0
+}
+
+check() {
+    echo "[libwayland] Check skipped for cross-compilation"
+    return 0
+}
+
+cleanbuild() {
+    rm -rf "$builddir"
+}

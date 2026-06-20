@@ -1,0 +1,208 @@
+# Contributor: Jeff Han <hanjinfei@foxmail.com>
+# Maintainer: Jeff Han <hanjinfei@foxmail.com>
+
+pkgname=pixman
+pkgver=0.42.2
+pkgrel=0
+pkgdesc="Pixman is a low-level software library for pixel manipulation, providing features such as image compositing and trapezoid rasterization."
+url="http://www.pixman.org/"
+archs=("arm64-v8a")
+license=("MIT")
+depends=("zlib" "libpng")
+makedepends=()
+
+unpkgname=Pixman
+source="https://gitee.com/mirrors/$unpkgname/repository/archive/$pkgname-$pkgver.zip"
+autounpack=true
+downloadpackage=true
+buildtools="configure"
+
+builddir=$unpkgname-$pkgname-${pkgver}
+packagename=$builddir.zip
+
+source envset.sh
+host=
+
+prepare() {
+    mkdir -p $builddir/$ARCH-build
+
+    # 清掉源码目录里可能残留的 autotools 产物，避免 srcdir 污染
+    cd $builddir
+    if [ -f Makefile ]; then
+        make distclean >/dev/null 2>&1 || true
+    fi
+    rm -f config.h config.status config.log config.cache stamp-h1
+    find . -maxdepth 3 -name 'Makefile' -delete 2>/dev/null || true
+    cd ..
+
+    if [ "$ARCH" = "armeabi-v7a" ]; then
+        setarm32ENV
+        host=arm-linux
+    fi
+    if [ "$ARCH" = "arm64-v8a" ]; then
+        setarm64ENV
+        host=aarch64-linux
+    fi
+    export CFLAGS="$CFLAGS -munaligned-access"
+}
+
+build() {
+    # 1) 在源码根目录生成 configure，不让 autogen.sh 顺带跑 configure
+    cd $builddir
+    NOCONFIGURE=1 ./autogen.sh > $ARCH-build/build.log 2>&1 || \
+        autoreconf -fiv >> $ARCH-build/build.log 2>&1
+
+    # 2) out-of-tree configure
+    cd $ARCH-build
+    PKG_CONFIG_PATH="${pkgconfigpath}" \
+    PKG_CONFIG_LIBDIR="${pkgconfigpath}" \
+    PKG_CONFIG_SYSROOT_DIR="" \
+    CPPFLAGS="$CPPFLAGS -I$(pwd)" \
+    ../configure "$@" \
+        --host=$host \
+        --enable-libpng \
+        --disable-silent-rules \
+        --disable-arm-simd \
+        --disable-arm-neon \
+        --disable-arm-a64-neon \
+        >> $(pwd)/build.log 2>&1
+    ret=$?
+    if [ $ret -ne 0 ]; then
+        echo "==== configure failed ====" >> build.log
+        cd $OLDPWD
+        return $ret
+    fi
+
+    # 3) 兜底：该环境下 config.status 的 diff 检测异常，
+    #    导致 config.h 有时不会真正写盘，手动从 config.h.in 生成。
+    if ! grep -q '^#define PACKAGE ' config.h 2>/dev/null; then
+        echo "==== config.h missing/broken, regenerating via sed ====" >> build.log
+        cp ../config.h.in config.h
+
+        # arm64 的 SIZEOF_LONG=8，armv7 的是 4
+        if [ "$ARCH" = "arm64-v8a" ]; then
+            sizeof_long=8
+        else
+            sizeof_long=4
+        fi
+
+        sed -i \
+          -e 's|^#undef PACKAGE$|#define PACKAGE "pixman"|' \
+          -e 's|^#undef PACKAGE_NAME$|#define PACKAGE_NAME "pixman"|' \
+          -e 's|^#undef PACKAGE_STRING$|#define PACKAGE_STRING "pixman 0.42.2"|' \
+          -e 's|^#undef PACKAGE_TARNAME$|#define PACKAGE_TARNAME "pixman"|' \
+          -e 's|^#undef PACKAGE_VERSION$|#define PACKAGE_VERSION "0.42.2"|' \
+          -e 's|^#undef PACKAGE_BUGREPORT$|#define PACKAGE_BUGREPORT "pixman@lists.freedesktop.org"|' \
+          -e 's|^#undef PACKAGE_URL$|#define PACKAGE_URL ""|' \
+          -e 's|^#undef VERSION$|#define VERSION "0.42.2"|' \
+          -e 's|^#undef STDC_HEADERS$|#define STDC_HEADERS 1|' \
+          -e 's|^#undef HAVE_STDIO_H$|#define HAVE_STDIO_H 1|' \
+          -e 's|^#undef HAVE_STDLIB_H$|#define HAVE_STDLIB_H 1|' \
+          -e 's|^#undef HAVE_STRING_H$|#define HAVE_STRING_H 1|' \
+          -e 's|^#undef HAVE_STRINGS_H$|#define HAVE_STRINGS_H 1|' \
+          -e 's|^#undef HAVE_INTTYPES_H$|#define HAVE_INTTYPES_H 1|' \
+          -e 's|^#undef HAVE_STDINT_H$|#define HAVE_STDINT_H 1|' \
+          -e 's|^#undef HAVE_SYS_STAT_H$|#define HAVE_SYS_STAT_H 1|' \
+          -e 's|^#undef HAVE_SYS_TYPES_H$|#define HAVE_SYS_TYPES_H 1|' \
+          -e 's|^#undef HAVE_UNISTD_H$|#define HAVE_UNISTD_H 1|' \
+          -e 's|^#undef HAVE_DLFCN_H$|#define HAVE_DLFCN_H 1|' \
+          -e 's|^#undef HAVE_SYS_MMAN_H$|#define HAVE_SYS_MMAN_H 1|' \
+          -e 's|^#undef HAVE_SYS_TIME_H$|#define HAVE_SYS_TIME_H 1|' \
+          -e 's|^#undef HAVE_FENV_H$|#define HAVE_FENV_H 1|' \
+          -e 's|^#undef HAVE_POSIX_MEMALIGN$|#define HAVE_POSIX_MEMALIGN 1|' \
+          -e 's|^#undef HAVE_SIGACTION$|#define HAVE_SIGACTION 1|' \
+          -e 's|^#undef HAVE_ALARM$|#define HAVE_ALARM 1|' \
+          -e 's|^#undef HAVE_MMAP$|#define HAVE_MMAP 1|' \
+          -e 's|^#undef HAVE_MPROTECT$|#define HAVE_MPROTECT 1|' \
+          -e 's|^#undef HAVE_GETPAGESIZE$|#define HAVE_GETPAGESIZE 1|' \
+          -e 's|^#undef HAVE_GETTIMEOFDAY$|#define HAVE_GETTIMEOFDAY 1|' \
+          -e 's|^#undef HAVE_PTHREADS$|#define HAVE_PTHREADS /**/|' \
+          -e 's|^#undef HAVE_PTHREAD_SETSPECIFIC$|#define HAVE_PTHREAD_SETSPECIFIC 1|' \
+          -e 's|^#undef TLS$|#define TLS __thread|' \
+          -e 's|^#undef HAVE_GCC_VECTOR_EXTENSIONS$|#define HAVE_GCC_VECTOR_EXTENSIONS 1|' \
+          -e 's|^#undef HAVE_BUILTIN_CLZ$|#define HAVE_BUILTIN_CLZ 1|' \
+          -e 's|^#undef USE_GCC_INLINE_ASM$|#define USE_GCC_INLINE_ASM 1|' \
+          -e 's|^#undef USE_OPENMP$|#define USE_OPENMP 1|' \
+          -e "s|^#undef SIZEOF_LONG\$|#define SIZEOF_LONG ${sizeof_long}|" \
+          -e 's|^#undef LT_OBJDIR$|#define LT_OBJDIR ".libs/"|' \
+          -e 's|^#undef PIXMAN_TIMERS$|#define PIXMAN_TIMERS 0|' \
+          -e 's|^#undef PIXMAN_GNUPLOT$|#define PIXMAN_GNUPLOT 0|' \
+          config.h
+
+        # 防止 make 触发坏掉的 config.status 再次覆盖 config.h
+        touch -d '+1 hour' config.h
+        sed -i 's|^\(config\.h:[[:space:]]*stamp-h1.*\)|#\1|' Makefile
+        sed -i 's|^\(stamp-h1:[[:space:]].*\)|#\1|' Makefile
+    fi
+
+    if ! grep -q '^#define PACKAGE ' config.h; then
+        echo "==== config.h still broken, abort ====" >> build.log
+        cd $OLDPWD
+        return 1
+    fi
+
+    make VERBOSE=1 -j4 >> $(pwd)/build.log 2>&1
+    ret=$?
+    cd $OLDPWD
+    return $ret
+}
+
+package() {
+    cd ..
+    cd $builddir/$ARCH-build
+    make install >> $(pwd)/build.log 2>&1
+    ret=$?
+    cd $OLDPWD
+    unset host
+    return $ret
+}
+
+check() {
+    cd $builddir/$ARCH-build
+    sed -i '/.*oob-test.log: oob-test$(EXEEXT)/c\oob-test.log: #oob-test$(EXEEXT)' test/Makefile
+    sed -i '/.*infinite-loop.log: infinite-loop$(EXEEXT)/c\infinite-loop.log: #infinite-loop$(EXEEXT)' test/Makefile
+    sed -i '/.*trap-crasher.log: trap-crasher$(EXEEXT)/c\trap-crasher.log: #trap-crasher$(EXEEXT)' test/Makefile
+    sed -i '/.*fence-image-self-test.log: fence-image-self-test$(EXEEXT)/c\fence-image-self-test.log: #fence-image-self-test$(EXEEXT)' test/Makefile
+    sed -i '/.*region-translate-test.log: region-translate-test$(EXEEXT)/c\region-translate-test.log: #region-translate-test$(EXEEXT)' test/Makefile
+    sed -i '/.*fetch-test.log: fetch-test$(EXEEXT)/c\fetch-test.log: #fetch-test$(EXEEXT)' test/Makefile
+    sed -i '/.*a1-trap-test.log: a1-trap-test$(EXEEXT)/c\a1-trap-test.log: #a1-trap-test$(EXEEXT)' test/Makefile
+    sed -i '/.*prng-test.log: prng-test$(EXEEXT)/c\prng-test.log: #prng-test$(EXEEXT)' test/Makefile
+    sed -i '/.*radial-invalid.log: radial-invalid$(EXEEXT)/c\radial-invalid.log: #radial-invalid$(EXEEXT)' test/Makefile
+    sed -i '/.*pdf-op-test.log: pdf-op-test$(EXEEXT)/c\pdf-op-test.log: #pdf-op-test$(EXEEXT)' test/Makefile
+    sed -i '/.*region-test.log: region-test$(EXEEXT)/c\region-test.log: #region-test$(EXEEXT)' test/Makefile
+    sed -i '/.*combiner-test.log: combiner-test$(EXEEXT)/c\combiner-test.log: #combiner-test$(EXEEXT)' test/Makefile
+    sed -i '/.*scaling-crash-test.log: scaling-crash-test$(EXEEXT)/c\scaling-crash-test.log: #scaling-crash-test$(EXEEXT)' test/Makefile
+    sed -i '/.*alpha-loop.log: alpha-loop$(EXEEXT)/c\alpha-loop.log: #alpha-loop$(EXEEXT)' test/Makefile
+    sed -i '/.*scaling-helpers-test.log: scaling-helpers-test$(EXEEXT)/c\scaling-helpers-test.log: #scaling-helpers-test$(EXEEXT)' test/Makefile
+    sed -i '/.*thread-test.log: thread-test$(EXEEXT)/c\thread-test.log: #thread-test$(EXEEXT)' test/Makefile
+    sed -i '/.*rotate-test.log: rotate-test$(EXEEXT)/c\rotate-test.log: #rotate-test$(EXEEXT)' test/Makefile
+    sed -i '/.*alphamap.log: alphamap$(EXEEXT)/c\alphamap.log: #alphamap$(EXEEXT)' test/Makefile
+    sed -i '/.*gradient-crash-test.log: gradient-crash-test$(EXEEXT)/c\gradient-crash-test.log: #gradient-crash-test$(EXEEXT)' test/Makefile
+    sed -i '/.*pixel-test.log: pixel-test$(EXEEXT)/c\pixel-test.log: #pixel-test$(EXEEXT)' test/Makefile
+    sed -i '/.*matrix-test.log: matrix-test$(EXEEXT)/c\matrix-test.log: #matrix-test$(EXEEXT)' test/Makefile
+    sed -i '/.*filter-reduction-test.log: filter-reduction-test$(EXEEXT)/c\filter-reduction-test.log: #filter-reduction-test$(EXEEXT)' test/Makefile
+    sed -i '/.*composite-traps-test.log: composite-traps-test$(EXEEXT)/c\composite-traps-test.log: #composite-traps-test$(EXEEXT)' test/Makefile
+    sed -i '/.*region-contains-test.log: region-contains-test$(EXEEXT)/c\region-contains-test.log: #region-contains-test$(EXEEXT)' test/Makefile
+    sed -i '/.*glyph-test.log: glyph-test$(EXEEXT)/c\glyph-test.log: #glyph-test$(EXEEXT)' test/Makefile
+    sed -i '/.*solid-test.log: solid-test$(EXEEXT)/c\solid-test.log: #solid-test$(EXEEXT)' test/Makefile
+    sed -i '/.*stress-test.log: stress-test$(EXEEXT)/c\stress-test.log: #stress-test$(EXEEXT)' test/Makefile
+    sed -i '/.*cover-test.log: cover-test$(EXEEXT)/c\cover-test.log: #cover-test$(EXEEXT)' test/Makefile
+    sed -i '/.*blitters-test.log: blitters-test$(EXEEXT)/c\blitters-test.log: #blitters-test$(EXEEXT)' test/Makefile
+    sed -i '/.*affine-test.log: affine-test$(EXEEXT)/c\affine-test.log: #affine-test$(EXEEXT)' test/Makefile
+    sed -i '/.*scaling-test.log: scaling-test$(EXEEXT)/c\scaling-test.log: #scaling-test$(EXEEXT)' test/Makefile
+    sed -i '/.*composite.log: composite$(EXEEXT)/c\composite.log: #composite$(EXEEXT)' test/Makefile
+    sed -i '/.*tolerance-test.log: tolerance-test$(EXEEXT)/c\tolerance-test.log: #tolerance-test$(EXEEXT)' test/Makefile
+
+    cd $OLDPWD
+    if [ "$ARCH" = "armeabi-v7a" ]; then
+        unsetarm32ENV
+    fi
+    if [ "$ARCH" = "arm64-v8a" ]; then
+        unsetarm64ENV
+    fi
+    echo "The test must be on an OpenHarmony device!"
+}
+
+cleanbuild() {
+    rm -rf ${PWD}/$builddir
+}

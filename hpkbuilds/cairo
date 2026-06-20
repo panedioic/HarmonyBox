@@ -1,0 +1,136 @@
+# Copyright (c) 2023 Huawei Device Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Contributor: zhangxin <zhangxin546@h-partners.com>
+# Maintainer:  zhangxin <zhangxin546@h-partners.com>
+
+pkgname=cairo
+pkgver=1.17.8
+pkgrel=0
+pkgdesc="Cairo is a 2D graphics library with support for multiple output devices."
+url="https://gitlab.freedesktop.org/cairo/cairo"
+archs=("arm64-v8a")
+license=("LGPL-2.1" "MPL 1.1")
+# CHANGED: 加入 brotli，freetype2.pc 的 Requires.private 需要它
+depends=("glib" "freetype2" "fontconfig" "libpng" "zlib" "pixman" \
+         "libxml2" "libexpat" "libffi" "pcre2" "brotli")
+makedepends=("meson" "ninja")
+
+source="https://gitee.com/mirrors/$pkgname/repository/archive/$pkgver.zip"
+
+buildtools="meson"
+downloadpackage=true
+autounpack=true
+
+builddir=$pkgname-$pkgver
+packagename=$pkgname-$pkgver.zip
+
+patch_flag=true
+
+pkgconfigpath=
+
+prepare() {
+    for depend in ${depends[@]}
+    do
+        dependpath=$LYCIUM_ROOT/usr/$depend/$ARCH/lib/pkgconfig
+        if [ ! -d "${dependpath}" ]; then
+            echo "WARN: pkgconfig dir not found for dependency: $depend ($dependpath)" >&2
+            continue
+        fi
+        pkgconfigpath="${pkgconfigpath}${dependpath}:"
+    done
+    pkgconfigpath=${pkgconfigpath%:}
+
+    echo "Final PKG_CONFIG path: $pkgconfigpath"
+
+    rm -rf $builddir/$ARCH-build
+    mkdir -p $builddir/$ARCH-build
+
+    cp $ARCH-cross-file.txt ./$builddir
+
+    if [ "$patch_flag" == true ]; then
+        cd $builddir
+        patch -p1 < ../cairo_ohos_test.patch >> $buildlog 2>&1
+        cd $OLDPWD
+        patch_flag=false
+    fi
+}
+
+build() {
+    cd $builddir
+
+    sed -i "s|ohos_sdk|${OHOS_SDK}|g" $ARCH-cross-file.txt
+
+    export PKG_CONFIG_LIBDIR="$pkgconfigpath"
+    export PKG_CONFIG_PATH="$pkgconfigpath"
+
+    meson setup $ARCH-build \
+        --cross-file $ARCH-cross-file.txt \
+        --pkg-config-path "$pkgconfigpath" \
+        --prefix=$LYCIUM_ROOT/usr/$pkgname/$ARCH \
+        --wrap-mode=nodownload \
+        --default-library=shared \
+        -Dpng=enabled \
+        -Dzlib=enabled \
+        -Dfreetype=enabled \
+        -Dfontconfig=enabled \
+        -Dglib=enabled \
+        -Dxlib=disabled \
+        -Dxcb=disabled \
+        -Dquartz=disabled \
+        -Dtee=disabled \
+        -Dsymbol-lookup=disabled \
+        -Dgtk_doc=false \
+        -Dtests=disabled \
+        > $ARCH-build/build.log 2>&1
+    ret=$?
+    if [ $ret -ne 0 ]; then
+        echo "meson setup failed, see $builddir/$ARCH-build/build.log and meson-logs/meson-log.txt"
+        cd $OLDPWD
+        return $ret
+    fi
+
+    local gio_launch="subprojects/glib-2.74.0/gio/gio-launch-desktop.c"
+    if [ -f "$gio_launch" ]; then
+        sed -i \
+            's|G_STATIC_ASSERT (LOG_EMERG == 0|/* G_STATIC_ASSERT (LOG_EMERG == 0|' \
+            "$gio_launch"
+        sed -i \
+            's|G_STATIC_ASSERT (LOG_DEBUG == 7|/* G_STATIC_ASSERT (LOG_DEBUG == 7|' \
+            "$gio_launch"
+        echo "patched gio-launch-desktop.c for OHOS musl" >> $ARCH-build/build.log
+    fi
+
+    $Ninja -v -C $ARCH-build >> $ARCH-build/build.log 2>&1
+    ret=$?
+    cd $OLDPWD
+    return $ret
+}
+
+package() {
+    cd $builddir
+    $Ninja -v -C $ARCH-build install >> $ARCH-build/build.log 2>&1
+    ret=$?
+    pkgconfigpath=""
+    cd $OLDPWD
+    return $ret
+}
+
+check() {
+    echo "The test must be on an OpenHarmony device!"
+}
+
+cleanbuild() {
+    rm -rf ${PWD}/$builddir
+}
