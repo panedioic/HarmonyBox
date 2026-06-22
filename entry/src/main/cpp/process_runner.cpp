@@ -123,6 +123,12 @@ pid_t fork_with_io(bool needPipe, const std::string& cwd, const char* procName,
             dup2(pipefd[1], STDOUT_FILENO);
             dup2(pipefd[1], STDERR_FILENO);
             if (pipefd[1] > 2) close(pipefd[1]);
+            //   pipe 不是 tty, libc 默认对 stdout 走全缓冲(4-8KB),
+            //   guest printf 写进 host musl stdout 的字节会一直囤着,
+            //   遇到 _exit 直接丢. 这里强制 stdout 行缓冲、stderr 无缓冲,
+            //   让短输出也能立刻流到 reader 线程.
+            setvbuf(stdout, nullptr, _IOLBF, 0);
+            setvbuf(stderr, nullptr, _IONBF, 0);
         } else {
             int devnull = open("/dev/null", O_WRONLY);
             if (devnull >= 0) {
@@ -314,6 +320,7 @@ int Spawn(const std::string& exe,
         execve(exe.c_str(), cargv.data(), envp.data());
         fprintf(stderr, "execve(%s) failed: %s\n",
                 exe.c_str(), strerror(errno));
+        fflush(NULL);
         _exit(127);
     }
 
@@ -387,7 +394,7 @@ int SpawnBox64(const std::string& elfPath,
         fprintf(stderr,
             "[child] box64_run returned %d (0x%x), exit with %d\n",
             rc, rc, rc & 0xFF);
-        fflush(stderr);
+        fflush(NULL);
         _exit(rc & 0xFF);
     }
 

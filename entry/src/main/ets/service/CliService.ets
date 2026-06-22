@@ -5,6 +5,7 @@ import { LibStore } from './LibStore';
 import { FontStore } from './FontStore';
 import { WineService } from './WineService';
 import { WaylandService } from './WaylandService';
+import { Box64Env, ToolEnvStore } from '../model/ToolEnvStore';
 
 export interface CliSubscriber {
   onLine: (line: string) => void;
@@ -209,13 +210,20 @@ export class CliService {
       return env;
     }
 
-    // wayland env: 仅在 streaming=true 时由 JS 注入。
-    // streaming=false 时 C++ 端 launchClient 已根据 sockPath 自动加,这里不重复。
+    // 1) wayland env: streaming=true 时由 JS 注入,
+    //    streaming=false 时 cpp 侧的 launchClient 已根据 sockPath 自动加,这里不重复
     if (opts.gui && opts.streaming) {
       for (const e of WaylandService.getInstance().getWaylandEnv()) env.push(e);
     }
 
-    // BOX64_LD_LIBRARY_PATH
+    // 2) 设置页全局 box64 默认值: BOX64_LOG / BOX64_NOBANNER / BOX64_DYNAREC
+    //    放在 BOX64_LD_LIBRARY_PATH 之前, 便于 customEnv / per-app 覆盖
+    const box64Env: Box64Env = ToolEnvStore.loadBox64(ctx);
+    if (box64Env.BOX64_LOG.length > 0)      env.push(`BOX64_LOG=${box64Env.BOX64_LOG}`);
+    if (box64Env.BOX64_NOBANNER.length > 0) env.push(`BOX64_NOBANNER=${box64Env.BOX64_NOBANNER}`);
+    if (box64Env.BOX64_DYNAREC.length > 0)  env.push(`BOX64_DYNAREC=${box64Env.BOX64_DYNAREC}`);
+
+    // 3) BOX64_LD_LIBRARY_PATH: 自动路径 + 设置页追加路径(合并策略)
     const ldPaths: string[] = [];
     if (opts.appDir) {
       ldPaths.push(opts.appDir);
@@ -226,21 +234,63 @@ export class CliService {
     if (opts.useWine) {
       for (const p of WineService.buildLdPaths(ctx)) ldPaths.push(p);
     }
+    if (box64Env.BOX64_LD_LIBRARY_PATH.length > 0) {
+      const expanded: string =
+        CliService.expandPlaceholders(box64Env.BOX64_LD_LIBRARY_PATH, ctx);
+      const extras: string[] = expanded
+        .split(':')
+        .map((s: string): string => s.trim())
+        .filter((s: string): boolean => s.length > 0);
+      for (const p of extras) ldPaths.push(p);
+    }
     if (ldPaths.length > 0) {
       env.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
     }
 
-    // wine
+    // 4) wine
     if (opts.useWine) {
       for (const e of WineService.buildLaunchEnv(ctx)) env.push(e);
     }
 
-    // fonts
+    // 5) fontconfig
     for (const e of FontStore.buildEnv(ctx)) env.push(e);
 
-    // user
+    // 6) 设置页 customEnv: 多行 KEY=VALUE
+    //    放在常规 env 之后, 用户可以在这里完全覆盖 BOX64_LD_LIBRARY_PATH 等
+    for (const e of CliService.parseGlobalEnvLines(box64Env.customEnv, ctx)) {
+      env.push(e);
+    }
+
+    // 7) per-app extraEnv: 最高优先级
     for (const e of opts.extraEnv) env.push(e);
 
     return env;
+  }
+
+  // ============ 设置页全局 env 解析工具 ============
+
+  // 把 ${X64_LIBS} / ${FILES_DIR} 展开为沙箱实际路径
+  // 注意: ${APP_DIR} 是 per-app 上下文, 不在这里展开 —— 让用户的 envVars 自己处理
+  private static expandPlaceholders(text: string, ctx: common.Context): string {
+    const x64Libs: string = LibStore.getDir(ctx);
+    const filesDir: string = ctx.filesDir;
+    return text
+      .replace(/\$\{X64_LIBS\}/g, x64Libs)
+      .replace(/\$\{FILES_DIR\}/g, filesDir);
+  }
+
+  // 解析 customEnv 多行文本: 用换行或 ; 分隔, 跳过空行 / # 注释 / 不含 = 的行
+  private static parseGlobalEnvLines(text: string, ctx: common.Context): string[] {
+    if (!text) return [];
+    const out: string[] = [];
+    const parts: string[] = text.split(/[;\n\r]+/);
+    for (const raw of parts) {
+      const line: string = raw.trim();
+      if (line.length === 0) continue;
+      if (line.startsWith('#')) continue;
+      if (!line.includes('=')) continue;
+      out.push(CliService.expandPlaceholders(line, ctx));
+    }
+    return out;
   }
 }

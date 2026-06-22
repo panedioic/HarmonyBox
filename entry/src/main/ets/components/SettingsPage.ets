@@ -233,7 +233,7 @@ export struct SettingsPage {
   saveBox64Env(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     ToolEnvStore.saveBox64(ctx, this.box64Env);
-    this.savedHint = '已保存(尚未在 cpp 侧生效)';
+    this.savedHint = '已保存,下次启动的应用会生效';
     setTimeout((): void => { this.savedHint = ''; }, 2000);
   }
 
@@ -757,9 +757,14 @@ export struct SettingsPage {
           .fontWeight(FontWeight.Medium)
           .margin({ top: 16, bottom: 4 })
 
-        Text('保存后仅写入本地配置,运行时尚未读取(后续接通)。')
+        Text('保存后立即生效,下一次启动的应用会读取这里的设置。')
           .fontSize(12)
           .fontColor('#999999')
+          .margin({ bottom: 12 })
+
+        Text('优先级: 应用自身的环境变量 > 自定义 customEnv > 上方四项 > 自动组装路径。')
+          .fontSize(11)
+          .fontColor('#AAAAAA')
           .margin({ bottom: 12 })
 
         Column() {
@@ -790,7 +795,7 @@ export struct SettingsPage {
               .fontSize(13)
               .fontWeight(FontWeight.Medium)
               .width('100%')
-            Text('每行 KEY=VALUE')
+            Text('每行 KEY=VALUE,支持 $\{X64_LIBS} / $\{FILES_DIR} 占位符,# 开头视为注释')
               .fontSize(11)
               .fontColor('#999999')
               .width('100%')

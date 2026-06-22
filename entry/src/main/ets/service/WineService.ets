@@ -152,5 +152,6 @@ export class WineService {
   static buildLdPaths(ctx: common.Context): string[] {
     const root: string = WineService.getRootDir(ctx);
     return [`${root}/lib/x86_64`, `${root}/lib/wine/x86_64-unix`];
+
   }
 }
