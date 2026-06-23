@@ -5,8 +5,8 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { Theme } from '../common/Theme';
 import { WineService } from '../service/WineService';
 import { LibStore } from '../service/LibStore';
-
-const BOX64: string = '/data/service/hnp/bin/box64';
+import { WaylandService } from '../service/WaylandService';
+import { ResourceService, ResourceProbe } from '../service/ResourceService';
 
 @Component
 export struct DebugPage {
@@ -39,16 +39,23 @@ export struct DebugPage {
     }
   }
 
-  private async runCmd(exe: string, argv: string[], env: string[]): Promise<string> {
-    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const libPath: string = ctx.applicationInfo.nativeLibraryPath ?? '';
-    try {
-      const r = await wl.execCapture(exe, argv, libPath, env);
-      const out: string = r.stdout || '';
-      return `[exit=${r.code}]\n${out.trim()}`;
-    } catch (e) {
-      return `[exec error] ${JSON.stringify(e)}`;
-    }
+  // 使用 libbox64.so 执行命令并捕获输出
+  private async runBox64Capture(args: string[], env: string[], cwd: string): Promise<string> {
+    return new Promise((resolve) => {
+      let out: string = '';
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          out += data + '\n';
+        } else if (event === 'exit') {
+          const code = parseInt(data, 10);
+          resolve(`[exit=${code}]\n${out.trim()}`);
+        }
+      };
+      const pid = wl.runBox64('box64', args, env, cwd, cb);
+      if (pid <= 0) {
+        resolve(`[run error] pid=${pid}`);
+      }
+    });
   }
 
   private buildEnv(logLevel: string): string[] {
@@ -69,14 +76,19 @@ export struct DebugPage {
   private async secEnv(): Promise<void> {
     this.append('===== ENV =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    this.append(`filesDir = ${ctx.filesDir}`);
-    this.append(`nativeLibPath = ${ctx.applicationInfo.nativeLibraryPath ?? ''}`);
-    this.append(`box64 exists = ${this.existsLabel(BOX64)}`);
+    const libPath: string = ctx.applicationInfo?.nativeLibraryPath ?? '';
+    this.append(`filesDir       = ${ctx.filesDir}`);
+    this.append(`nativeLibPath  = ${libPath}`);
+    this.append(`libbox64.so    = ${this.existsLabel(`${libPath}/libbox64.so`)}`);
+
+    const sockPath = WaylandService.getInstance().getSockPath();
+    this.append(`wl-sock        = ${this.existsLabel(sockPath)} (${sockPath})`);
+
     const wineRoot: string = WineService.getRootDir(ctx);
-    this.append(`wineRoot = ${wineRoot}`);
-    this.append(`wine bin    = ${this.existsLabel(WineService.getBinPath(ctx))}`);
-    this.append(`wineserver  = ${this.existsLabel(`${wineRoot}/bin/wineserver`)}`);
-    this.append(`prefix      = ${WineService.getPrefixDir(ctx)}`);
+    this.append(`wineRoot       = ${wineRoot}`);
+    this.append(`wine bin       = ${this.existsLabel(WineService.getBinPath(ctx))}`);
+    this.append(`wineserver     = ${this.existsLabel(`${wineRoot}/bin/wineserver`)}`);
+    this.append(`prefix         = ${WineService.getPrefixDir(ctx)}`);
 
     this.append('\n-- /proc/self/status (head 12) --');
     this.append(this.readPart('/proc/self/status', 12, 0));
@@ -122,23 +134,52 @@ export struct DebugPage {
     }
   }
 
+  private async secWayland(): Promise<void> {
+    this.append('===== WAYLAND =====');
+    const wlSvc = WaylandService.getInstance();
+    this.append(`server ready   = ${wlSvc.isServerReady()}`);
+    this.append(`sock path      = ${wlSvc.getSockPath()}`);
+    this.append(`current appId  = ${wlSvc.getCurrentAppId() ?? '(none)'}`);
+    const sz = wlSvc.getLatestBufferSize();
+    this.append(`latest buffer  = ${sz.w}x${sz.h}`);
+    const env = wlSvc.getWaylandEnv();
+    this.append('wayland env:');
+    for (const e of env) this.append(`  ${e}`);
+  }
+
+  private async secResources(): Promise<void> {
+    this.append('===== RESOURCES =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const names: string[] = ['weston', 'xkb'];
+    for (const name of names) {
+      const probe: ResourceProbe = ResourceService.probe(ctx, name);
+      this.append(`${name.padEnd(10)} = ${probe.installed ? 'YES' : 'NO '} ${probe.path}`);
+    }
+    const wineStatus = WineService.probe(ctx);
+    this.append(`wine       = ${wineStatus.installed ? 'YES' : 'NO '} ${wineStatus.rootDir}`);
+  }
+
   private async secBox64(): Promise<void> {
     this.append('===== box64 --version =====');
-    this.append(await this.runCmd(BOX64, [BOX64, '--version'], []));
+    this.append(await this.runBox64Capture(['box64', '--version'], [], ''));
   }
 
   private async secWineVersion(): Promise<void> {
     this.append('===== box64 wine --version =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const wineBin: string = WineService.getBinPath(ctx);
-    this.append(await this.runCmd(BOX64, [BOX64, wineBin, '--version'], this.buildEnv('1')));
+    this.append(await this.runBox64Capture(
+      ['box64', wineBin, '--version'], this.buildEnv('1'), ''
+    ));
   }
 
   private async secWineserver(): Promise<void> {
     this.append('===== box64 wineserver --version =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
-    this.append(await this.runCmd(BOX64, [BOX64, wineserver, '--version'], this.buildEnv('1')));
+    this.append(await this.runBox64Capture(
+      ['box64', wineserver, '--version'], this.buildEnv('1'), ''
+    ));
   }
 
   private async secPrefix(): Promise<void> {
@@ -165,8 +206,9 @@ export struct DebugPage {
     this.append('(may take 30s+, stdout truncated to ~8KB)');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const wineBin: string = WineService.getBinPath(ctx);
-    this.append(await this.runCmd(
-      BOX64, [BOX64, wineBin, 'wineboot', '--init'], this.buildEnv('1')
+    const env: string[] = this.buildEnv('1').concat(WaylandService.getInstance().getWaylandEnv());
+    this.append(await this.runBox64Capture(
+      ['box64', wineBin, 'wineboot', '--init'], env, ''
     ));
   }
 
@@ -183,11 +225,13 @@ export struct DebugPage {
     this.running = true;
     this.clear();
     try {
-      await this.secEnv();        this.append('');
-      await this.secWineFiles();  this.append('');
-      await this.secBox64();      this.append('');
-      await this.secWineVersion();this.append('');
-      await this.secWineserver(); this.append('');
+      await this.secEnv();          this.append('');
+      await this.secWineFiles();    this.append('');
+      await this.secWayland();      this.append('');
+      await this.secResources();    this.append('');
+      await this.secBox64();        this.append('');
+      await this.secWineVersion();  this.append('');
+      await this.secWineserver();   this.append('');
       await this.secPrefix();
     } finally { this.running = false; }
   }
@@ -208,7 +252,7 @@ export struct DebugPage {
         Column({ space: 4 }) {
           Text('🔧 调试诊断')
             .fontSize(22).fontWeight(FontWeight.Bold)
-          Text('排查 wine on box64。删除流程见文件头注释')
+          Text('排查 wine on box64 及 wayland 状态')
             .fontSize(11).fontColor('#999999')
         }
         .alignItems(HorizontalAlign.Start)
@@ -222,19 +266,27 @@ export struct DebugPage {
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secEnv()); })
-        Button('wine 文件').fontSize(12).height(30)
+        Button('Wine 文件').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineFiles()); })
+        Button('Wayland').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secWayland()); })
+        Button('资源').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secResources()); })
         Button('box64').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secBox64()); })
-        Button('wine --version').fontSize(12).height(30)
+        Button('wine -v').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineVersion()); })
-        Button('wineserver').fontSize(12).height(30)
+        Button('wineserver -v').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineserver()); })
@@ -242,14 +294,10 @@ export struct DebugPage {
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secPrefix()); })
-        Button('wineboot --init').fontSize(12).height(30)
+        Button('重建 prefix').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineboot()); })
-        Button('全部').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor('#5DD46E').enabled(!this.running)
-          .onClick((): void => { this.runAll(); })
       }
       .width('100%').margin({ bottom: 4 })
 
@@ -258,9 +306,13 @@ export struct DebugPage {
           .backgroundColor('#F0F0F0').fontColor('#333333')
           .onClick((): void => { this.clear(); })
         Button(this.copyHint ? '已复制' : '复制全部').fontSize(12).height(28)
-          .backgroundColor(this.copyHint ? '#5DD46E' : '#F0F0F0')
-          .fontColor(this.copyHint ? Color.White : '#333333')
+          .backgroundColor(this.copyHint ? '#5DD46E' : '#1A8F4D')
+          .fontColor(Color.White)
           .onClick((): void => { this.copy(); })
+        Button('全部').fontSize(12).height(28)
+          .backgroundColor(Theme.HM_BLUE)
+          .fontColor(Color.White)
+          .onClick((): void => { this.runAll(); })
       }
       .width('100%').margin({ bottom: 8 })
 

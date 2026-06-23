@@ -14,7 +14,8 @@ export struct Sidebar {
     { id: PageType.LIBRARY, label: '应用库', icon: '🏠' },
     { id: PageType.INSTALL, label: '安装应用', icon: '➕' },
     { id: PageType.SETTINGS, label: '环境设置', icon: '⚙️' },
-    { id: PageType.FILES, label: '沙箱文件', icon: '📂' }
+    { id: PageType.FILES, label: '沙箱文件', icon: '📂' },
+    { id: PageType.DEBUG, label: '测试页面', icon: '🔧' }
   ];
 
   build() {

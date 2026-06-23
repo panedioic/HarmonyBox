@@ -14,6 +14,7 @@ import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
+import { DebugPage } from '../pages/DebugPage';
 
 interface MovableWindow { startMoving?: () => Promise<void>; }
 interface ResizableWindow { startResizing?: (edges: number) => Promise<void>; }
@@ -684,6 +685,8 @@ struct Index {
       SettingsPage()
     } else if (this.currentPage === PageType.FILES) {
       FilesPage()
+    } else if (this.currentPage === PageType.DEBUG) {
+      DebugPage()
     }
   }
 

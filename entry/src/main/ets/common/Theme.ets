@@ -15,5 +15,6 @@ export enum PageType {
   LIBRARY = 'library',
   INSTALL = 'install',
   SETTINGS = 'settings',
-  FILES = 'files'
+  FILES = 'files',
+  DEBUG = 'debug'
 }
