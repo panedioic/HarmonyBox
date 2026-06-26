@@ -1,6 +1,6 @@
 #include "client_napi.h"
 #include "napi_utils.h"
-#include "process_runner.h"
+#include "process_manager.h"
 #include "wayland_server.h"
 
 #include <signal.h>
@@ -16,25 +16,8 @@
 #include <cstring>
 
 #undef LOG_TAG
-#define LOG_TAG "WL_HBox"
+#define LOG_TAG "HBox_NAPI_ClientOld"
 #include <hilog/log.h>
-
-// ArkTS 端按老的 box64-binary 形态传 argv: [BOX64_PATH, target, ...args]
-// 切到动态库后,argv[0] 那个 box64 占位被忽略,argv[1] 当作 elfPath。
-void SplitBox64Argv(const std::vector<std::string>& argvStrs,
-                    const std::string& exeFallback,
-                    std::string& elfPath,
-                    std::vector<std::string>& guestArgs) {
-    if (argvStrs.size() >= 2) {
-        elfPath = argvStrs[1];
-        guestArgs.assign(argvStrs.begin() + 2, argvStrs.end());
-    } else if (argvStrs.size() == 1) {
-        // 兼容: 调用方只传了一个目标
-        elfPath = argvStrs[0];
-    } else {
-        elfPath = exeFallback;
-    }
-}
 
 namespace {
 
@@ -59,13 +42,15 @@ void EmitState(const char* s) {
     napi_call_threadsafe_function(g_stateTsfn, dup, napi_tsfn_blocking);
 }
 
-// ====== env builders (保留原默认值,只是从 LaunchImpl/LaunchCli/ExecCapture 各自搬出来) ======
+// ====== env builders (与旧版完全一致) ======
 std::vector<std::string> BuildBox64Env(const std::string& sockPath,
                                        const std::string& libPath,
                                        const std::vector<std::string>& extraEnv) {
-    auto pos  = sockPath.find_last_of('/');
-    std::string dir  = (pos == std::string::npos) ? std::string("/tmp") : sockPath.substr(0, pos);
-    std::string name = (pos == std::string::npos) ? sockPath : sockPath.substr(pos + 1);
+    auto pos = sockPath.find_last_of('/');
+    std::string dir  = (pos == std::string::npos) ? std::string("/tmp")
+                                                  : sockPath.substr(0, pos);
+    std::string name = (pos == std::string::npos) ? sockPath
+                                                  : sockPath.substr(pos + 1);
 
     std::vector<std::string> env = {
         "XDG_RUNTIME_DIR=" + dir,
@@ -75,24 +60,20 @@ std::vector<std::string> BuildBox64Env(const std::string& sockPath,
         "BOX64_LOG=1",
         "BOX64_NOBANNER=0",
     };
-    for (const auto& e : extraEnv) {
-        if (!e.empty()) env.push_back(e);
-    }
+    for (const auto& e : extraEnv) if (!e.empty()) env.push_back(e);
     return env;
 }
 
 std::vector<std::string> BuildCliEnv(const std::string& libPath,
                                      const std::vector<std::string>& extraEnv) {
     std::vector<std::string> env = {
-        std::string("LD_LIBRARY_PATH=") + libPath,
-        std::string("HOME=/data/storage/el2/base"),
-        std::string("BOX64_LOG=1"),
-        std::string("BOX64_NOBANNER=0"),
-        std::string("TERM=xterm-256color"),
+        "LD_LIBRARY_PATH=" + libPath,
+        "HOME=/data/storage/el2/base",
+        "BOX64_LOG=1",
+        "BOX64_NOBANNER=0",
+        "TERM=xterm-256color",
     };
-    for (const auto& e : extraEnv) {
-        if (!e.empty()) env.push_back(e);
-    }
+    for (const auto& e : extraEnv) if (!e.empty()) env.push_back(e);
     return env;
 }
 
@@ -102,16 +83,29 @@ std::vector<std::string> BuildExecEnv(const std::string& libPath,
         "LD_LIBRARY_PATH=" + libPath,
         "HOME=/data/storage/el2/base",
     };
-    for (const auto& e : extraEnv) {
-        if (!e.empty()) env.push_back(e);
-    }
+    for (const auto& e : extraEnv) if (!e.empty()) env.push_back(e);
     return env;
+}
+
+// ArkTS 老接口约定 argvStrs = [BOX64_PATH, target, ...args]
+// 这里只做兜底:某些旧调用方只传了一个 target,给它补上 argv[0]
+std::vector<std::string> NormalizeBox64Argv(
+        const std::vector<std::string>& argvStrs,
+        const std::string& box64Path) {
+    if (argvStrs.empty()) {
+        return { box64Path.empty() ? "box64" : box64Path };
+    }
+    if (argvStrs.size() == 1) {
+        // 旧用法: 只传了 target -> 在前面补 box64
+        return { box64Path.empty() ? "box64" : box64Path, argvStrs[0] };
+    }
+    return argvStrs;
 }
 
 // ====== multi CLI tracking ======
 struct CliEvent {
     int32_t pid;
-    std::string event; // "out" | "exit"
+    std::string event;
     std::string data;
 };
 
@@ -204,40 +198,40 @@ napi_value LaunchClient(napi_env env, napi_callback_info info) {
     size_t argc = 5; napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    std::string exe      = napiutil::GetStringArg(env, args[0]); // 旧 box64 路径,忽略
+    std::string exe      = napiutil::GetStringArg(env, args[0]); // box64 path
     auto        argvStrs = napiutil::GetStringArrayArg(env, args[1]);
     std::string sockPath = napiutil::GetStringArg(env, args[2]);
     std::string libPath  = napiutil::GetStringArg(env, args[3]);
     auto        extraEnv = napiutil::GetStringArrayArg(env, args[4]);
 
-    std::string elfPath;
-    std::vector<std::string> guestArgs;
-    SplitBox64Argv(argvStrs, exe, elfPath, guestArgs);
+    procmgr::SpawnRequest req;
+    req.exe_path  = exe;
+    req.argv      = NormalizeBox64Argv(argvStrs, exe);
+    req.env       = BuildBox64Env(sockPath, libPath, extraEnv);
+    req.kind_hint = procmgr::KindHint::kForceBox64;
 
-    auto fullEnv = BuildBox64Env(sockPath, libPath, extraEnv);
-
-    proc::StreamSink sink;
-    sink.onLine = [](pid_t /*pid*/, const std::string& line) {
+    procmgr::StreamSink sink;
+    sink.on_line = [](pid_t /*pid*/, const std::string& line) {
         OH_LOG_INFO(LOG_APP, "[client] %{public}s", line.c_str());
     };
-    sink.onExit = [](pid_t /*pid*/, int /*code*/) {
+    sink.on_exit = [](pid_t /*pid*/, int /*code*/) {
         g_clientPid = -1;
         EmitState("exited");
         OH_LOG_INFO(LOG_APP, "client reader exited, fired state=exited");
     };
+    req.stream = &sink;
 
-    int pid = proc::RunBox64(elfPath, guestArgs, fullEnv, /*cwd*/ "",
-                             &sink, nullptr);
-    if (pid > 0) g_clientPid = pid;
+    procmgr::SpawnResult r = procmgr::Spawn(req);
+    if (r.pid > 0) g_clientPid = r.pid;
 
-    napi_value r; napi_create_int32(env, pid, &r);
-    return r;
+    napi_value out; napi_create_int32(env, r.pid, &out);
+    return out;
 }
 
 napi_value StopClient(napi_env env, napi_callback_info) {
     (void)env;
     pid_t pid = g_clientPid.exchange(-1);
-    if (pid > 0) proc::TerminateProcess(pid);
+    if (pid > 0) procmgr::Terminate(pid);
     WaylandServer::GetInstance()->ResetFirstCommit();
     OH_LOG_INFO(LOG_APP, "client stopped, server kept");
     return nullptr;
@@ -246,7 +240,7 @@ napi_value StopClient(napi_env env, napi_callback_info) {
 napi_value StopAll(napi_env env, napi_callback_info) {
     (void)env;
     pid_t pid = g_clientPid.exchange(-1);
-    if (pid > 0) proc::TerminateProcess(pid);
+    if (pid > 0) procmgr::Terminate(pid);
     WaylandServer::GetInstance()->Stop();
     return nullptr;
 }
@@ -261,14 +255,12 @@ napi_value ExecCapture(napi_env env, napi_callback_info info) {
     std::vector<std::string> extraEnv;
     if (argc >= 4) extraEnv = napiutil::GetStringArrayArg(env, args[3]);
 
-    std::string elfPath;
-    std::vector<std::string> guestArgs;
-    SplitBox64Argv(argvStrs, exe, elfPath, guestArgs);
-
-    // ExecCapture 的现有调用方都是 box64 (DebugPage 等),所以这里也走 RunBox64。
-    // 复用 BuildExecEnv 提供的最小 env 默认值,extraEnv 由调用方控制
-    // (BOX64_LD_LIBRARY_PATH / BOX64_PATH 等)。
-    auto fullEnv = BuildExecEnv(libPath, extraEnv);
+    // ExecCapture 现有调用方均为 box64 调试场景 (DebugPage 等)
+    procmgr::SpawnRequest req;
+    req.exe_path  = exe;
+    req.argv      = NormalizeBox64Argv(argvStrs, exe);
+    req.env       = BuildExecEnv(libPath, extraEnv);
+    req.kind_hint = procmgr::KindHint::kForceBox64;
 
     auto* ctx = new ExecCaptureCtx();
     napi_value promise;
@@ -279,17 +271,18 @@ napi_value ExecCapture(napi_env env, napi_callback_info info) {
     napi_create_threadsafe_function(env, nullptr, nullptr, resName,
         0, 1, nullptr, nullptr, nullptr, ExecCaptureTsfnCallJs, &ctx->tsfn);
 
-    proc::CaptureSink sink;
-    sink.maxBytes = 8192;
-    sink.onDone = [ctx](int code, std::string out) {
+    procmgr::CaptureSink sink;
+    sink.max_bytes = 8192;
+    sink.on_done = [ctx](int code, std::string out) {
         ctx->code = code;
         ctx->out  = std::move(out);
         napi_call_threadsafe_function(ctx->tsfn, ctx, napi_tsfn_blocking);
     };
+    req.capture = &sink;
 
-    int pid = proc::RunBox64(elfPath, guestArgs, fullEnv, /*cwd*/ "",
-                             nullptr, &sink);
-    if (pid < 0) {
+    procmgr::SpawnResult r = procmgr::Spawn(req);
+    if (r.pid <= 0) {
+        // 启动失败,sink 永不触发,在这里手动 resolve 兜底
         ctx->code = -1;
         napi_call_threadsafe_function(ctx->tsfn, ctx, napi_tsfn_blocking);
     }
@@ -307,29 +300,36 @@ napi_value LaunchCli(napi_env env, napi_callback_info info) {
     std::string cwd      = napiutil::GetStringArg(env, args[3]);
     auto        extraEnv = napiutil::GetStringArrayArg(env, args[4]);
 
-    auto fullEnv = BuildCliEnv(libPath, extraEnv);
+    procmgr::SpawnRequest req;
+    req.exe_path  = exe;
+    req.argv      = std::move(argvStrs);
+    req.env       = BuildCliEnv(libPath, extraEnv);
+    req.cwd       = std::move(cwd);
+    // LaunchCli 走 native execve,显式声明避免 basename==box64 时被误判
+    req.kind_hint = procmgr::KindHint::kForceNative;
 
-    proc::StreamSink sink;
-    sink.onLine = [](pid_t pid, const std::string& line) {
+    procmgr::StreamSink sink;
+    sink.on_line = [](pid_t pid, const std::string& line) {
         EmitCli((int32_t)pid, "out", line);
     };
-    sink.onExit = [](pid_t pid, int code) {
+    sink.on_exit = [](pid_t pid, int code) {
         EmitCli((int32_t)pid, "exit", std::to_string(code));
         std::lock_guard<std::mutex> lk(g_cliMutex);
         g_cliProcs.erase(pid);
     };
+    req.stream = &sink;
 
-    int pid = proc::RunCommand(exe, argvStrs, fullEnv, cwd, &sink, nullptr);
-    if (pid > 0) {
+    procmgr::SpawnResult r = procmgr::Spawn(req);
+    if (r.pid > 0) {
         auto p = std::make_shared<CliProc>();
-        p->pid = pid;
+        p->pid = r.pid;
         std::lock_guard<std::mutex> lk(g_cliMutex);
-        g_cliProcs[pid] = p;
+        g_cliProcs[r.pid] = p;
         OH_LOG_INFO(LOG_APP, "cli pid=%{public}d exe=%{public}s envc=%{public}u",
-                    pid, exe.c_str(), (uint32_t)extraEnv.size());
+                    r.pid, req.exe_path.c_str(), (uint32_t)extraEnv.size());
     }
-    napi_value r; napi_create_int32(env, pid, &r);
-    return r;
+    napi_value out; napi_create_int32(env, r.pid, &out);
+    return out;
 }
 
 napi_value StopCli(napi_env env, napi_callback_info info) {
@@ -337,7 +337,9 @@ napi_value StopCli(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     int32_t pid = 0;
     napi_get_value_int32(env, args[0], &pid);
-    if (pid > 0) kill(pid, SIGTERM);
+    // 原版裸 SIGTERM,这里改用 procmgr::Terminate (带 800ms SIGKILL 兜底),
+    // 行为更可靠;若需精确保持旧语义可换回 kill(pid, SIGTERM)。
+    if (pid > 0) procmgr::Terminate((pid_t)pid);
     return nullptr;
 }
 

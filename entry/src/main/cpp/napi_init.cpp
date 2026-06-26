@@ -4,7 +4,7 @@
 #include "client_napi.h"
 #include "input_window_napi.h"
 #include "fs_utils.h"
-#include "process_runner.h"
+#include "process_manager.h"
 #include "wineprefix_setup.h"
 
 EXTERN_C_START
@@ -24,9 +24,18 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setCliCallback",      nullptr, clientnapi::SetCliCallback,     nullptr,nullptr,nullptr, napi_default,nullptr},
         
         // ---- 新统一进程接口 ----
-        {"runBox64",            nullptr, proc::RunBox64Napi,             nullptr,nullptr,nullptr, napi_default,nullptr},
-        {"runCommand",          nullptr, proc::RunCommandNapi,           nullptr,nullptr,nullptr, napi_default,nullptr},
-        {"terminate",           nullptr, proc::TerminateNapi,            nullptr,nullptr,nullptr, napi_default,nullptr},
+        // {"runBox64",            nullptr, proc::RunBox64Napi,             nullptr,nullptr,nullptr, napi_default,nullptr},
+        // {"runCommand",          nullptr, proc::RunCommandNapi,           nullptr,nullptr,nullptr, napi_default,nullptr},
+        // {"terminate",           nullptr, proc::TerminateNapi,            nullptr,nullptr,nullptr, napi_default,nullptr},
+        // ---- 新统一进程接口 ----
+        {"runCommand",          nullptr, procmgr::RunCommandNapi,        nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"terminate",           nullptr, procmgr::TerminateNapi,         nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"listProcesses",       nullptr, procmgr::ListProcessesNapi,     nullptr,nullptr,nullptr, napi_default,nullptr},
+        // ---- 反向 spawn 通道 ----
+        {"startProcMgr",        nullptr, procmgr::StartControlSocketNapi,nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"stopProcMgr",         nullptr, procmgr::StopControlSocketNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
+        // ---- 兼容旧接口 (DEPRECATED) ----
+        {"runBox64",            nullptr, procmgr::RunBox64NapiCompat,    nullptr,nullptr,nullptr, napi_default,nullptr},
 
         // ---- input ----
         {"sendKey",             nullptr, iwnapi::SendKey,                nullptr,nullptr,nullptr, napi_default,nullptr},

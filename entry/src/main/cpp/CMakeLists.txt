@@ -60,7 +60,6 @@ set_target_properties(wayland_client_lib PROPERTIES
 
 add_library(entry SHARED
     napi_init.cpp
-    napi_init.cpp
     plugin_manager.cpp
     egl_renderer.cpp
     wayland_server.cpp
@@ -68,7 +67,8 @@ add_library(entry SHARED
     xdg-shell-protocol.c
     napi_utils.cpp
     fs_utils.cpp
-    process_runner.cpp
+#    process_runner.cpp
+    process_manager.cpp
     client_napi.cpp
     input_window_napi.cpp
     wineprefix_setup.cpp

@@ -11,6 +11,30 @@ export interface ExecResult {
   stdout: string;
 }
 
+// ============================================================
+//  通用类型
+// ============================================================
+/** 进程事件回调:'out' 携带一行输出,'exit' 携带退出码字符串 */
+export type ProcEventCallback = (event: 'out' | 'exit', data: string) => void;
+/** 运行模式提示。auto 时按 exePath 末尾是否为 "box64" 自动判定 */
+export type RuntimeKindHint = 'auto' | 'native' | 'box64';
+/** listProcesses 返回的进程记录 */
+export interface ProcessInfo {
+  pid: number;
+  parentPid: number;
+  kind: 'native' | 'box64';
+  exePath: string;
+  startTimeMs: number;
+  /** -1 表示尚未退出 */
+  exitCode: number;
+  alive: boolean;
+}
+/** Wayland 客户端 buffer 尺寸 */
+export interface WlBufferSize {
+  w: number;
+  h: number;
+}
+
 // ============ Wayland server / GUI client ============
 
 /** 启动内置 Wayland server,sockPath 必须可写。 */
@@ -75,47 +99,58 @@ export const setCliCallback: (
   cb: (pid: number, ev: string, data: string) => void
 ) => void;
 
-// ============ 新一代低层 process runner ============
-
+// ============================================================
+//  新统一进程接口 (procmgr)
+// ============================================================
 /**
- * 用 libbox64.so + dlopen 在子进程内运行 x86_64 ELF。
- * - argv 是执行目标文件的参数列表。其中：
- *   argv[0] 必须为 "box64", argv[1] 为 elf path, argv[2..] = guest args。
- *   传空数组时自动用 ["box64", elfPath]。
- *   后续也许会考虑只需要传目标参数即可。
- * - env 是完整 "KEY=VAL" 列表,调用方自己组(LD_LIBRARY_PATH /
- *   XDG_RUNTIME_DIR / BOX64_* 等都在 ArkTS 拼)。
- * - cwd 可选,空串 = 不 chdir。
- * - stdout/stderr 自动转发到 hilog,前缀 [box64:pid]。
- * - 不触发 setStateCallback,不做单实例跟踪;调用方自己管 pid。
- * @returns pid (>0) 或 -1
+ * 启动一个进程,返回 pid (>0) 或 -1。
+ *
+ * - exePath 末尾为 "box64" 或显式 kindHint='box64' 时,
+ *   走 fork + dlopen(libbox64.so) + box64_run 路径
+ * - 否则走 fork + execve 路径
+ *
+ * argv 需包含完整参数 (含 argv[0])。box64 模式下约定:
+ *   argv = [box64Path, guestElfPath, ...guestArgs]
+ *
+ * env 为完整环境变量数组,格式 "KEY=VALUE"。
+ *
+ * onEvent 为可选事件回调,'out' 收每一行 stdout/stderr,
+ * 'exit' 一次性收退出码 (字符串形式)。不传时输出走 hilog。
  */
-export const runBox64: (
+export function runCommand(
+  exePath: string,
+  argv: string[],
+  env: string[],
+  cwd?: string,
+  onEvent?: ProcEventCallback,
+  kindHint?: RuntimeKindHint
+): number;
+/**
+ * @deprecated 改用 runCommand,内部会按 exePath 自动判定 box64。
+ * 此接口仅为迁移期保留,未来版本会移除。
+ */
+export function runBox64(
   elfPath: string,
   argv: string[],
   env: string[],
   cwd?: string,
-  cb?: (event: string, data: string) => void
-) => number;
-
+  onEvent?: ProcEventCallback
+): number;
+/** SIGTERM,800ms 后仍存活补 SIGKILL。pid <= 0 静默忽略 */
+export function terminate(pid: number): void;
+/** 拿一份当前进程表快照 */
+export function listProcesses(): ProcessInfo[];
 /**
- * 通用 native 进程启动(execve)。stdout/stderr 转发到 hilog,前缀 [cmd:pid]。
- * argv 为空时自动用 [exe]。cwd 可选。
- * @returns pid (>0) 或 -1
+ * 启动反向 spawn 通道 (Unix Domain Socket)。
+ *
+ * 仅当 box64 子进程需要委托主进程帮其启动新进程时才需要调用。
+ * 重复调用安全:已启动返回 true。
+ *
+ * 推荐 sockPath:`${context.filesDir}/.procmgr.sock`
  */
-export const runCommand: (
-  exe: string,
-  argv: string[],
-  env: string[],
-  cwd?: string,
-  cb?: (event: string, data: string) => void
-) => number;
-
-/**
- * 终止指定 pid:先 SIGTERM,800ms 后还活着补 SIGKILL。
- * pid <= 0 静默忽略。注意:此调用立即返回,进程实际退出是异步的。
- */
-export const terminate: (pid: number) => void;
+export function startProcMgr(sockPath: string): boolean;
+/** 关闭反向 spawn 通道 */
+export function stopProcMgr(): void;
 
 // ============ 输入注入 ============
 
