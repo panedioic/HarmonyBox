@@ -8,11 +8,16 @@ import { LibStore } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
 import { ResourceService, ResourceProbe } from '../service/ResourceService';
 
+interface GeneratedTypeLiteralInterface_1 {
+  v: boolean;
+}
+
 @Component
 export struct DebugPage {
   @State output: string = '';
   @State running: boolean = false;
   @State copyHint: boolean = false;
+  @State wineserverPid: number = 0;
   private scroller: Scroller = new Scroller();
 
   private append(s: string): void {
@@ -201,15 +206,497 @@ export struct DebugPage {
     this.append(`kernel32.dll = ${this.existsLabel(`${prefix}/drive_c/windows/system32/kernel32.dll`)}`);
   }
 
-  private async secWineboot(): Promise<void> {
-    this.append('===== box64 wine wineboot --init =====');
-    this.append('(may take 30s+, stdout truncated to ~8KB)');
+  private async secSetupPrefix(): Promise<void> {
+    this.append('===== SETUP PREFIX (NAPI) =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const prefix: string = WineService.getPrefixDir(ctx);
+    const wineRoot: string = WineService.getRootDir(ctx);
+
+    this.append(`prefix    = ${prefix}`);
+    this.append(`wineRoot  = ${wineRoot}`);
+    this.append('');
+
+    // 探测源目录布局, 帮排查 .dll vs .dll.so
+    const sys32Src: string = `${wineRoot}/lib/wine/x86_64-windows`;
+    const wow64Src: string = `${wineRoot}/lib/wine/i386-windows`;
+    this.append(`src sys32  = ${this.existsLabel(sys32Src)} ${sys32Src}`);
+    this.append(`src wow64  = ${this.existsLabel(wow64Src)} ${wow64Src}`);
+
+    if (fs.accessSync(sys32Src)) {
+      try {
+        const list: string[] = fs.listFileSync(sys32Src);
+        this.append(`sys32 src has ${list.length} entries, sample:`);
+        const sample: string[] = list.filter((n: string): boolean =>
+        n.toLowerCase().startsWith('kernel32') ||
+          n.toLowerCase().startsWith('ntdll') ||
+          n.toLowerCase().startsWith('user32')
+        );
+        for (const s of sample) this.append(`  ${s}`);
+      } catch (e) {
+        this.append(`(list err: ${(e as Error).message})`);
+      }
+    }
+
+    // 调 NAPI
+    this.append('');
+    this.append('calling wl.setupWinePrefix(...)');
+    const startMs: number = Date.now();
+    let ok: boolean = false;
+    let errMsg: string = '';
+    try {
+      ok = wl.setupWinePrefix(prefix, wineRoot);
+    } catch (e) {
+      errMsg = (e as Error).message;
+    }
+    const cost: number = (Date.now() - startMs) / 1000;
+    this.append(`result    = ${ok ? 'OK' : 'FAIL'} (${cost.toFixed(2)}s)`);
+    if (errMsg.length > 0) this.append(`error     = ${errMsg}`);
+
+    // 结果验证
+    this.append('');
+    this.append('-- after setup --');
+    const marker: string  = `${prefix}/.box64_setup_done`;
+    const driveC: string  = `${prefix}/drive_c`;
+    const kernel: string  = `${driveC}/windows/system32/kernel32.dll`;
+    const ntdll: string   = `${driveC}/windows/system32/ntdll.dll`;
+    this.append(`marker         = ${this.existsLabel(marker)} ${marker}`);
+    this.append(`drive_c        = ${this.existsLabel(driveC)}`);
+    this.append(`kernel32.dll   = ${this.existsLabel(kernel)} ${kernel}`);
+    this.append(`ntdll.dll      = ${this.existsLabel(ntdll)}`);
+
+    // 列一下 system32 实际有多少文件
+    const sys32Dst: string = `${driveC}/windows/system32`;
+    try {
+      if (fs.accessSync(sys32Dst)) {
+        const list: string[] = fs.listFileSync(sys32Dst);
+        this.append(`system32 dst entries = ${list.length}`);
+      }
+    } catch (e) {
+      this.append(`(list sys32 err: ${(e as Error).message})`);
+    }
+  }
+
+  // 强制重置标记 + 再跑一次, 便于反复测试
+  private async secResetAndSetup(): Promise<void> {
+    this.append('===== RESET + SETUP PREFIX =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const prefix: string = WineService.getPrefixDir(ctx);
+    const marker: string = `${prefix}/.box64_setup_done`;
+    try {
+      if (fs.accessSync(marker)) {
+        fs.unlinkSync(marker);
+        this.append(`removed marker: ${marker}`);
+      } else {
+        this.append('marker not present');
+      }
+    } catch (e) {
+      this.append(`unlink err: ${(e as Error).message}`);
+    }
+    this.append('');
+    await this.secSetupPrefix();
+  }
+
+  // 直接用 ArkTS fs API 读 box64-tmp 目录, 看 wineserver 创建了什么
+  private async secBox64Tmp(): Promise<void> {
+    this.append('===== /tmp (box64-tmp) =====');
+    const tmp: string = '/data/storage/el2/base/cache/box64-tmp';
+    try {
+      if (!fs.accessSync(tmp)) {
+        this.append('(not exist)');
+        return;
+      }
+      const list: string[] = fs.listFileSync(tmp);
+      this.append(`top entries: ${list.length}`);
+      for (const e of list) {
+        const p: string = `${tmp}/${e}`;
+        try {
+          const st = fs.statSync(p);
+          this.append(`  ${st.isDirectory() ? 'D' : 'F'} ${e} (${st.size}b)`);
+        } catch (er) {
+          this.append(`  ? ${e}`);
+        }
+      }
+      // 递归看 .wine-{uid} 子目录
+      for (const e of list) {
+        if (!e.startsWith('.wine')) continue;
+        const sub: string = `${tmp}/${e}`;
+        this.append(`\n-- ${sub} --`);
+        try {
+          const slist: string[] = fs.listFileSync(sub);
+          for (const s of slist) {
+            const sp: string = `${sub}/${s}`;
+            try {
+              const sst = fs.statSync(sp);
+              const kind: string = sst.isDirectory() ? 'D' :
+                sst.isSocket() ? 'S' : 'F';
+              this.append(`  ${kind} ${s} (${sst.size}b)`);
+            } catch (er) {
+              this.append(`  ? ${s}`);
+            }
+          }
+          // 再下一层 (server-xxx-yyy)
+          for (const s of slist) {
+            const ssub: string = `${sub}/${s}`;
+            try {
+              const ssst = fs.statSync(ssub);
+              if (!ssst.isDirectory()) continue;
+              const sslist: string[] = fs.listFileSync(ssub);
+              this.append(`  -- ${ssub} --`);
+              for (const ss of sslist) {
+                const ssp: string = `${ssub}/${ss}`;
+                try {
+                  const sssst = fs.statSync(ssp);
+                  const kind: string = sssst.isDirectory() ? 'D' :
+                    sssst.isSocket() ? 'S' : 'F';
+                  this.append(`    ${kind} ${ss} (${sssst.size}b)`);
+                } catch (er) {
+                  this.append(`    ? ${ss}`);
+                }
+              }
+            } catch (er) { /* skip */ }
+          }
+        } catch (er) {
+          this.append(`(list err: ${(er as Error).message})`);
+        }
+      }
+    } catch (e) {
+      this.append(`(err: ${(e as Error).message})`);
+    }
+  }
+
+  // 单独跑 wineserver 不带 client, 看它独立启动是否健康
+  // wineserver -f = foreground, -d = debug log
+  private async secWineserverFg(): Promise<void> {
+    this.append('===== wineserver -f (foreground 5s) =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+
+    const env: string[] = this.buildEnv('1');
+    const args: string[] = ['box64', wineserver, '-f', '-d'];
+
+    let pid: number = 0;
+    const ended: GeneratedTypeLiteralInterface_1 = { v: false };
+
+    await new Promise<void>((resolve): void => {
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          const line: string = data.endsWith('\n') ? data.substring(0, data.length - 1) : data;
+          this.append(line);
+        } else if (event === 'exit') {
+          ended.v = true;
+          this.append(`[exit=${data}]`);
+          resolve();
+        }
+      };
+      pid = wl.runBox64('box64', args, env, '', cb);
+      if (pid <= 0) {
+        this.append(`[run error] pid=${pid}`);
+        resolve();
+        return;
+      }
+      this.append(`[pid=${pid}] launched`);
+      // 5 秒后强制 stop, foreground 模式不会自己退出
+      setTimeout((): void => {
+        if (!ended.v) {
+          this.append(`[stopping after 5s]`);
+          wl.terminate(pid);
+        }
+      }, 5000);
+    });
+  }
+
+  // 后台拉起 wineserver -f -p (前台模式 + 永久持续, 不主动退出)
+  // 这样后续 wine 调用会复用这个 server, 跳过 daemonize 路径
+  private startWineserverBg(): void {
+    if (this.wineserverPid > 0) {
+      this.append(`[ws] already running pid=${this.wineserverPid}`);
+      return;
+    }
+    this.append('===== START WINESERVER (bg) =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+
+    const env: string[] = this.buildEnv('1');
+    // -f 前台 (不 daemonize), -p 永久 persist
+    const args: string[] = ['box64', wineserver, '-f', '-p'];
+
+    const cb = (event: string, data: string): void => {
+      if (event === 'out') {
+        const line: string = data.endsWith('\n') ? data.substring(0, data.length - 1) : data;
+        this.append(`[ws] ${line}`);
+      } else if (event === 'exit') {
+        this.append(`[ws] exit=${data}`);
+        this.wineserverPid = 0;
+      }
+    };
+    const pid: number = wl.runBox64('box64', args, env, '', cb);
+    if (pid > 0) {
+      this.wineserverPid = pid;
+      this.append(`[ws] started pid=${pid}`);
+    } else {
+      this.append(`[ws] launch error pid=${pid}`);
+    }
+  }
+
+  private stopWineserverBg(): void {
+    if (this.wineserverPid > 0) {
+      try {
+        wl.terminate(this.wineserverPid);
+        this.append(`[ws] terminate sent to ${this.wineserverPid}`);
+      } catch (e) {
+        this.append(`[ws] terminate err: ${(e as Error).message}`);
+      }
+      this.wineserverPid = 0;
+    } else {
+      this.append('[ws] not running');
+    }
+  }
+
+  // 在已有后台 wineserver 的前提下跑 wineboot
+  // 也启用 WINEDEBUG=+server,+process 看协议握手细节
+  private async secWinebootWithServer(): Promise<void> {
+    const timeoutMs: number = 90 * 1000;
+    const startTs: number = Date.now();
+    if (this.wineserverPid <= 0) {
+      this.append('[err] wineserver 未启动, 先点 "起 wineserver"');
+      return;
+    }
+    this.append('===== wineboot (复用现有 wineserver) =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const wineBin: string = WineService.getBinPath(ctx);
-    const env: string[] = this.buildEnv('1').concat(WaylandService.getInstance().getWaylandEnv());
-    this.append(await this.runBox64Capture(
-      ['box64', wineBin, 'wineboot', '--init'], env, ''
-    ));
+
+    const env: string[] = this.buildEnv('1')
+      .concat(WaylandService.getInstance().getWaylandEnv())
+      .concat(['WINEDEBUG=+server,+process']);
+
+    const args: string[] = ['box64', wineBin, 'wineboot', '--init'];
+
+    const startMs: number = Date.now();
+    await new Promise<void>((resolve): void => {
+      let settled: boolean = false;
+      let ticker: number = 0;
+      const done = (reason: string): void => {
+        if (settled) return;
+        settled = true;
+        if (ticker !== 0) {
+          clearInterval(ticker);
+          ticker = 0;
+        }
+        this.append(`[done] ${reason}`);
+        resolve();
+      };
+
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          const line: string = data.endsWith('\n') ? data.substring(0, data.length - 1) : data;
+          this.append(line);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          const cost: number = (Date.now() - startMs) / 1000;
+          this.append(`[exit=${code}] (${cost.toFixed(1)}s)`);
+          done('child exit event');
+        }
+      };
+      const pid: number = wl.runBox64('box64', args, env, '', cb);
+      if (pid <= 0) {
+        this.append(`[run err] pid=${pid}`);
+        done('launch failed');
+        return;
+      }
+      this.append(`[client pid=${pid}]`);
+
+      ticker = setInterval((): void => {
+        if (settled) {
+          clearInterval(ticker);
+          ticker = 0;
+          return;
+        }
+        const dt: number = Date.now() - startTs;
+        if (dt > timeoutMs) {
+          this.append(`[timeout ${(dt/1000).toFixed(0)}s] killing wineboot pid=${pid}...`);
+          try { wl.terminate(pid); } catch (e) { /* ignore */ }
+          // 给 napi 一点时间收 SIGCHLD; 若 5s 内仍未收到 exit 事件就强制 resolve
+          setTimeout((): void => {
+            if (!settled) {
+              this.append('[timeout] no exit event after kill, force resolve');
+              done('forced after timeout');
+            }
+          }, 5000);
+        }
+      }, 5000) as number;
+    });
+  }
+
+  private secWinePrefixHealth(): void {
+    this.append('===== WINEPREFIX HEALTH =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const prefix: string = WineService.getPrefixDir(ctx);
+
+    interface Check { path: string; desc: string; mustExist: boolean; }
+    const checks: Check[] = [
+      { path: `${prefix}/system.reg`,     desc: 'system.reg',     mustExist: true },
+      { path: `${prefix}/user.reg`,       desc: 'user.reg',       mustExist: true },
+      { path: `${prefix}/userdef.reg`,    desc: 'userdef.reg',    mustExist: true },
+      { path: `${prefix}/.update-timestamp`, desc: 'update-stamp', mustExist: true },
+      { path: `${prefix}/drive_c/windows/system32`, desc: 'system32 dir', mustExist: true },
+      { path: `${prefix}/drive_c/users`,  desc: 'users dir',      mustExist: true },
+    ];
+
+    let pass: number = 0;
+    let fail: number = 0;
+    for (const c of checks) {
+      const exists: boolean = fs.accessSync(c.path);
+      let size: number = -1;
+      if (exists) {
+        try {
+          const st = fs.statSync(c.path);
+          size = st.size;
+        } catch (e) { /* dir */ }
+      }
+      const tag: string = exists ? 'OK ' : 'NO ';
+      this.append(`  ${tag} ${c.desc.padEnd(20)} size=${size} ${c.path}`);
+      if (exists) pass++; else fail++;
+    }
+
+    // 统计 system32 里的文件数
+    try {
+      const sys32: string = `${prefix}/drive_c/windows/system32`;
+      const ent: string[] = fs.listFileSync(sys32);
+      this.append(`  system32 entries: ${ent.length}`);
+      // 找几个关键 fakedll
+      const keyDlls: string[] = ['kernel32.dll', 'ntdll.dll', 'user32.dll', 'cmd.exe'];
+      for (const d of keyDlls) {
+        const ok: boolean = fs.accessSync(`${sys32}/${d}`);
+        this.append(`    ${ok ? 'YES' : 'NO '} ${d}`);
+      }
+    } catch (e) {
+      this.append(`  system32 scan err: ${(e as Error).message}`);
+    }
+
+    // 检查 wineboot 是否真走完
+    try {
+      const ts: string = `${prefix}/.update-timestamp`;
+      if (fs.accessSync(ts)) {
+        const st = fs.statSync(ts);
+        const ageS: number = (Date.now() - st.mtime * 1000) / 1000;
+        this.append(`  update-timestamp age: ${ageS.toFixed(0)}s ago`);
+        if (ageS < 300) {
+          this.append('  >>> wineboot ran in last 5 min, likely OK <<<');
+        }
+      }
+    } catch (e) { /* skip */ }
+
+    this.append(`总结: ${pass} pass, ${fail} fail`);
+  }
+
+  private async secWineCmd(): Promise<void> {
+    if (this.wineserverPid <= 0) {
+      this.append('[err] wineserver 未启动, 先点 "起 wineserver"');
+      return;
+    }
+    this.append('===== wine cmd /c echo hello =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const wineBin: string = WineService.getBinPath(ctx);
+
+    const env: string[] = this.buildEnv('1')
+      .concat(WaylandService.getInstance().getWaylandEnv())
+      .concat(['WINEDEBUG=+process']);
+
+    // cmd /c echo hello 是最小 PE 加载 + 单条命令 + 立刻退出
+    const args: string[] = ['box64', wineBin, 'cmd', '/c', 'echo', 'hello from wine'];
+
+    const timeoutMs: number = 30 * 1000;
+    const startMs: number = Date.now();
+
+    await new Promise<void>((resolve): void => {
+      let settled: boolean = false;
+      let pid: number = 0;
+      const done = (reason: string): void => {
+        if (settled) return;
+        settled = true;
+        this.append(`[done] ${reason}`);
+        resolve();
+      };
+
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          const line: string = data.endsWith('\n') ? data.substring(0, data.length - 1) : data;
+          this.append(line);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          const cost: number = (Date.now() - startMs) / 1000;
+          this.append(`[exit=${code}] (${cost.toFixed(1)}s)`);
+          done('child exit');
+        }
+      };
+      pid = wl.runBox64('box64', args, env, '', cb);
+      if (pid <= 0) {
+        this.append(`[run err] pid=${pid}`);
+        done('launch failed');
+        return;
+      }
+      this.append(`[client pid=${pid}]`);
+
+      setTimeout((): void => {
+        if (settled) return;
+        this.append(`[timeout ${(timeoutMs/1000)}s] killing pid=${pid}...`);
+        try { wl.terminate(pid); } catch (e) { /* ignore */ }
+        setTimeout((): void => {
+          if (!settled) {
+            this.append('[timeout] forcing resolve');
+            done('forced timeout');
+          }
+        }, 3000);
+      }, timeoutMs);
+    });
+  }
+
+  private async secWineboot(): Promise<void> {
+    this.append('===== box64 wine wineboot --init =====');
+    this.append('(实时输出, 可能耗时 30 秒以上)');
+
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const wineBin: string = WineService.getBinPath(ctx);
+    const env: string[] = this.buildEnv('1')
+      .concat(WaylandService.getInstance().getWaylandEnv());
+    const args: string[] = ['box64', wineBin, 'wineboot', '--init'];
+
+    const startMs: number = Date.now();
+
+    await new Promise<void>((resolve): void => {
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          // 兼容 data 末尾可能带 \n 的情况, 避免出现空行
+          const line: string = data.endsWith('\n')
+            ? data.substring(0, data.length - 1)
+            : data;
+          this.append(line);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          const cost: number = ((Date.now() - startMs) / 1000);
+          this.append(`[exit=${code}] (${cost.toFixed(1)}s)`);
+          resolve();
+        }
+      };
+
+      const pid: number = wl.runBox64('box64', args, env, '', cb);
+      if (pid <= 0) {
+        this.append(`[run error] pid=${pid}`);
+        resolve();
+      } else {
+        this.append(`[pid=${pid}] launched, streaming...`);
+      }
+    });
+  }
+
+  // 临时给 DebugPage 加个按钮看 wineserver 跑没跑
+  private async secWineserverProbe(): Promise<void> {
+    this.append('===== wineserver alive? =====');
+    const r = await this.runBox64Capture(
+      ['box64', 'sh', '-c', 'ps -ef 2>/dev/null | grep -i wine'],
+      this.buildEnv('1'), ''
+    );
+    this.append(r);
   }
 
   private async runOne(fn: () => Promise<void>): Promise<void> {
@@ -298,6 +785,47 @@ export struct DebugPage {
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineboot()); })
+        Button('预布置 prefix').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secSetupPrefix()); })
+        Button('重置+预布置').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secResetAndSetup()); })
+        Button('secWineserverProbe').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secWineserverProbe()); })
+        Button('box64-tmp').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secBox64Tmp()); })
+        Button('wineserver -f').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secWineserverFg()); })
+        Button('起 wineserver').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running && this.wineserverPid === 0)
+          .onClick((): void => { this.startWineserverBg(); })
+        Button('停 wineserver').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running && this.wineserverPid > 0)
+          .onClick((): void => { this.stopWineserverBg(); })
+        Button('wineboot (复用 ws)').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running && this.wineserverPid > 0)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secWinebootWithServer()); })
+        Button('wineprefix 健康').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
+          .onClick((): void => { this.secWinePrefixHealth(); })
+        Button('wine cmd').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE)
+          .enabled(!this.running && this.wineserverPid > 0)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secWineCmd()); })
       }
       .width('100%').margin({ bottom: 4 })
 

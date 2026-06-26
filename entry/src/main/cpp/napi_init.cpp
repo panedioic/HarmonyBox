@@ -5,6 +5,7 @@
 #include "input_window_napi.h"
 #include "fs_utils.h"
 #include "process_runner.h"
+#include "wineprefix_setup.h"
 
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
@@ -47,6 +48,10 @@ static napi_value Init(napi_env env, napi_value exports) {
 
         // ---- fs ----
         {"chmodDirFiles",         nullptr, fsutil::ChmodDirFilesNapi,      nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"ensureBox64TmpDir",     nullptr, fsutil::EnsureBox64TmpDirNapi,  nullptr,nullptr,nullptr, napi_default,nullptr},
+        
+        // ---- wineprefix prebuild ----
+        {"setupWinePrefix",       nullptr, wineprefix::SetupWinePrefixNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

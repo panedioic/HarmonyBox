@@ -159,3 +159,8 @@ export const requestClientResize: (
 
 /** chmod 0755 目录下所有非点开头的条目,返回成功的个数。 */
 export const chmodDirFiles: (dir: string) => number;
+
+export const ensureBox64TmpDir: () => boolean;
+
+//
+export const setupWinePrefix: (wineprefix: string, wineRoot: string) => boolean;

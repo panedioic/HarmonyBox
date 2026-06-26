@@ -86,6 +86,11 @@ export class CliService {
     if (!opts.gui && !opts.streaming) {
       return { pid: -1, code: -3, errorMsg: 'gui 与 streaming 至少一项为 true' };
     }
+    // CliService.ets - launchBox64 方法开头
+    if (!wl.ensureBox64TmpDir()) {
+      console.error('HBOX_CLI ensureBox64TmpDir failed');
+      // 不阻断启动，因为 C++ 侧还会在子进程中再检查一次
+    }
 
     const wlSvc = WaylandService.getInstance();
 

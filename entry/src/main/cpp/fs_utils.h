@@ -12,5 +12,6 @@ int ChmodDirFiles(const char* dir, mode_t mode);
 
 // napi 壳:chmodDirFiles(dir: string): number
 napi_value ChmodDirFilesNapi(napi_env env, napi_callback_info info);
+napi_value EnsureBox64TmpDirNapi(napi_env env, napi_callback_info info);
 
 } // namespace fsutil

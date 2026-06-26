@@ -45,4 +45,61 @@ napi_value ChmodDirFilesNapi(napi_env env, napi_callback_info info) {
     return r;
 }
 
+bool EnsureBox64TmpDir() {
+    const char* kBox64TmpDir = "/data/storage/el2/base/cache/box64-tmp";
+    mode_t kDirMode = 0700;
+    struct stat st;
+    // 1. 检查路径是否存在
+    if (stat(kBox64TmpDir, &st) != 0) {
+        // 不存在 → 创建
+        if (errno != ENOENT) {
+            OH_LOG_ERROR(LOG_APP,
+                         "stat(%{public}s) failed: %{public}s",
+                         kBox64TmpDir, strerror(errno));
+            return false;
+        }
+        if (mkdir(kBox64TmpDir, kDirMode) != 0) {
+            OH_LOG_ERROR(LOG_APP,
+                         "mkdir(%{public}s, 0700) failed: %{public}s",
+                         kBox64TmpDir, strerror(errno));
+            return false;
+        }
+        OH_LOG_INFO(LOG_APP,
+                    "box64 tmp dir created: %{public}s", kBox64TmpDir);
+        return true;
+    }
+    // 2. 已存在 → 校验是否为目录
+    if (!S_ISDIR(st.st_mode)) {
+        OH_LOG_ERROR(LOG_APP,
+                     "%{public}s exists but is not a directory",
+                     kBox64TmpDir);
+        return false;
+    }
+    // 3. 校验权限并修正
+    mode_t current_mode = st.st_mode & 0777;
+    if (current_mode != kDirMode) {
+        if (chmod(kBox64TmpDir, kDirMode) != 0) {
+            OH_LOG_ERROR(LOG_APP,
+                         "chmod(%{public}s, 0700) failed: %{public}s",
+                         kBox64TmpDir, strerror(errno));
+            return false;
+        }
+        OH_LOG_INFO(LOG_APP,
+                    "box64 tmp dir permissions fixed: 0%{public}o → 0%{public}o",
+                    current_mode, kDirMode);
+    } else {
+        OH_LOG_INFO(LOG_APP,
+                    "box64 tmp dir already OK: %{public}s (0%{public}o)",
+                    kBox64TmpDir, current_mode);
+    }
+    return true;
+}
+
+napi_value EnsureBox64TmpDirNapi(napi_env env, napi_callback_info info) {
+    bool ok = EnsureBox64TmpDir();
+    napi_value result;
+    napi_get_boolean(env, ok, &result);
+    return result;
+}
+
 } // namespace fsutil

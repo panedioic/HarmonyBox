@@ -71,6 +71,7 @@ add_library(entry SHARED
     process_runner.cpp
     client_napi.cpp
     input_window_napi.cpp
+    wineprefix_setup.cpp
 )
 
 target_link_libraries(entry PUBLIC
