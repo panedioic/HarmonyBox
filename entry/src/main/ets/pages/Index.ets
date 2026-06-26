@@ -14,6 +14,7 @@ import { LibraryPage } from '../components/LibraryPage';
 import { InstallPage } from '../components/InstallPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
+import { ProcManagerPage } from '../components/ProcManagerPage';
 import { DebugPage } from '../pages/DebugPage';
 
 interface MovableWindow { startMoving?: () => Promise<void>; }
@@ -685,6 +686,8 @@ struct Index {
       SettingsPage()
     } else if (this.currentPage === PageType.FILES) {
       FilesPage()
+    } else if (this.currentPage === PageType.PROC_MANAGER) {
+      ProcManagerPage()
     } else if (this.currentPage === PageType.DEBUG) {
       DebugPage()
     }

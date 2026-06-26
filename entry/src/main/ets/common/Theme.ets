@@ -16,5 +16,6 @@ export enum PageType {
   INSTALL = 'install',
   SETTINGS = 'settings',
   FILES = 'files',
-  DEBUG = 'debug'
+  DEBUG = 'debug',
+  PROC_MANAGER = 'PROC_MANAGER'
 }
