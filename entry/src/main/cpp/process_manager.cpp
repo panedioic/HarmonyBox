@@ -97,6 +97,22 @@ int64_t NowMillis() {
 //  通用辅助
 // ============================================================
 
+// 与 box64 一致, 读 BOX64_LOG 环境变量, 缓存到进程级.
+// 0 = 静默, 1 = INFO, 2 = DEBUG.
+// HAP 主进程读 self environ; sock-spawned 子进程会从父进程继承.
+int GetBox64LogLevel() {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    const char* v = getenv("BOX64_LOG");
+    cached = (v && *v) ? atoi(v) : 0;
+    if (cached < 0) cached = 0;
+    return cached;
+}
+#define BOX64_LOG_INFO(...)  \
+    do { if (GetBox64LogLevel() >= 1) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+#define BOX64_LOG_DEBUG(...) \
+    do { if (GetBox64LogLevel() >= 2) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+
 bool EndsWithBox64(const std::string& path) {
     // 比较 basename,不是简单 endswith("box64"),避免误判 "winebox64" 这种
     auto slash = path.find_last_of('/');
@@ -140,7 +156,7 @@ void CloseInheritedFdsExcept(int keep1, int keep2) {
 void UnmapLowAnonRegions() {
     FILE* f = fopen("/proc/self/maps", "r");
     if (!f) {
-        fprintf(stderr, "[unmap] open /proc/self/maps failed\n");
+        fprintf(stderr, "[procmgr] open /proc/self/maps failed\n");
         return;
     }
 
@@ -173,9 +189,8 @@ void UnmapLowAnonRegions() {
             fail++;
         }
     }
-    fprintf(stderr,
-        "[unmap] freed %d regions, total=%lu MB, failures=%d\n",
-        ok, total / 1024 / 1024, fail);
+    BOX64_LOG_DEBUG("[procmgr] freed %d regions, total=%lu MB, failures=%d\n",
+                ok, total / 1024 / 1024, fail);
     fflush(stderr);
 }
 
@@ -203,25 +218,25 @@ Box64RunFn LoadBox64RunInChild(void** out_handle) {
     for (const auto& path : candidates) {
         h = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
         if (h) {
-            fprintf(stderr, "[child] dlopen ok: %s\n", path.c_str());
+            BOX64_LOG_INFO("[procmgr] dlopen ok: %s\n", path.c_str());
             break;
         }
-        fprintf(stderr, "[child] dlopen %s -> %s\n",
+        fprintf(stderr, "[procmgr] dlopen %s -> %s\n",
                 path.c_str(), dlerror());
     }
     if (!h) {
-        fprintf(stderr, "[child] FATAL: cannot dlopen libbox64.so\n");
+        fprintf(stderr, "[procmgr] FATAL: child cannot dlopen libbox64.so\n");
         return nullptr;
     }
 
     auto fn = (Box64RunFn)dlsym(h, "box64_run");
     if (!fn) {
-        fprintf(stderr, "[child] FATAL: dlsym(box64_run) failed: %s\n",
+        fprintf(stderr, "[procmgr] FATAL: dlsym(box64_run) failed: %s\n",
                 dlerror());
         dlclose(h);
         return nullptr;
     }
-    fprintf(stderr, "[child] box64_run = %p\n", (void*)fn);
+    BOX64_LOG_DEBUG("[procmgr] box64_run = %p\n", (void*)fn);
     fflush(stderr);
     *out_handle = h;
     return fn;
@@ -483,23 +498,26 @@ pid_t SpawnBox64(const SpawnRequest& req) {
             argv2[i] = blob.data() + offs[i];
         }
 
-        fprintf(stderr, "[child] box64 argv (argc=%d):\n", total_argc);
-        for (int i = 0; i < total_argc; i++) {
-            fprintf(stderr, "  argv[%d] = %s\n", i, argv2[i]);
+        // SpawnBox64 child 分支里的 argv dump:
+        if (GetBox64LogLevel() >= 1) {
+            fprintf(stderr, "[procmgr] box64 argv (argc=%d):\n", total_argc);
+            for (int i = 0; i < total_argc; i++) {
+                fprintf(stderr, "  argv[%d] = %s\n", i, argv2[i]);
+            }
+            fflush(stderr);
         }
-        fflush(stderr);
 
         void* handle = nullptr;
         Box64RunFn fn = LoadBox64RunInChild(&handle);
         if (!fn) {
-            fprintf(stderr, "[child] cannot resolve box64_run, exit 125\n");
+            fprintf(stderr, "[procmgr] cannot resolve box64_run, exit 125\n");
             fflush(stderr);
             _exit(125);
         }
 
         int rc = fn(total_argc, argv2.data(), (const char**)environ);
         fprintf(stderr,
-            "[child] box64_run returned %d (0x%x), exit with %d\n",
+            "[procmgr] box64_run returned %d (0x%x), exit with %d\n",
             rc, rc, rc & 0xFF);
         fflush(NULL);
         _exit(rc & 0xFF);
