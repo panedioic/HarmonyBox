@@ -7,6 +7,7 @@
 #include <string>
 #include <sys/types.h>
 #include <vector>
+#include <memory>
 
 namespace procmgr {
 
@@ -51,6 +52,12 @@ struct SpawnRequest {
     CaptureSink* capture = nullptr;
     
     bool sync_wait = false;                 // 阻塞等子进程结束
+    
+    // 共享 sink. 优先级高于 raw stream/capture 指针.
+    std::shared_ptr<StreamSink>  shared_stream;
+    std::shared_ptr<CaptureSink> shared_capture;
+    
+    pid_t caller_pid = -1;   // sock 路径下由 HandleCreate 填; NAPI 直调时 -1
 };
 
 struct SpawnResult {
@@ -62,12 +69,16 @@ struct SpawnResult {
 
 struct ProcessInfo {
     pid_t       pid           = 0;
-    pid_t       parent_pid    = 0;        // 0 = 由 NAPI 主进程发起
+    pid_t       parent_pid    = 0;        // 逻辑父进程 (SO_PEERCRED 拿到)
     LaunchKind  kind          = LaunchKind::kNative;
     std::string exe_path;
     int64_t     start_time_ms = 0;        // epoch 毫秒
     int         exit_code     = -1;       // -1 = 尚未退出
     bool        alive         = true;
+    // 共享 sink. NAPI 调用时由入口填; sock 路径通过 peer PID
+    // 反查父进程, 把这两个字段继承过来.
+    std::shared_ptr<StreamSink>  shared_stream;
+    std::shared_ptr<CaptureSink> shared_capture;
 };
 
 // ============================================================

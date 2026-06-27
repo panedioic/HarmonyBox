@@ -52,6 +52,13 @@ public:
         std::lock_guard<std::mutex> lk(mu_);
         table_[info.pid] = info;
     }
+    
+    std::optional<ProcessInfo> Lookup(pid_t pid) {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = table_.find(pid);
+        if (it == table_.end()) return std::nullopt;
+        return it->second;
+    }
 
     void MarkExited(pid_t pid, int exit_code) {
         std::lock_guard<std::mutex> lk(mu_);
@@ -59,6 +66,11 @@ public:
         if (it != table_.end()) {
             it->second.alive = false;
             it->second.exit_code = exit_code;
+            // 释放本节点对 sink 的引用. 若链上还有活进程持有,
+            // shared_ptr 不会真析构. 全死光才触发 deleter 里的
+            // napi_release_threadsafe_function.
+            it->second.shared_stream.reset();
+            it->second.shared_capture.reset();
         }
     }
 
@@ -507,7 +519,13 @@ pid_t SpawnBox64(const SpawnRequest& req) {
 //  对外 API 实现
 // ============================================================
 
-SpawnResult Spawn(const SpawnRequest& req) {
+SpawnResult Spawn(const SpawnRequest& req_in) {
+    SpawnRequest req = req_in;   // 拷贝以便回填 raw 指针
+    
+    // shared_ptr -> raw 转发 (raw 指针仍然由 ForkWithIo / reader 用)
+    if (req.shared_stream  && !req.stream)  req.stream  = req.shared_stream.get();
+    if (req.shared_capture && !req.capture) req.capture = req.shared_capture.get();
+    
     SpawnResult res;
     res.kind = ResolveKind(req);
 
@@ -549,11 +567,15 @@ SpawnResult Spawn(const SpawnRequest& req) {
 
     ProcessInfo info;
     info.pid           = pid;
-    info.parent_pid    = getpid();
+    info.parent_pid    = req.caller_pid > 0 ? req.caller_pid : getpid();
+    // caller_pid 字段: 见 Step 3, 加到 SpawnRequest. 如果嫌字段多,
+    // 也可以从全局 thread_local "current_peer_pid" 取, 但显式字段更干净.
     info.kind          = res.kind;
     info.exe_path      = req.exe_path;
     info.start_time_ms = NowMillis();
     info.alive         = true;
+    info.shared_stream  = req.shared_stream;
+    info.shared_capture = req.shared_capture;
     Manager::Instance().Register(info);
 
     OH_LOG_INFO(LOG_APP,
@@ -692,7 +714,9 @@ std::pair<std::string, std::string> SplitKV(const std::string& line) {
     return {line.substr(0, sp), line.substr(sp + 1)};
 }
 
-void HandleCreate(const std::vector<std::string>& lines, std::string* resp) {
+void HandleCreate(const std::vector<std::string>& lines,
+                  pid_t peer_pid,
+                  std::string* resp) {
     SpawnRequest req;
     int req_id = 0;
     bool sync_wait = false;
@@ -712,6 +736,23 @@ void HandleCreate(const std::vector<std::string>& lines, std::string* resp) {
     }
     
     req.sync_wait = sync_wait;
+    
+    // 反查 peer 的 ProcessInfo, 继承 sink + 记录逻辑父
+    if (peer_pid > 0) {
+        auto parent = Manager::Instance().Lookup(peer_pid);
+        if (parent) {
+            req.shared_stream  = parent->shared_stream;
+            req.shared_capture = parent->shared_capture;
+            req.caller_pid     = peer_pid;
+            OH_LOG_INFO(LOG_APP,
+                "[ctrl] inherit from peer pid=%{public}d has_stream=%{public}d",
+                (int)peer_pid, req.shared_stream ? 1 : 0);
+        } else {
+            OH_LOG_WARN(LOG_APP,
+                "[ctrl] peer pid=%{public}d not in Manager (will use root)",
+                (int)peer_pid);
+        }
+    }
 
     SpawnResult r = Spawn(req);
     std::string& s = *resp;
@@ -740,6 +781,19 @@ void HandleClient(int fd) {
         return;
     }
     
+    // 拿 peer PID. AF_UNIX 原生支持, 无需协议传递.
+    struct ucred peer{};
+    socklen_t plen = sizeof(peer);
+    pid_t peer_pid = -1;
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &plen) == 0) {
+        peer_pid = peer.pid;
+        OH_LOG_INFO(LOG_APP, "[ctrl] new client peer_pid=%{public}d",
+                    (int)peer_pid);
+    } else {
+        OH_LOG_WARN(LOG_APP, "[ctrl] SO_PEERCRED failed: %{public}s",
+                    strerror(errno));
+    }
+    
     while (g_ctrl.running.load()) {
         std::string frame;
         if (!ReadFrame(fd, &frame)) break;
@@ -761,7 +815,7 @@ void HandleClient(int fd) {
         std::string resp;
         auto cmd = SplitKV(lines[0]);
         if (cmd.first == "CMD" && cmd.second == "CREATE") {
-            HandleCreate(lines, &resp);
+            HandleCreate(lines, peer_pid, &resp);
         } else if (cmd.first == "CMD" && cmd.second == "PING") {
             resp = "PONG\nEND";
         } else if (cmd.first == "CMD" && cmd.second == "TERMINATE") {
@@ -911,7 +965,8 @@ void ConfigureStreamSink(StreamSink& sink,
         sink.on_exit = [tsfn](pid_t, int code) {
             auto* ev = new RunEvent{"exit", std::to_string(code)};
             napi_call_threadsafe_function(tsfn, ev, napi_tsfn_blocking);
-            napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+            // 注意: 不再调 napi_release_threadsafe_function.
+            // release 由 shared_ptr 自定义 deleter 在引用计数归零时做.
         };
     } else {
         std::string tag = hilog_tag;
@@ -926,6 +981,17 @@ KindHint ParseKindHint(const std::string& s) {
     if (s == "native") return KindHint::kForceNative;
     if (s == "box64")  return KindHint::kForceBox64;
     return KindHint::kAuto;
+}
+
+std::shared_ptr<StreamSink> MakeSharedStreamSink(napi_threadsafe_function tsfn,
+                                                 const char* hilog_tag) {
+    auto* raw = new StreamSink();
+    ConfigureStreamSink(*raw, tsfn, hilog_tag);
+    return std::shared_ptr<StreamSink>(raw, [tsfn](StreamSink* p) {
+        // 整条逻辑链上所有进程都退出后才到这里. 一次性释放 tsfn.
+        if (tsfn) napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        delete p;
+    });
 }
 
 } // anonymous namespace
@@ -949,15 +1015,16 @@ napi_value RunCommandNapi(napi_env env, napi_callback_info info) {
         req.kind_hint = ParseKindHint(napiutil::GetStringArg(env, args[5]));
     }
 
-    StreamSink sink;
+    // 用 shared_ptr 取代栈上 StreamSink
     LaunchKind kind = ResolveKind(req);
-    ConfigureStreamSink(sink, tsfn,
-                        kind == LaunchKind::kBox64 ? "box64" : "cmd");
-    req.stream = &sink;
+    req.shared_stream = MakeSharedStreamSink(tsfn,
+        kind == LaunchKind::kBox64 ? "box64" : "cmd");
 
     SpawnResult r = Spawn(req);
     if (r.pid <= 0 && tsfn) {
-        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        // Spawn 失败: shared_stream RAII 析构会触发 deleter 自动 release tsfn.
+        // 不需要手动 release.
+        // napi_release_threadsafe_function(tsfn, napi_tsfn_release);
     }
 
     napi_value out;
@@ -1069,13 +1136,13 @@ napi_value RunBox64NapiCompat(napi_env env, napi_callback_info info) {
         ? MaybeCreateRunTsfn(env, args[4], "RunBox64CbCompat")
         : nullptr;
 
-    StreamSink sink;
-    ConfigureStreamSink(sink, tsfn, "box64");
-    req.stream = &sink;
+    req.shared_stream = MakeSharedStreamSink(tsfn, "box64");
 
     SpawnResult r = Spawn(req);
     if (r.pid <= 0 && tsfn) {
-        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        // Spawn 失败: shared_stream RAII 析构会触发 deleter 自动 release tsfn.
+        // 不需要手动 release.
+        // napi_release_threadsafe_function(tsfn, napi_tsfn_release);
     }
 
     napi_value out;
