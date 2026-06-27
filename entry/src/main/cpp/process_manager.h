@@ -49,12 +49,15 @@ struct SpawnRequest {
     // stream / capture 同时只能有一个非空,都为空则 stdout/stderr → /dev/null
     StreamSink*  stream  = nullptr;
     CaptureSink* capture = nullptr;
+    
+    bool sync_wait = false;                 // 阻塞等子进程结束
 };
 
 struct SpawnResult {
     pid_t       pid  = -1;                 // > 0 表示成功
     LaunchKind  kind = LaunchKind::kNative;
     std::string error;                     // 失败时填,成功时为空
+    int exit_code = -1;                    // 新增: sync_wait=true 且 pid>0 时有效
 };
 
 struct ProcessInfo {

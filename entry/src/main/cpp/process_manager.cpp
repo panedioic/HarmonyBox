@@ -295,6 +295,19 @@ void WaiterOnlyMain(pid_t pid) {
     Manager::Instance().MarkExited(pid, code);
 }
 
+// 同步等子进程退出, 更新 Registry, 返回 exit code (signal kill -> 128+sig).
+int WaitChildSync(pid_t pid) {
+    int status = 0;
+    int code = -1;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) { code = -1; break; }
+    }
+    if      (WIFEXITED(status))   code = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
+    Manager::Instance().MarkExited(pid, code);
+    return code;
+}
+
 // ============================================================
 //  fork 通用前置
 // ============================================================
@@ -414,7 +427,10 @@ pid_t SpawnNative(const SpawnRequest& req) {
         _exit(127);
     }
 
-    if (need_pipe || true /* always need waiter */) {
+    if (req.sync_wait) {
+        // 同步模式: 不起 reader/waiter, 由 Spawn() 父侧 waitpid
+        if (read_fd >= 0) close(read_fd);
+    } else {
         StartReader(read_fd, pid, req.stream, req.capture);
     }
     return pid;
@@ -477,7 +493,11 @@ pid_t SpawnBox64(const SpawnRequest& req) {
         _exit(rc & 0xFF);
     }
 
-    StartReader(read_fd, pid, req.stream, req.capture);
+    if (req.sync_wait) {
+        if (read_fd >= 0) close(read_fd);
+    } else {
+        StartReader(read_fd, pid, req.stream, req.capture);
+    }
     return pid;
 }
 
@@ -491,8 +511,14 @@ SpawnResult Spawn(const SpawnRequest& req) {
     SpawnResult res;
     res.kind = ResolveKind(req);
 
+    // ---- validation ----
     if (req.stream && req.capture) {
         res.error = "stream and capture are mutually exclusive";
+        OH_LOG_ERROR(LOG_APP, "%{public}s", res.error.c_str());
+        return res;
+    }
+    if (req.sync_wait && (req.stream || req.capture)) {
+        res.error = "sync_wait excludes stream/capture";
         OH_LOG_ERROR(LOG_APP, "%{public}s", res.error.c_str());
         return res;
     }
@@ -512,6 +538,7 @@ SpawnResult Spawn(const SpawnRequest& req) {
         }
     }
 
+    // ---- fork+exec ----
     pid_t pid = (res.kind == LaunchKind::kBox64) ? SpawnBox64(req)
                                                  : SpawnNative(req);
     if (pid <= 0) {
@@ -535,6 +562,20 @@ SpawnResult Spawn(const SpawnRequest& req) {
         (uint32_t)req.argv.size());
 
     res.pid = pid;
+    
+    // ---- sync wait or async return ----
+    if (req.sync_wait) {
+        res.exit_code = WaitChildSync(pid);
+        OH_LOG_INFO(LOG_APP,
+            "sync spawn done pid=%{public}d kind=%{public}s exit=%{public}d",
+            pid, KindCStr(res.kind), res.exit_code);
+    } else {
+        OH_LOG_INFO(LOG_APP,
+            "spawn ok pid=%{public}d kind=%{public}s exe=%{public}s argc=%{public}u",
+            pid, KindCStr(res.kind), req.exe_path.c_str(),
+            (uint32_t)req.argv.size());
+    }
+    
     return res;
 }
 
@@ -589,11 +630,14 @@ namespace {
 
 struct ControlState {
     std::atomic<bool> running{false};
+    std::atomic<int>  active{0};
     int               listen_fd = -1;
     std::string       sock_path;
     std::thread       accept_thread;
 };
 ControlState g_ctrl;
+
+constexpr int kMaxControlClients = 32; 
 
 bool ReadExact(int fd, void* buf, size_t n) {
     auto* p = static_cast<uint8_t*>(buf);
@@ -651,6 +695,7 @@ std::pair<std::string, std::string> SplitKV(const std::string& line) {
 void HandleCreate(const std::vector<std::string>& lines, std::string* resp) {
     SpawnRequest req;
     int req_id = 0;
+    bool sync_wait = false;
     for (const auto& ln : lines) {
         auto kv = SplitKV(ln);
         if      (kv.first == "REQ_ID") req_id = atoi(kv.second.c_str());
@@ -658,19 +703,25 @@ void HandleCreate(const std::vector<std::string>& lines, std::string* resp) {
         else if (kv.first == "ARG")    req.argv.push_back(kv.second);
         else if (kv.first == "ENV")    req.env.push_back(kv.second);
         else if (kv.first == "CWD")    req.cwd = kv.second;
+        else if (kv.first == "WAIT")   sync_wait = (kv.second == "1");
         else if (kv.first == "KIND") {
             if      (kv.second == "native") req.kind_hint = KindHint::kForceNative;
             else if (kv.second == "box64")  req.kind_hint = KindHint::kForceBox64;
             else                            req.kind_hint = KindHint::kAuto;
         }
     }
+    
+    req.sync_wait = sync_wait;
 
     SpawnResult r = Spawn(req);
     std::string& s = *resp;
-    s = "RESULT\nREQ_ID " + std::to_string(req_id) + "\n";
+    s  = "RESULT\nREQ_ID " + std::to_string(req_id) + "\n";
     if (r.pid > 0) {
         s += "STATUS ok\nPID " + std::to_string(r.pid) + "\n";
         s += std::string("KIND ") + KindCStr(r.kind) + "\n";
+        if (sync_wait) {
+            s += "EXIT_CODE " + std::to_string(r.exit_code) + "\n";
+        }
     } else {
         s += "STATUS error\nMSG " + (r.error.empty() ? "unknown" : r.error) + "\n";
     }
@@ -678,6 +729,17 @@ void HandleCreate(const std::vector<std::string>& lines, std::string* resp) {
 }
 
 void HandleClient(int fd) {
+    int n_after = g_ctrl.active.fetch_add(1) + 1;
+    if (n_after > kMaxControlClients) {
+        WriteFrame(fd, "RESULT\nSTATUS error\nMSG too_many_clients\nEND");
+        close(fd);
+        g_ctrl.active.fetch_sub(1);
+        OH_LOG_WARN(LOG_APP,
+            "ctrl: rejected client, active=%{public}d max=%{public}d",
+            n_after, kMaxControlClients);
+        return;
+    }
+    
     while (g_ctrl.running.load()) {
         std::string frame;
         if (!ReadFrame(fd, &frame)) break;
@@ -727,6 +789,7 @@ void HandleClient(int fd) {
         if (!WriteFrame(fd, resp)) break;
     }
     close(fd);
+    g_ctrl.active.fetch_sub(1);
 }
 
 void AcceptLoop() {

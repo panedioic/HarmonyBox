@@ -91,6 +91,9 @@ export class CliService {
       console.error('HBOX_CLI ensureBox64TmpDir failed');
       // 不阻断启动，因为 C++ 侧还会在子进程中再检查一次
     }
+    // 启动 Control Socket，用于创建子进程。若已经创建过则会略过。
+    // socket 暂时写死
+    wl.startProcMgr('/data/storage/el2/base/haps/entry/files/.procmgr.sock');
 
     const wlSvc = WaylandService.getInstance();
 

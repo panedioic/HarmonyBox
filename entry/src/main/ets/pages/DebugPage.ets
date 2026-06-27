@@ -18,7 +18,10 @@ export struct DebugPage {
   @State running: boolean = false;
   @State copyHint: boolean = false;
   @State wineserverPid: number = 0;
+  @State sockStarted: boolean = false;
   private scroller: Scroller = new Scroller();
+  private readonly procSockPath: string =
+    '/data/storage/el2/base/haps/entry/files/.procmgr.sock';
 
   private append(s: string): void {
     this.output = this.output + s + '\n';
@@ -699,6 +702,38 @@ export struct DebugPage {
     this.append(r);
   }
 
+  private secStartSock(): void {
+    this.append('===== START PROCMGR SOCK =====');
+    this.append(`path = ${this.procSockPath}`);
+    if (this.sockStarted) {
+      this.append('(already started, skip)');
+      return;
+    }
+    let ok: boolean = false;
+    try {
+      ok = wl.startProcMgr(this.procSockPath);
+    } catch (e) {
+      this.append(`[err] ${(e as Error).message}`);
+      return;
+    }
+    this.sockStarted = ok;
+    this.append(ok ? '[ok] listening' : '[fail] start returned false');
+    // 启动后, 后续 box64 子进程的 BOX64_SPAWN_STRATEGY=sock 才能走通.
+    // 当前 buildEnv 没设这个环境变量, 默认就是 sock, 直接生效.
+  }
+
+  private secStopSock(): void {
+    this.append('===== STOP PROCMGR SOCK =====');
+    try {
+      wl.stopProcMgr();
+    } catch (e) {
+      this.append(`[err] ${(e as Error).message}`);
+      return;
+    }
+    this.sockStarted = false;
+    this.append('[ok] stopped');
+  }
+
   private async runOne(fn: () => Promise<void>): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -826,6 +861,16 @@ export struct DebugPage {
           .backgroundColor(Theme.HM_BLUE)
           .enabled(!this.running && this.wineserverPid > 0)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineCmd()); })
+        Button(this.sockStarted ? '✓ ProcMgr Sock' : '起 ProcMgr Sock').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(this.sockStarted ? '#5DD46E' : Theme.HM_BLUE)
+          .enabled(!this.running && !this.sockStarted)
+          .onClick((): void => { this.secStartSock(); })
+        Button('停 ProcMgr Sock').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#F0F0F0').fontColor('#333333')
+          .enabled(!this.running && this.sockStarted)
+          .onClick((): void => { this.secStopSock(); })
       }
       .width('100%').margin({ bottom: 4 })
 
