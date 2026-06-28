@@ -134,7 +134,7 @@ export function runBox64(
   argv: string[],
   env: string[],
   cwd?: string,
-  onEvent?: ProcEventCallback
+  onEvent?: ProcEventCallback | null
 ): number;
 /** SIGTERM,800ms 后仍存活补 SIGKILL。pid <= 0 静默忽略 */
 export function terminate(pid: number): void;

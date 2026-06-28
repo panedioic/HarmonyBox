@@ -14,7 +14,7 @@
 #include <vector>
 
 #undef  LOG_TAG
-#define LOG_TAG "WL_HBox"
+#define LOG_TAG "HBox_NAPI_WPF"
 #include <hilog/log.h>
 
 namespace wineprefix {
@@ -351,6 +351,44 @@ bool SetupWinePrefix(const std::string& wineprefix,
         CopyDirPE(src_syswow, syswow64);
     } else {
         OH_LOG_INFO(LOG_APP, "[wineprefix] no 32-bit PE dir, skipping syswow64");
+    }
+    
+    // ---- 4.5. 严格校验关键文件 ----
+    struct CriticalFile { const char* name; off_t min_size; };
+    static const CriticalFile kCritical[] = {
+        {"ntdll.dll",     500 * 1024},
+        {"kernel32.dll",  500 * 1024},
+        {"kernelbase.dll",500 * 1024},
+        {"user32.dll",    300 * 1024},
+        {"wineboot.exe",   10 * 1024},
+        {"cmd.exe",        10 * 1024},
+        {"start.exe",       5 * 1024},
+    };
+    int missing = 0;
+    for (const auto& cf : kCritical) {
+        std::string dst = sys32 + "/" + cf.name;
+        off_t sz = FileSize(dst);
+        if (sz < 0) {
+            OH_LOG_ERROR(LOG_APP,
+                "[wineprefix] CRITICAL MISSING: %{public}s", dst.c_str());
+            missing++;
+        } else if (sz < cf.min_size) {
+            OH_LOG_ERROR(LOG_APP,
+                "[wineprefix] CRITICAL TOO SMALL: %{public}s size=%{public}lld "
+                "min=%{public}lld (likely .so wrapper, not real PE)",
+                dst.c_str(), (long long)sz, (long long)cf.min_size);
+            missing++;
+        } else {
+            OH_LOG_INFO(LOG_APP,
+                "[wineprefix] critical OK: %{public}s size=%{public}lld",
+                cf.name, (long long)sz);
+        }
+    }
+    if (missing > 0) {
+        OH_LOG_ERROR(LOG_APP,
+            "[wineprefix] %{public}d critical files missing/bad, aborting setup",
+            missing);
+        return false;
     }
 
     // ---- 5. 写标记 ----

@@ -84,6 +84,14 @@ export class WineService {
     try { if (fs.accessSync(prefix)) fs.rmdirSync(prefix); } catch (e) { /* ignore */ }
   }
 
+  // WineService.ts
+  static wipePrefix(ctx: common.Context): void {
+    const prefix: string = `${ctx.filesDir}/${PREFIX_DIR_NAME}`;
+    try {
+      if (fs.accessSync(prefix)) fs.rmdirSync(prefix);
+    } catch (e) { /* ignore */ }
+  }
+
   // 探测版本: box64 wine --version
   static async fetchVersion(ctx: common.Context): Promise<string> {
     const status: WineStatus = WineService.probe(ctx);

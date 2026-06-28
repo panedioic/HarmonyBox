@@ -1217,11 +1217,23 @@ napi_value RunBox64NapiCompat(napi_env env, napi_callback_info info) {
         if (!req.exe_path.empty()) req.argv.push_back(req.exe_path);
     }
 
-    napi_threadsafe_function tsfn = (argc >= 5)
-        ? MaybeCreateRunTsfn(env, args[4], "RunBox64CbCompat")
-        : nullptr;
-
-    req.shared_stream = MakeSharedStreamSink(tsfn, "box64");
+    // 参数 5 类型决定模式:
+    //   napi_function          -> 创建 tsfn + stream sink, pipe 转发到 ArkTS
+    //   null / undefined / 其他 -> 静默模式, 不创建 pipe,
+    //                              子进程 stdout/stderr -> /dev/null
+    //                              子进程退出仍由 WaiterOnlyMain reap,
+    //                              但不向 ArkTS 发 'exit' 事件
+    napi_threadsafe_function tsfn = nullptr;
+    if (argc >= 5) {
+        napi_valuetype t = napi_undefined;
+        napi_typeof(env, args[4], &t);
+        if (t == napi_function) {
+            tsfn = MaybeCreateRunTsfn(env, args[4], "RunBox64CbCompat");
+        }
+    }
+    if (tsfn) {
+        req.shared_stream = MakeSharedStreamSink(tsfn, "box64");
+    }
 
     SpawnResult r = Spawn(req);
     if (r.pid <= 0 && tsfn) {

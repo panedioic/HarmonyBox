@@ -2279,119 +2279,6 @@ size_t box32_malloc_usable_size(void* p) {
 EOF_LOW4GB_V2
 }
 
-patch_29_route_boxmalloc_in_box32() {
-    local f="$BOX64/src/mallochook.c"
-    local mark='OHOS_PATCH_ROUTE_BOX32'
-
-    [ -f "$f" ] || { _patch_header 29 "(skip) mallochook.c not found" ""; return 0; }
-    if _already "$f" "$mark"; then
-        _patch_header 29 "src/mallochook.c" "route box_* through box32_* — already patched"
-        return 0
-    fi
-    _patch_header 29 "src/mallochook.c" "in BOX32 mode, route box_malloc/box_strdup through low-4GB allocator"
-
-    # 在文件末尾追加路由 wrapper, 用 weak 覆盖
-    cat >> "$f" << 'EOF_ROUTE'
-
-/* ============================================================
- * OHOS_PATCH_ROUTE_BOX32 (patch 29)
- *
- * box64 内部很多地方调 box_malloc / box_strdup, 其中一部分结果
- * 会被写进 32-bit guest 可见的槽 (PHDR 拷贝 / argv / envp / TLS
- * image / 库名字符串 / ...). host malloc 返回高地址会让这些槽
- * 截断后变成野指针.
- *
- * 上游 box64 在 x86_64 host 上靠 personality(ADDR_LIMIT_32BIT)
- * 全局压低. OHOS HAP/HNP 拿不到这个 personality.
- *
- * 这里粗暴方案: BOX32 模式下所有 box_malloc/box_strdup 都从低
- * 4GB 堆切. 副作用是 box64 自己 64-bit 用的内部数据也挤进低
- * 4GB, 浪费内存但保证不会越界. 后期可以用 sed 标记真正需要低
- * 4GB 的 site, 再回退到混合策略.
- * ============================================================ */
-extern int box64_is32bits;
-extern void* box32_malloc(size_t);
-extern void* box32_calloc(size_t, size_t);
-extern void* box32_realloc(void*, size_t);
-extern void  box32_free(void*);
-extern char* box32_strdup(const char*);
-
-/* 用 __wrap_ 风格 hook 不动, 直接覆盖原符号. mallochook.c 里
- * box_* 通常是 weak / 普通定义, 我们通过 patch_27 已经把它们
- * 替换成 host malloc 直通. 这里在底层换路: 检查 box64_is32bits.
- */
-
-/* 把 box_malloc/box_strdup/... 的实现改写, 进 32-bit 时分流.
- * 假设 patch_27 之后的实现是直调 malloc/strdup; 我们用宏覆盖 */
-
-#define OHOS_BOX_ROUTE_MALLOC(host_fn, b32_fn) do { \
-    if (box64_is32bits) return b32_fn;              \
-    return host_fn;                                  \
-} while(0)
-/* OHOS_PATCH_ROUTE_BOX32 END */
-EOF_ROUTE
-
-    # 把 mallochook.c 里 box_malloc/box_strdup 等函数体的"return malloc(...)"
-    # 形式替换成路由版. 注意每个项目的 mallochook.c 形态不同, 这里用 python
-    # 严格匹配 patch_27 留下的简单实现.
-    python3 - "$f" << 'PYEOF'
-import re, sys, pathlib
-p = pathlib.Path(sys.argv[1])
-src = p.read_text()
-
-# 简单的"return malloc(s);" / "return strdup(s);" 形式替换
-# patch_27 之后的形态大致是:
-#   void* box_malloc(size_t s) { return malloc(s); }
-#   char* box_strdup(const char* s) { return strdup(s); }
-
-repls = [
-    (r'(void\s*\*\s*box_malloc\s*\([^)]*\)\s*\{\s*)return malloc\(([^)]+)\)\s*;',
-     r'\1if (box64_is32bits) return box32_malloc(\2); return malloc(\2);'),
-    (r'(void\s*\*\s*box_calloc\s*\([^)]*\)\s*\{\s*)return calloc\(([^,]+),([^)]+)\)\s*;',
-     r'\1if (box64_is32bits) return box32_calloc(\2,\3); return calloc(\2,\3);'),
-    (r'(void\s*\*\s*box_realloc\s*\([^)]*\)\s*\{\s*)return realloc\(([^,]+),([^)]+)\)\s*;',
-     r'\1if (box64_is32bits) return box32_realloc(\2,\3); return realloc(\2,\3);'),
-    (r'(void\s+box_free\s*\(\s*void\s*\*\s*([a-zA-Z_]\w*)\s*\)\s*\{\s*)free\(\2\)\s*;',
-     r'\1if (box64_is32bits && \2 >= (void*)0x10000000UL && \2 < (void*)0x20000000UL) { box32_free(\2); return; } free(\2);'),
-    (r'(char\s*\*\s*box_strdup\s*\([^)]*\)\s*\{\s*(?:[^}]*?return NULL;\s*)?)return strdup\(([^)]+)\)\s*;',
-     r'\1if (box64_is32bits) return box32_strdup(\2); return strdup(\2);'),
-]
-changes = 0
-for pat, rep in repls:
-    new, n = re.subn(pat, rep, src, count=1)
-    if n:
-        src = new
-        changes += n
-        print(f"  applied: {pat[:60]}...")
-
-p.write_text(src)
-print(f"  patch_29 applied {changes} replacements")
-PYEOF
-}
-
-patch_30_default_prefer_wrapped_libs() {
-    local f="$BOX64/src/include/env.h"
-    local mark='OHOS_PATCH_PREFER_WRAPPED'
-
-    [ -f "$f" ] || { _patch_header 30 "(skip) env.h not found" ""; return 0; }
-    if _already "$f" "$mark"; then
-        _patch_header 30 "src/include/env.h" "default prefer wrapped libs — already patched"
-        return 0
-    fi
-    _patch_header 30 "src/include/env.h" "default BOX64_PREFER_WRAPPED_LIBS=1"
-
-    # 把 BOX64_PREFER_WRAPPED_LIBS 默认值从 0 改到 1
-    # 形如:  BOOLEAN(BOX64_PREFER_WRAPPED_LIBS, prefer_wrapped, 0, 0)
-    #               ^name                    ^var          ^def ^reset
-    sed -i -E \
-        's|(BOX64_PREFER_WRAPPED[A-Z_]*),([[:space:]]*[a-z_]+),[[:space:]]*0,([[:space:]]*[01])|\1,\2, 1,\3|' \
-        "$f"
-
-    # 标记
-    sed -i '1i\
-/* OHOS_PATCH_PREFER_WRAPPED — default BOX64_PREFER_WRAPPED_LIBS=1 */' "$f"
-}
-
 # ================================================================
 # Patch 31 — src/include/box32.h: 关闭 >4GB 指针的 abort 开关
 # ================================================================
@@ -3449,6 +3336,1967 @@ print("  patch_36: box_mmap intercept inserted")
 PY
 }
 
+# ================================================================
+# Patch 62 — src/wrapped/wrappedlibc.c: my_mmap64 NOREPLACE fallback
+# ================================================================
+# 现象:
+#   wine ntdll.so 启动期连续探测高位 VA, 全部返回 ENOSYS:
+#     mmap(0x8000000000000000, 0x1000, 0x0, 0x100022, -1, 0)  -> ENOSYS
+#     mmap(0x400000000,        0x1000, 0x0, 0x100022, -1, 0)  -> ENOSYS
+#     mmap(0x100000000,        0x1000, 0x0, 0x100022, -1, 0)  -> ENOSYS
+#   ntdll 看见 ENOSYS 直接 exit(1).
+#
+# 根因:
+#   HAP seccomp policy 用 SECCOMP_RET_ERRNO(ENOSYS) 静默拒绝带
+#   MAP_FIXED_NOREPLACE (0x100000) 的 mmap. 不发 SIGSYS, 所以 patch 50
+#   的 handler 完全没参与, 错误码 ENOSYS 直接透传给 guest.
+#
+#   上游 wrappedlibc.c:3645 本来有 fallback 块, 但被整段注释了.
+#
+# 修法:
+#   在 my_mmap64 调 box_mmap 之后加一个 retry: 如果返回 ENOSYS/EINVAL
+#   且 flags 含 MAP_FIXED_NOREPLACE, 就 strip 这个 flag 重试. 重试后
+#   如果内核给的地址不是请求的 addr, 用 munmap + EEXIST 模拟 NOREPLACE
+#   语义 (调用方拿到 EEXIST 与真正的 NOREPLACE 行为一致, 会试下一个 addr).
+#
+# 影响范围:
+#   覆盖 my_mmap / my_mmap64 (alias). 32-bit guest (my32_mmap) 暂不修,
+#   wine x86_64 不走那条路径.
+patch_62_mmap_noreplace_fallback() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_MMAP_NOREPLACE_FALLBACK'
+
+    [ -f "$f" ] || { _patch_header 62 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 62 "src/wrapped/wrappedlibc.c" "MAP_FIXED_NOREPLACE fallback — already"
+        return 0
+    fi
+    _patch_header 62 "src/wrapped/wrappedlibc.c" "seccomp ENOSYS fallback for MAP_FIXED_NOREPLACE"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+old = (
+    '    void* ret = box_mmap(addr, length, prot, flags, fd, offset);\n'
+    '    int e = errno;\n'
+)
+n = s.count(old)
+if n != 1:
+    print("ERROR: my_mmap64 target string count=%d (need 1)" % n, file=sys.stderr)
+    sys.exit(1)
+
+new = '''    /* OHOS_PATCH_MMAP_NOREPLACE_FALLBACK START
+     * HAP seccomp denies mmap with MAP_FIXED_NOREPLACE via
+     * SECCOMP_RET_ERRNO(ENOSYS). Retry without the flag and
+     * simulate NOREPLACE semantics by checking returned address.
+     * Without this, wine/ntdll fails VA probing and exits. */
+#ifndef BOX64_OHOS_MAP_FIXED_NOREPLACE
+#define BOX64_OHOS_MAP_FIXED_NOREPLACE 0x100000
+#endif
+    void* ret = box_mmap(addr, length, prot, flags, fd, offset);
+    int e = errno;
+    if (ret == MAP_FAILED && (e == ENOSYS || e == EINVAL)
+        && (flags & BOX64_OHOS_MAP_FIXED_NOREPLACE)
+        && !(flags & MAP_FIXED) && addr) {
+        int fb_flags = flags & ~BOX64_OHOS_MAP_FIXED_NOREPLACE;
+        ret = box_mmap(addr, length, prot, fb_flags, fd, offset);
+        e = errno;
+        if (ret != MAP_FAILED && (uintptr_t)ret != (uintptr_t)addr) {
+            /* hint not honored -> caller asked NOREPLACE, fail with EEXIST */
+            box_munmap(ret, length);
+            ret = MAP_FAILED;
+            e = EEXIST;
+        }
+    }
+    /* OHOS_PATCH_MMAP_NOREPLACE_FALLBACK END */
+'''
+
+s = s.replace(old, new, 1)
+open(p, 'w').write(s)
+print("  patch_62: my_mmap64 fallback inserted")
+PY
+}
+
+# ================================================================
+# Patch 63 — src/tools/wine_tools.c: 给 KUSER_SHARED_DATA 留洞
+# ================================================================
+# 现象:
+#   wine ntdll 启动期调
+#     mmap(0x7ffe0000, 0x1000, PROT_READ,
+#          MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANON, -1, 0)
+#   box64 的 wine prereserve 表第 3 条 {0x7f000000, 0x03000000} 把
+#   [0x7f000000, 0x82000000) 整段占了, 包含 0x7ffe0000. Patch 62 的
+#   NOREPLACE fallback 因为地址被占, 退回 EEXIST 给 wine, wine exit(1).
+#
+#   0x7ffe0000 是 Windows ABI 强制的 KUSER_SHARED_DATA 绝对地址,
+#   wine ntdll 必须能拿到这一页. 真 Linux 上 wine-preloader 也是这么做的:
+#   prereserve 时给它留一个 4KB 洞.
+#
+# 修法:
+#   把第 3 条 prereserve 拆成两条, 中间跳过 0x7ffe0000 这 1 页:
+#     {0x7f000000, 0x00fe0000}  -- 覆盖 [0x7f000000, 0x7ffe0000)
+#     {0x7ffe1000, 0x0201f000}  -- 覆盖 [0x7ffe1000, 0x82000000)
+#   尺寸合计 0x00fe0000 + 0x0201f000 = 0x02fff000 = 原 0x03000000 - 0x1000,
+#   差的正是给 wine 留的那 1 页.
+#
+#   数组 my_wine_reserve[] 没指定固定大小, 原本 3 真 + 2 哨兵 = 5 槽,
+#   拆完变成 4 真 + 1 哨兵, 仍是 5 槽, 不撑爆.
+patch_63_wine_kuser_hole() {
+    local f="$BOX64/src/tools/wine_tools.c"
+    local mark='OHOS_PATCH_WINE_KUSER_HOLE'
+
+    [ -f "$f" ] || { _patch_header 63 "(skip) wine_tools.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 63 "src/tools/wine_tools.c" "KUSER_SHARED_DATA hole — already"
+        return 0
+    fi
+    _patch_header 63 "src/tools/wine_tools.c" "carve 0x7ffe0000 hole out of wine prereserve"
+
+    sed -i "1i\\
+/* $mark */" "$f"
+
+    # 用 python 而不是 sed: 长字符串 + 多个 *, 转义太啰嗦, 且要确认命中.
+    python3 - "$f" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+
+old = ('{(void*)0x7f000000, 0x03000000}, '
+       '{0, 0}, {0, 0}')
+new = ('{(void*)0x7f000000, 0x00fe0000}, '
+       '{(void*)0x7ffe1000, 0x0201f000}, '
+       '{0, 0}')
+
+if old not in s:
+    print("ERROR: prereserve table line not found exactly", file=sys.stderr)
+    sys.exit(1)
+
+s = s.replace(old, new, 1)
+open(p, 'w').write(s)
+print("  patch_63: prereserve table split (KUSER_SHARED_DATA hole carved)")
+PY
+}
+
+# ================================================================
+# Patch 65 — HAP /tmp 路径重映射 (proot 风格 path translation)
+# ================================================================
+# 现象:
+#   wine + wineserver 把 /tmp/.wine-${UID}/server-${dev}-${ino} 当成
+#   wineserver 通信目录, 路径在 wine 二进制里硬编码. HAP 沙箱里 /tmp
+#   不存在, mkdir/connect 全部 ENOENT, wineserver 无法启动.
+#
+# 修法:
+#   在 box64 wrapper 边界做 proot 式 path translation.
+#   guest 看到的还是 "/tmp/...", host musl 真实拿到的是
+#   "${TMPDIR}/box64-tmp/..." (HAP 可写目录).
+#
+#   核心库:
+#     box64_remap_path()         前缀匹配 + 改写, 复用 PATH_MAX 栈缓冲
+#     box64_remap_sockaddr_un()  AF_UNIX sun_path 改写 (bind/connect)
+#
+#   挂钩点 (第一波, 覆盖 wineserver 启动路径):
+#     - my_open64   (已有实现, 注入 remap 到函数顶部)
+#     - my_lstat    (已有, my_lstat64 是 alias, 注入一处即可)
+#     - my_mkdir    (新增, GOW->GOM)
+#     - my_chdir    (新增, GOW->GOM)
+#     - my_openat   (新增, GOW->GOM)
+#     - my_bind     (新增, GOW->GOM, sockaddr_un 改写)
+#     - my_connect  (新增, GOW->GOM, sockaddr_un 改写)
+#
+#   后续如果撞到 access/rename/symlink/readlink/realpath 等再加.
+#
+# 副作用:
+#   guest 调 readlink("/proc/self/fd/N") 反向时拿到的是 host 真路径
+#   (含 /data/storage/...). wine 不依赖反向比较, 暂时不修.
+#
+# 配置:
+#   $TMPDIR 优先, 没有就用 /data/storage/el2/base/cache.
+#   也可以通过 BOX64_TMP_TARGET 显式指定.
+patch_65_path_remap() {
+    local mark='OHOS_PATCH_PATH_REMAP'
+    local f_remap="$BOX64/src/box64_path_remap.c"
+    local f_libc="$BOX64/src/wrapped/wrappedlibc.c"
+    local f_priv="$BOX64/src/wrapped/wrappedlibc_private.h"
+    local f_cm="$BOX64/CMakeLists.txt"
+
+    # ---- A) 创建 path remap 库 ----
+    if [ -f "$f_remap" ] && grep -q "$mark" "$f_remap"; then
+        _patch_header 65 "$f_remap" "remap lib — already"
+    else
+        _patch_header 65 "src/box64_path_remap.c" "create remap library"
+        cat > "$f_remap" << 'EOF_REMAP'
+/* OHOS_PATCH_PATH_REMAP
+ *
+ * proot-style 路径前缀改写. wine/wineserver 硬编码 /tmp 的部分在
+ * HAP 沙箱里走不通, 这里在 box64 wrap 层做透明替换:
+ *
+ *   guest:  open("/tmp/.wine-1000/server-x-y/socket", ...)
+ *   host:   open("/data/storage/el2/base/cache/box64-tmp/.wine-1000/server-x-y/socket", ...)
+ *
+ * 单向改写: 只改 guest -> host. wine 不做反向比较所以够用.
+ */
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+struct path_map {
+    const char* from;       /* 不带尾部 /, 例如 "/tmp" */
+    size_t      from_len;
+    const char* to;         /* 不带尾部 /, 例如 "/data/storage/.../box64-tmp" */
+    size_t      to_len;
+};
+
+#define BOX64_REMAP_MAX 8
+static struct path_map g_maps[BOX64_REMAP_MAX];
+static int             g_nmaps = 0;
+static int             g_inited = 0;
+static pthread_mutex_t g_init_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* mkdir -p 简化版 (一层一层建) */
+static void box64_mkpath(const char* path) {
+    if (!path || !*path) return;
+    char buf[PATH_MAX];
+    size_t n = strlen(path);
+    if (n >= sizeof(buf)) return;
+    memcpy(buf, path, n + 1);
+    for (char* p = buf + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(buf, 0700);   /* 失败无所谓 (可能已存在) */
+            *p = '/';
+        }
+    }
+    mkdir(buf, 0700);
+}
+
+static void box64_remap_init(void) {
+    pthread_mutex_lock(&g_init_mu);
+    if (g_inited) { pthread_mutex_unlock(&g_init_mu); return; }
+
+    /* 解析 target 目录 */
+    const char* override = getenv("BOX64_TMP_TARGET");
+    const char* tmpdir   = getenv("TMPDIR");
+    static char target[PATH_MAX];
+    if (override && *override) {
+        snprintf(target, sizeof(target), "%s", override);
+    } else if (tmpdir && *tmpdir) {
+        snprintf(target, sizeof(target), "%s/box64-tmp", tmpdir);
+    } else {
+        /* HAP 默认 fallback */
+        snprintf(target, sizeof(target),
+                 "/data/storage/el2/base/cache/box64-tmp");
+    }
+    /* trim 末尾 / */
+    size_t tn = strlen(target);
+    while (tn > 1 && target[tn - 1] == '/') target[--tn] = 0;
+
+    box64_mkpath(target);
+    if (access(target, W_OK) != 0) {
+        fprintf(stderr,
+            "[box64-remap] WARN: target dir '%s' not writable: %s\n",
+            target, strerror(errno));
+    } else {
+        fprintf(stderr,
+            "[box64-remap] /tmp -> %s\n", target);
+    }
+
+    g_maps[g_nmaps].from     = "/tmp";
+    g_maps[g_nmaps].from_len = 4;
+    g_maps[g_nmaps].to       = target;
+    g_maps[g_nmaps].to_len   = tn;
+    g_nmaps++;
+
+    g_inited = 1;
+    pthread_mutex_unlock(&g_init_mu);
+}
+
+__attribute__((constructor(120)))
+static void box64_remap_ctor(void) { box64_remap_init(); }
+
+/* 主入口: 命中改写到 buf 并返回 buf, 否则原样返回 path. */
+__attribute__((visibility("default")))
+const char* box64_remap_path(const char* path, char* buf, unsigned long buflen) {
+    if (!path || !*path) return path;
+    if (!g_inited) box64_remap_init();
+
+    for (int i = 0; i < g_nmaps; i++) {
+        const struct path_map* m = &g_maps[i];
+        if (strncmp(path, m->from, m->from_len) != 0) continue;
+        char tail = path[m->from_len];
+        /* 边界: /tmp 完全相等, 或下一字符是 / 才算命中. 避免 /tmpfoo 被误改 */
+        if (tail != '\0' && tail != '/') continue;
+
+        size_t rest_len = strlen(path + m->from_len);
+        size_t need = m->to_len + rest_len + 1;
+        if (need > buflen) {
+            /* buf 不够大, 兜底返回原路径 (调用方 fallback) */
+            return path;
+        }
+        memcpy(buf, m->to, m->to_len);
+        memcpy(buf + m->to_len, path + m->from_len, rest_len + 1);
+        return buf;
+    }
+    return path;
+}
+
+/* 给 bind/connect 用的 sockaddr_un 改写.
+ * 命中时把改写后的地址写到 *out_sa, 长度写到 *out_len, 返回 1.
+ * 不命中或非 AF_UNIX 返回 0, 调用方使用原 sa.
+ */
+__attribute__((visibility("default")))
+int box64_remap_sockaddr_un(const void* sa, unsigned int salen,
+                            void* out_sa, unsigned int* out_len) {
+    if (!sa || salen < sizeof(sa_family_t)) return 0;
+    const struct sockaddr* p = (const struct sockaddr*)sa;
+    if (p->sa_family != AF_UNIX) return 0;
+
+    const struct sockaddr_un* sun_in = (const struct sockaddr_un*)sa;
+    /* abstract socket (sun_path[0] == '\0') 不动 */
+    if (salen < offsetof(struct sockaddr_un, sun_path) + 1) return 0;
+    if (sun_in->sun_path[0] == '\0') return 0;
+
+    /* sun_path 是定长数组, 不一定 NUL 终止. 算实际长度. */
+    size_t maxp = sizeof(sun_in->sun_path);
+    size_t plen = strnlen(sun_in->sun_path, maxp);
+    char tmp[sizeof(sun_in->sun_path) + 1];
+    if (plen >= sizeof(tmp)) return 0;
+    memcpy(tmp, sun_in->sun_path, plen);
+    tmp[plen] = '\0';
+
+    char buf[PATH_MAX];
+    const char* mapped = box64_remap_path(tmp, buf, sizeof(buf));
+    if (mapped == tmp) return 0;   /* 没改写 */
+
+    size_t mlen = strlen(mapped);
+    if (mlen >= sizeof(sun_in->sun_path)) {
+        fprintf(stderr,
+            "[box64-remap] WARN: remapped sun_path too long (%zu >= %zu): %s\n",
+            mlen, sizeof(sun_in->sun_path), mapped);
+        return 0;
+    }
+
+    struct sockaddr_un* sun_out = (struct sockaddr_un*)out_sa;
+    memset(sun_out, 0, sizeof(*sun_out));
+    sun_out->sun_family = AF_UNIX;
+    memcpy(sun_out->sun_path, mapped, mlen + 1);
+    *out_len = (unsigned int)(offsetof(struct sockaddr_un, sun_path) + mlen + 1);
+    return 1;
+}
+EOF_REMAP
+    fi
+
+    # ---- B) CMakeLists.txt 注册 ----
+    if grep -q "${mark}_CM" "$f_cm"; then
+        _patch_header 65 "CMakeLists.txt" "remap source — already"
+    else
+        cat >> "$f_cm" << EOF_CM
+# ${mark}_CM ===================================
+if(TARGET box64)
+    target_sources(box64 PRIVATE \${CMAKE_SOURCE_DIR}/src/box64_path_remap.c)
+endif()
+# =============================================
+EOF_CM
+    fi
+
+    # ---- C) wrappedlibc_private.h: GOW -> GOM 转 5 个 ----
+    if grep -q "$mark" "$f_priv"; then
+        _patch_header 65 "wrappedlibc_private.h" "GOW->GOM — already"
+    else
+        sed -i "1i\\
+/* $mark */" "$f_priv"
+        sed -i \
+            -e 's|^GOW(bind, iFipu)|GOM(bind, iFEipu)|'         \
+            -e 's|^GOW(chdir, iFp)|GOM(chdir, iFEp)|'           \
+            -e 's|^GOW(connect, iFipu)|GOM(connect, iFEipu)|'   \
+            -e 's|^GOW(mkdir, iFpu)|GOM(mkdir, iFEpu)|'         \
+            -e 's|^GOW(openat, iFipON)|GOM(openat, iFEipON)|'   \
+            "$f_priv"
+        # 验证替换
+        local need=5
+        local got
+        got=$(grep -cE '^GOM\((bind|chdir|connect|mkdir|openat),' "$f_priv")
+        if [ "$got" -lt "$need" ]; then
+            echo "    [#65] WARN: GOW->GOM 转换不完整 (got=$got, need=$need)"
+        fi
+    fi
+
+    # ---- D) wrappedlibc.c: 注入 remap 到现有 my_open64/my_lstat ----
+    if grep -q "$mark" "$f_libc"; then
+        _patch_header 65 "wrappedlibc.c" "remap inject — already"
+    else
+        _patch_header 65 "wrappedlibc.c" "inject remap into my_open64/my_lstat + add new wrappers"
+        sed -i "1i\\
+/* $mark */\\
+#include <limits.h>\\
+extern const char* box64_remap_path(const char* path, char* buf, unsigned long buflen);\\
+extern int box64_remap_sockaddr_un(const void* sa, unsigned int salen, void* out_sa, unsigned int* out_len);" "$f_libc"
+
+        python3 - "$f_libc" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+
+# my_lstat injection
+old_l = ('EXPORT int my_lstat(x64emu_t *emu, void* filename, void* buf)\n'
+         '{\n'
+         '    (void)emu;\n')
+new_l = ('EXPORT int my_lstat(x64emu_t *emu, void* filename, void* buf)\n'
+         '{\n'
+         '    (void)emu;\n'
+         '    /* OHOS_PATCH_PATH_REMAP */\n'
+         '    char _remap_buf[PATH_MAX];\n'
+         '    filename = (void*)box64_remap_path((const char*)filename, _remap_buf, sizeof(_remap_buf));\n')
+if old_l not in s:
+    print("ERROR: my_lstat injection target not matched", file=sys.stderr); sys.exit(1)
+s = s.replace(old_l, new_l, 1)
+
+# my_open64 injection
+m = re.search(
+    r'(EXPORT int32_t my_open64\(x64emu_t\* emu, void\* pathname, '
+    r'int32_t flags, uint32_t mode\)\n\{\n)', s)
+if not m:
+    print("ERROR: my_open64 injection target not matched", file=sys.stderr); sys.exit(1)
+inj = ('    /* OHOS_PATCH_PATH_REMAP */\n'
+       '    char _remap_buf[PATH_MAX];\n'
+       '    pathname = (void*)box64_remap_path((const char*)pathname, _remap_buf, sizeof(_remap_buf));\n')
+s = s[:m.end()] + inj + s[m.end():]
+
+open(p, 'w').write(s)
+print("  patch_65: my_lstat + my_open64 remap inject OK")
+PY
+
+        # 文件末尾追加新的 my_xxx 实现
+        cat >> "$f_libc" << 'EOF_NEW_WRAPPERS'
+
+/* OHOS_PATCH_PATH_REMAP — new wrappers added by patch 65
+ * 这一组 GOW 在 patch 65 中升级到 GOM, 这里给出 my_xxx 实现.
+ */
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <fcntl.h>
+
+EXPORT int my_mkdir(x64emu_t* emu, void* path, uint32_t mode)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return mkdir((const char*)path, (mode_t)mode);
+}
+
+EXPORT int my_chdir(x64emu_t* emu, void* path)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return chdir((const char*)path);
+}
+
+EXPORT int my_openat(x64emu_t* emu, int dirfd, void* path, int flags, mode_t mode)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return openat(dirfd, (const char*)path, flags, mode);
+}
+
+EXPORT int my_bind(x64emu_t* emu, int sockfd, void* addr, uint32_t addrlen)
+{
+    (void)emu;
+    struct sockaddr_un out;
+    unsigned int out_len = 0;
+    if (box64_remap_sockaddr_un(addr, addrlen, &out, &out_len) == 1) {
+        return bind(sockfd, (struct sockaddr*)&out, (socklen_t)out_len);
+    }
+    return bind(sockfd, (struct sockaddr*)addr, (socklen_t)addrlen);
+}
+
+EXPORT int my_connect(x64emu_t* emu, int sockfd, void* addr, uint32_t addrlen)
+{
+    (void)emu;
+    struct sockaddr_un out;
+    unsigned int out_len = 0;
+    if (box64_remap_sockaddr_un(addr, addrlen, &out, &out_len) == 1) {
+        return connect(sockfd, (struct sockaddr*)&out, (socklen_t)out_len);
+    }
+    return connect(sockfd, (struct sockaddr*)addr, (socklen_t)addrlen);
+}
+/* OHOS_PATCH_PATH_REMAP END */
+EOF_NEW_WRAPPERS
+    fi
+}
+
+# ================================================================
+# Patch 66 — path remap v2: WINEPREFIX/dosdevices + 第二波 wrappers
+# ================================================================
+# 现象:
+#   wineboot --init 跑完 registry 阶段 (system.reg/user.reg 已生成),
+#   wine 主进程 try load kernel32.dll, 解析 NT 路径 C:\windows\system32\
+#   kernel32.dll 时调用:
+#     opendir("/.../wineprefix/dosdevices/c:") -> ENOENT
+#   退出 STATUS_DLL_NOT_FOUND (0xC0000135).
+#
+# 根因:
+#   wine 在 Linux 上把 dosdevices/c: 做成 symlink 指向 ../drive_c.
+#   HAP 沙箱拒绝 symlink syscall, wineboot 静默失败, dosdevices/c: 不存在,
+#   后续所有"C: 盘"路径解析全部 ENOENT, fakedll 也装不进 system32.
+#
+# 修法 (proot 第二波):
+#   1) box64_path_remap.c 加动态规则:
+#      ${WINEPREFIX}/dosdevices/c:  ->  ${WINEPREFIX}/drive_c
+#      WINEPREFIX 在 box64_run 启动时通过 environ 进来, ctor 跑得早可能
+#      还没设, 因此用 lazy add (每次调 remap 时检查).
+#   2) 第二波 wrap (GOW/GO -> GOM): opendir / access / faccessat /
+#      unlink / rmdir / rename / symlink / symlinkat
+#   3) 已有 my_xxx 实现的注入: my_stat / my_fstatat / my_readlink /
+#      my_realpath
+#   4) symlink / symlinkat 在 HAP 直接禁, 我们 fake 成功返回 0
+#      (依赖 path remap 让后续访问通过, 不依赖真 symlink 存在)
+#
+# 副作用:
+#   - readlink("/.../dosdevices/c:") 仍会返回 EINVAL (host 上不是 link).
+#     wine 实测对此不敏感, 失败后走 stat fallback, stat 命中 remap 通过.
+#   - rename 用了两个 PATH_MAX 栈缓冲 (~8KB), 在 wine 栈预算内.
+#
+# 不在本 patch 内的:
+#   - dosdevices/d:..z: 等其它盘符. 当前 wineprefix 只用 c:, 后续按需扩.
+#   - readlinkat / __readlinkat_chk / __readlink_chk 注入. 撞到再加.
+# ================================================================
+# Patch 66 — path remap v2: WINEPREFIX/dosdevices + 第二波 wrappers
+# ================================================================
+# (头部说明同前略, 关键修订:)
+#   - python inject 同时做 3 件事: 加前置声明 + 加 hook 调用 + 添加 mark
+#   - 防止 box64_remap_path 调用 box64_remap_maybe_add_wineprefix_rule
+#     时无声明 → implicit int (*)() 与后置 void 定义冲突
+patch_66_path_remap_v2() {
+    local mark='OHOS_PATCH_PATH_REMAP_V2'
+    local f_remap="$BOX64/src/box64_path_remap.c"
+    local f_libc="$BOX64/src/wrapped/wrappedlibc.c"
+    local f_priv="$BOX64/src/wrapped/wrappedlibc_private.h"
+
+    # ---- A) box64_path_remap.c: 加 WINEPREFIX 动态规则 ----
+    if [ -f "$f_remap" ] && grep -q "$mark" "$f_remap"; then
+        _patch_header 66 "src/box64_path_remap.c" "v2 — already"
+    else
+        _patch_header 66 "src/box64_path_remap.c" "add lazy WINEPREFIX dosdevices/c: rule"
+
+        # 1) 末尾追加函数定义 (cat >>)
+        cat >> "$f_remap" << 'EOF_V2'
+
+/* OHOS_PATCH_PATH_REMAP_V2
+ * lazy 加 ${WINEPREFIX}/dosdevices/c: -> ${WINEPREFIX}/drive_c.
+ * WINEPREFIX 在 box64_run 启动期通过 environ 传入, ctor 跑得太早拿不到.
+ * 这里在每次 box64_remap_path 入口检查, 一旦 getenv 命中就建规则.
+ */
+static int g_wineprefix_done = 0;
+static char g_wp_from[PATH_MAX];
+static char g_wp_to  [PATH_MAX];
+
+void box64_remap_maybe_add_wineprefix_rule(void) {
+    if (__atomic_load_n(&g_wineprefix_done, __ATOMIC_ACQUIRE)) return;
+
+    pthread_mutex_lock(&g_init_mu);
+    if (g_wineprefix_done) { pthread_mutex_unlock(&g_init_mu); return; }
+
+    const char* wp = getenv("WINEPREFIX");
+    if (!wp || !*wp) {
+        /* 环境变量还没就位, 这次不算"已尝试", 下次再 try */
+        pthread_mutex_unlock(&g_init_mu);
+        return;
+    }
+
+    /* trim trailing / */
+    size_t wpl = strlen(wp);
+    while (wpl > 1 && wp[wpl - 1] == '/') wpl--;
+
+    int n = snprintf(g_wp_from, sizeof(g_wp_from),
+                     "%.*s/dosdevices/c:", (int)wpl, wp);
+    int m = snprintf(g_wp_to,   sizeof(g_wp_to),
+                     "%.*s/drive_c",       (int)wpl, wp);
+
+    if (n > 0 && (size_t)n < sizeof(g_wp_from) &&
+        m > 0 && (size_t)m < sizeof(g_wp_to)   &&
+        g_nmaps < BOX64_REMAP_MAX) {
+        g_maps[g_nmaps].from     = g_wp_from;
+        g_maps[g_nmaps].from_len = (size_t)n;
+        g_maps[g_nmaps].to       = g_wp_to;
+        g_maps[g_nmaps].to_len   = (size_t)m;
+        g_nmaps++;
+        fprintf(stderr, "[box64-remap] %s -> %s\n", g_wp_from, g_wp_to);
+    }
+
+    __atomic_store_n(&g_wineprefix_done, 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g_init_mu);
+}
+EOF_V2
+
+        # 2) python 一次完成: 前置声明 + hook 调用注入
+        python3 - "$f_remap" << 'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+
+# (a) 前置声明 — 必须在 box64_remap_path 之前. 不能走 cat >> 路径,
+#     因为 cat >> 是追加到末尾, 此时 box64_remap_path 调用它时 C 编译器
+#     已经隐式生成了 int (*)() 的声明, 与后面 void 定义冲突.
+fwd_decl = 'void box64_remap_maybe_add_wineprefix_rule(void);\n'
+anchor   = 'const char* box64_remap_path(const char* path, char* buf, unsigned long buflen) {\n'
+if anchor not in s:
+    print("ERROR: box64_remap_path anchor not matched", file=sys.stderr); sys.exit(1)
+if fwd_decl not in s:
+    s = s.replace(anchor, fwd_decl + '\n' + anchor, 1)
+
+# (b) hook 调用注入到 box64_remap_path 入口
+old = ('const char* box64_remap_path(const char* path, char* buf, unsigned long buflen) {\n'
+       '    if (!path || !*path) return path;\n'
+       '    if (!g_inited) box64_remap_init();\n')
+new = ('const char* box64_remap_path(const char* path, char* buf, unsigned long buflen) {\n'
+       '    if (!path || !*path) return path;\n'
+       '    if (!g_inited) box64_remap_init();\n'
+       '    /* OHOS_PATCH_PATH_REMAP_V2_HOOK */\n'
+       '    box64_remap_maybe_add_wineprefix_rule();\n')
+if old not in s:
+    print("ERROR: remap_path hook target not matched", file=sys.stderr); sys.exit(1)
+s = s.replace(old, new, 1)
+
+open(p, 'w').write(s)
+print("  patch_66: forward decl + WINEPREFIX lazy hook injected")
+PY
+    fi
+
+    # ---- B) wrappedlibc_private.h: 第二批 GOW/GO -> GOM (8 个) ----
+    if grep -q "$mark" "$f_priv"; then
+        _patch_header 66 "wrappedlibc_private.h" "v2 GOW->GOM — already"
+    else
+        sed -i "1i\\
+/* $mark */" "$f_priv"
+        sed -i \
+            -e 's|^GOW(opendir, pFp)|GOM(opendir, pFEp)|'              \
+            -e 's|^GOW(access, iFpi)|GOM(access, iFEpi)|'              \
+            -e 's|^GO(faccessat, iFipii)|GOM(faccessat, iFEipii)|'     \
+            -e 's|^GOW(unlink, iFp)|GOM(unlink, iFEp)|'                \
+            -e 's|^GOW(rmdir, iFp)|GOM(rmdir, iFEp)|'                  \
+            -e 's|^GO(rename, iFpp)|GOM(rename, iFEpp)|'               \
+            -e 's|^GOW(symlink, iFpp)|GOM(symlink, iFEpp)|'            \
+            -e 's|^GO(symlinkat, iFpip)|GOM(symlinkat, iFEpip)|'       \
+            "$f_priv"
+        local got
+        got=$(grep -cE '^GOM\((opendir|access|faccessat|unlink|rmdir|rename|symlink|symlinkat),' "$f_priv")
+        if [ "$got" -lt 8 ]; then
+            echo "    [#66] WARN: GOW/GO->GOM 转换不全 (got=$got, need=8)"
+        fi
+    fi
+
+    # ---- C) wrappedlibc.c: 注入 + 末尾追加新 wrappers ----
+    if grep -q "$mark" "$f_libc"; then
+        _patch_header 66 "wrappedlibc.c" "v2 inject — already"
+    else
+        _patch_header 66 "wrappedlibc.c" "inject 4 + add 8 wrappers"
+        sed -i "1i\\
+/* $mark */\\
+extern void box64_remap_maybe_add_wineprefix_rule(void);" "$f_libc"
+
+        python3 - "$f_libc" << 'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+
+def inject(s, target_text, inj):
+    if target_text not in s:
+        print(f"ERROR: inject target not matched: {target_text[:80]!r}", file=sys.stderr)
+        sys.exit(1)
+    return s.replace(target_text, target_text + inj, 1)
+
+# 1) my_stat
+s = inject(s,
+    'EXPORT int my_stat(x64emu_t *emu, void* filename, void* buf)\n'
+    '{\n'
+    '    (void)emu;\n',
+    '    /* OHOS_PATCH_PATH_REMAP_V2 */\n'
+    '    char _remap_buf_stat[PATH_MAX];\n'
+    '    filename = (void*)box64_remap_path((const char*)filename, _remap_buf_stat, sizeof(_remap_buf_stat));\n')
+
+# 2) my_fstatat
+s = inject(s,
+    'EXPORT int my_fstatat(x64emu_t *emu, int fd, const char* path, void* buf, int flags)\n'
+    '{\n',
+    '    /* OHOS_PATCH_PATH_REMAP_V2 */\n'
+    '    char _remap_buf_fstatat[PATH_MAX];\n'
+    '    path = box64_remap_path(path, _remap_buf_fstatat, sizeof(_remap_buf_fstatat));\n')
+
+# 3) my_readlink
+s = inject(s,
+    'EXPORT ssize_t my_readlink(x64emu_t* emu, void* path, void* buf, size_t sz)\n'
+    '{\n',
+    '    /* OHOS_PATCH_PATH_REMAP_V2 */\n'
+    '    char _remap_buf_rl[PATH_MAX];\n'
+    '    path = (void*)box64_remap_path((const char*)path, _remap_buf_rl, sizeof(_remap_buf_rl));\n')
+
+# 4) my_realpath
+s = inject(s,
+    'EXPORT void* my_realpath(x64emu_t* emu, void* path, void* resolved_path)\n'
+    '{\n',
+    '    /* OHOS_PATCH_PATH_REMAP_V2 */\n'
+    '    char _remap_buf_rp[PATH_MAX];\n'
+    '    path = (void*)box64_remap_path((const char*)path, _remap_buf_rp, sizeof(_remap_buf_rp));\n')
+
+open(p, 'w').write(s)
+print("  patch_66: my_stat/my_fstatat/my_readlink/my_realpath remap inject OK")
+PY
+
+        cat >> "$f_libc" << 'EOF_NEW_V2'
+
+/* OHOS_PATCH_PATH_REMAP_V2 — new wrappers (path remap second wave). */
+#include <dirent.h>
+
+EXPORT void* my_opendir(x64emu_t* emu, void* path)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return opendir((const char*)path);
+}
+
+EXPORT int my_access(x64emu_t* emu, void* path, int mode)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return access((const char*)path, mode);
+}
+
+EXPORT int my_faccessat(x64emu_t* emu, int dirfd, void* path, int mode, int flags)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return faccessat(dirfd, (const char*)path, mode, flags);
+}
+
+EXPORT int my_unlink(x64emu_t* emu, void* path)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return unlink((const char*)path);
+}
+
+EXPORT int my_rmdir(x64emu_t* emu, void* path)
+{
+    (void)emu;
+    char buf[PATH_MAX];
+    path = (void*)box64_remap_path((const char*)path, buf, sizeof(buf));
+    return rmdir((const char*)path);
+}
+
+EXPORT int my_rename(x64emu_t* emu, void* oldpath, void* newpath)
+{
+    (void)emu;
+    char buf1[PATH_MAX], buf2[PATH_MAX];
+    oldpath = (void*)box64_remap_path((const char*)oldpath, buf1, sizeof(buf1));
+    newpath = (void*)box64_remap_path((const char*)newpath, buf2, sizeof(buf2));
+    return rename((const char*)oldpath, (const char*)newpath);
+}
+
+/* HAP 沙箱禁 symlink syscall. fake 返回 0:
+ *   - 配合 path remap, 后续 stat/open 命中真实目录 -> 透明
+ *   - 副作用: lstat 这个 link 会拿到 ENOENT, 真依赖此行为的代码会跑偏
+ *   - 当前 wineboot 路径 (dosdevices/c:) 完全靠 path remap 解决, 不依赖
+ *     真 symlink 存在
+ */
+EXPORT int my_symlink(x64emu_t* emu, void* target, void* linkpath)
+{
+    (void)emu;
+    fprintf(stderr, "[box64-remap] symlink('%s', '%s') -> faked OK (HAP)\n",
+            target   ? (const char*)target   : "(null)",
+            linkpath ? (const char*)linkpath : "(null)");
+    return 0;
+}
+
+EXPORT int my_symlinkat(x64emu_t* emu, void* target, int newdirfd, void* linkpath)
+{
+    (void)emu;
+    fprintf(stderr, "[box64-remap] symlinkat('%s', %d, '%s') -> faked OK\n",
+            target   ? (const char*)target   : "(null)", newdirfd,
+            linkpath ? (const char*)linkpath : "(null)");
+    return 0;
+}
+/* OHOS_PATCH_PATH_REMAP_V2 END */
+EOF_NEW_V2
+    fi
+}
+
+# Patch 67 — 补齐 my_open + 关键 wrappers 的 remap
+patch_67_path_remap_v3_missing_wrappers() {
+    local mark='OHOS_PATCH_PATH_REMAP_V3'
+    local f_libc="$BOX64/src/wrapped/wrappedlibc.c"
+
+    [ -f "$f_libc" ] || { _patch_header 67 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f_libc" "$mark"; then
+        _patch_header 67 "wrappedlibc.c" "v3 my_open remap — already"
+        return 0
+    fi
+    _patch_header 67 "wrappedlibc.c" "fix: inject remap into my_open (was only in my_open64)"
+
+    python3 - "$f_libc" "$mark" << 'PY'
+import sys, re
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+# my_open 的标准签名: EXPORT int32_t my_open(x64emu_t* emu, void* pathname, int32_t flags, uint32_t mode)
+# 注意: 不同 box64 版本可能用 int 或 int32_t, 用宽松匹配.
+patterns = [
+    re.compile(
+        r'(EXPORT\s+int(?:32_t)?\s+my_open\s*\(\s*x64emu_t\s*\*\s*emu\s*,\s*'
+        r'void\s*\*\s*pathname\s*,\s*int(?:32_t)?\s+flags\s*,\s*'
+        r'uint?32?_?t?\s+mode\s*\)\s*\n\{\s*\n)'),
+]
+
+inj = ('    /* %s */\n'
+       '    char _remap_buf_open[PATH_MAX];\n'
+       '    pathname = (void*)box64_remap_path((const char*)pathname, _remap_buf_open, sizeof(_remap_buf_open));\n'
+       % mark)
+
+found = False
+for pat in patterns:
+    m = pat.search(s)
+    if m:
+        s = s[:m.end()] + inj + s[m.end():]
+        found = True
+        break
+
+if not found:
+    # 兜底: 找 'EXPORT' + 'my_open(' 但不是 my_openat/my_open64
+    pat = re.compile(r'(EXPORT[^\n]*\bmy_open\b(?!at|64)[^{]*\{\s*\n)')
+    m = pat.search(s)
+    if m:
+        s = s[:m.end()] + inj + s[m.end():]
+        found = True
+
+if not found:
+    print("ERROR: my_open signature not matched (manual check needed)",
+          file=sys.stderr)
+    sys.exit(1)
+
+# 顺便加 mark 标签到顶部, 方便 grep
+header = "/* %s */\n" % mark
+if header not in s:
+    s = header + s
+
+open(p, 'w').write(s)
+print("  patch_67: my_open remap injected")
+PY
+}
+
+# Patch 68 — Path remap 诊断 (BOX64_REMAP_TRACE)
+patch_68_path_remap_trace() {
+    local mark='OHOS_PATCH_PATH_REMAP_TRACE'
+    local f="$BOX64/src/box64_path_remap.c"
+
+    [ -f "$f" ] || { _patch_header 68 "(skip) box64_path_remap.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 68 "box64_path_remap.c" "trace — already"
+        return 0
+    fi
+    _patch_header 68 "box64_path_remap.c" "add BOX64_REMAP_TRACE=1 detailed logging"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+# 注入 trace helper 在 box64_remap_path 之前
+helper = '''
+/* %s */
+static int ohos_remap_trace_level(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("BOX64_REMAP_TRACE");
+        cached = (v && *v) ? atoi(v) : 0;
+        if (cached < 0) cached = 0;
+    }
+    return cached;
+}
+/* 只 trace 包含这些关键串的路径, 避免刷屏 */
+static int ohos_remap_should_trace(const char* path) {
+    if (!path) return 0;
+    if (ohos_remap_trace_level() >= 2) return 1;   /* level 2 = 全量 */
+    /* level 1 = 只看 wine 关键路径 */
+    return (strstr(path, "dosdevices")     != NULL ||
+            strstr(path, "/tmp")           != NULL ||
+            strstr(path, "wineboot")       != NULL ||
+            strstr(path, "system32")       != NULL ||
+            strstr(path, "wine-")          != NULL);
+}
+''' % mark
+
+anchor = 'const char* box64_remap_path(const char* path, char* buf, unsigned long buflen) {\n'
+if anchor not in s:
+    print("ERROR: anchor missing", file=sys.stderr); sys.exit(1)
+s = s.replace(anchor, helper + '\n' + anchor, 1)
+
+# 在 box64_remap_path 主循环出口加 trace
+# 命中分支末尾的 return buf:
+old_hit = ('        memcpy(buf, m->to, m->to_len);\n'
+           '        memcpy(buf + m->to_len, path + m->from_len, rest_len + 1);\n'
+           '        return buf;\n')
+new_hit = ('        memcpy(buf, m->to, m->to_len);\n'
+           '        memcpy(buf + m->to_len, path + m->from_len, rest_len + 1);\n'
+           '        if (ohos_remap_should_trace(path)) {\n'
+           '            fprintf(stderr, "[remap-trace] HIT  %s -> %s\\n", path, buf);\n'
+           '            fflush(stderr);\n'
+           '        }\n'
+           '        return buf;\n')
+if old_hit not in s:
+    print("WARN: HIT branch not matched (skip)", file=sys.stderr)
+else:
+    s = s.replace(old_hit, new_hit, 1)
+
+# 未命中分支末尾 return path:
+old_miss = '    return path;\n}\n\n/* 给 bind/connect 用的 sockaddr_un 改写'
+new_miss = ('    if (ohos_remap_should_trace(path)) {\n'
+            '        fprintf(stderr, "[remap-trace] MISS %s (nmaps=%d)\\n", path, g_nmaps);\n'
+            '        fflush(stderr);\n'
+            '    }\n'
+            '    return path;\n}\n\n/* 给 bind/connect 用的 sockaddr_un 改写')
+if old_miss in s:
+    s = s.replace(old_miss, new_miss, 1)
+else:
+    print("WARN: MISS branch not matched (skip)", file=sys.stderr)
+
+open(p, 'w').write(s)
+print("  patch_68: trace inserted")
+PY
+}
+
+# ================================================================
+# Patch 72 — patch 62 fallback 按 prot 分场景 + 加 trace
+# ================================================================
+# 现象 (patch 70/71 之后的最后一公里):
+#   patch 70 清掉父继承 reserve, patch 71 在 child 重做 4 段 PROT_NONE
+#   reserve, 把 0x7ffe0000 (KUSER_SHARED_DATA) 留成单独 4KB hole.
+#
+#   wine ntdll 调:
+#       mmap(0x7ffe0000, 4096, PROT_READ,
+#            MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANON, -1, 0)
+#   HAP seccomp 拒 NOREPLACE -> ENOSYS, patch 62 fallback 把 NOREPLACE
+#   去掉, 用 hint mmap. kernel hint 算法因为 0x7ffe0000 被两段 PROT_NONE
+#   紧紧夹住, 拒绝 hint, 返回别处. patch 62 判 ret != addr -> munmap +
+#   EEXIST. wine 收 EEXIST 报 STATUS_CONFLICTING_ADDRESSES (c0000018).
+#
+# 修法 (区分 wine 用 NOREPLACE 的两种语义):
+#   prot == 0 (探测): 保持原 hint 模式. wine 早期探测 4GB / 64GB / 2^63
+#                     等边界, 占用就 EEXIST, wine 会换地址.
+#   prot != 0 (真分配): fallback 用 MAP_FIXED 强制放到 addr.
+#                       wine 此时是要确定地址 (KUSER_SHARED_DATA / TEB),
+#                       hint 模式不可靠. FIXED 会覆盖现有 mapping, 但
+#                       这种"现有 mapping"通常是我们 reserve 的 PROT_NONE
+#                       hole, 覆盖它正是 wine 的目的.
+#
+# 同时加详细 trace, 后续排错可见:
+#   [mmap-noreplace] addr=0x7ffe0000 len=4096 prot=1 flags=0x100022
+#   [mmap-noreplace]   fallback FIXED -> 0x7ffe0000 errno=0  (real-alloc)
+#   [mmap-noreplace]   fallback HINT  -> 0x... errno=0 (probe, munmap+EEXIST)
+patch_72_mmap_noreplace_split() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_MMAP_NOREPLACE_V2'
+
+    [ -f "$f" ] || { _patch_header 72 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if grep -q "$mark" "$f"; then
+        _patch_header 72 "src/wrapped/wrappedlibc.c" "v2 fallback — already"
+        return 0
+    fi
+    if ! grep -q 'OHOS_PATCH_MMAP_NOREPLACE_FALLBACK' "$f"; then
+        _patch_header 72 "(skip) patch 62 not applied yet" ""
+        return 0
+    fi
+    _patch_header 72 "src/wrapped/wrappedlibc.c" \
+        "split NOREPLACE fallback by prot, add diagnostic trace"
+
+    python3 - "$f" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+
+if 'OHOS_PATCH_MMAP_NOREPLACE_V2' in s:
+    sys.exit(0)
+
+# 替换 patch 62 整个 fallback 块
+old_marker_start = '/* OHOS_PATCH_MMAP_NOREPLACE_FALLBACK START'
+old_marker_end   = '/* OHOS_PATCH_MMAP_NOREPLACE_FALLBACK END */'
+
+i0 = s.find(old_marker_start)
+i1 = s.find(old_marker_end)
+if i0 < 0 or i1 < 0:
+    print("FATAL: cannot locate patch 62 fallback block", file=sys.stderr)
+    sys.exit(1)
+i1 += len(old_marker_end)
+
+new_block = '''/* OHOS_PATCH_MMAP_NOREPLACE_V2 START
+ * 替代 patch 62. HAP seccomp 拒 MAP_FIXED_NOREPLACE 用 ENOSYS, 退化策略
+ * 按 prot 分场景:
+ *   - prot == 0 (探测): 用 hint mmap, ret != addr 时 munmap + EEXIST.
+ *     wine 用这种调用试地址边界, 我们告诉它"占了"它会换.
+ *   - prot != 0 (真分配): 直接用 MAP_FIXED 强制 addr.
+ *     wine 此时要确定地址 (KUSER_SHARED_DATA/TEB), hint 不可靠.
+ */
+#ifndef BOX64_OHOS_MAP_FIXED_NOREPLACE
+#define BOX64_OHOS_MAP_FIXED_NOREPLACE 0x100000
+#endif
+void* ret = box_mmap(addr, length, prot, flags, fd, offset);
+int e = errno;
+if (ret == MAP_FAILED && (e == ENOSYS || e == EINVAL)
+    && (flags & BOX64_OHOS_MAP_FIXED_NOREPLACE)
+    && !(flags & MAP_FIXED) && addr) {
+    int probe = (prot == 0);
+    int fb_flags = flags & ~BOX64_OHOS_MAP_FIXED_NOREPLACE;
+    if (!probe) fb_flags |= MAP_FIXED;
+    void* fb_ret = box_mmap(addr, length, prot, fb_flags, fd, offset);
+    int fb_e = errno;
+    fprintf(stderr,
+        "[mmap-noreplace] addr=%p len=0x%lx prot=0x%x flags=0x%x "
+        "%s -> %p errno=%d\\n",
+        addr, (unsigned long)length, prot, flags,
+        probe ? "probe(HINT)" : "real(FIXED)",
+        fb_ret, fb_ret == MAP_FAILED ? fb_e : 0);
+    if (probe) {
+        if (fb_ret != MAP_FAILED && (uintptr_t)fb_ret != (uintptr_t)addr) {
+            /* 探测模式: kernel 不给 hint -> 模拟 NOREPLACE 失败 */
+            box_munmap(fb_ret, length);
+            ret = MAP_FAILED;
+            e = EEXIST;
+        } else {
+            ret = fb_ret;
+            e = (fb_ret == MAP_FAILED) ? fb_e : 0;
+        }
+    } else {
+        /* 真分配: MAP_FIXED 要么成功拿到 addr 要么真失败, 不再判 conflict */
+        ret = fb_ret;
+        e = (fb_ret == MAP_FAILED) ? fb_e : 0;
+    }
+    errno = e;
+}
+/* OHOS_PATCH_MMAP_NOREPLACE_V2 END */'''
+
+s = s[:i0] + new_block + s[i1:]
+open(p, 'w').write(s)
+print("  patch_72: NOREPLACE fallback split by prot, trace added")
+PY
+}
+
+# ================================================================
+# Patch 80 — src/box64_spawn.c: 三态 spawn 策略 (NATIVE/FORK/SOCK)
+# ================================================================
+# 目的:
+#   box64 在 OHOS HAP 内以 .so 形式存在, wine 等 guest 程序会尝试
+#   execve/posix_spawn 一个新 box64 进程跑 wineserver/wineboot.
+#   磁盘上没有 box64 二进制, 直通 execve 必然 ENOENT.
+#
+# 三种策略 (BOX64_SPAWN_STRATEGY 环境变量):
+#   native  直通 execve / posix_spawn  (仅 hnp 模式有真 box64 二进制时可用)
+#   fork    fork + box64_run           (老沙箱可用, 不需要 HAP 主进程协助)
+#   sock    通过 control socket 让 HAP 主进程代为 spawn   (默认)
+#
+# 自动降级:
+#   sock 模式连接 / 通信失败 -> 自动降级到 fork. 通过 s_sock_broken
+#   静态标志记忆, 单次失败后整个进程不再尝试 sock, 避免反复重连.
+#
+# socket 协议 (与 process_manager.cpp 镜像):
+#   帧: [4 字节大端长度] + [文本 payload]
+#   请求 CMD CREATE / REQ_ID / EXE / ARG / ENV / CWD / KIND / WAIT / END
+#   响应 RESULT / REQ_ID / STATUS / PID / KIND / EXIT_CODE / MSG / END
+#   WAIT=1 + STATUS=ok 时响应带 EXIT_CODE.
+#
+# 内存清理 (仅 FORK 路径需要):
+#   子进程继承父进程 wine prereserve, 子 box64 init 又自己 reserve 一次
+#   会撞 0x7ffe0000 (KUSER_SHARED_DATA) 那个 4KB hole. 处理顺序:
+#     1) munmap 4 段父继承的 reserve (low-stub/low-heap/pre-kuser/post-kuser)
+#     2) 用 PROT_NONE FIXED 自己 reserve 这 4 段
+#   NATIVE 不需要 (execve 自动 image replace).
+#   SOCK 不需要 (新进程是 HAP 主进程的孩子, 干净 mapping).
+patch_80_box64_spawn() {
+    local f="$BOX64/src/box64_spawn.c"
+    local cm="$BOX64/CMakeLists.txt"
+    local mark='OHOS_PATCH_BOX64_SPAWN'
+
+    if [ -f "$f" ] && grep -q "$mark" "$f"; then
+        _patch_header 80 "src/box64_spawn.c" "spawn dispatcher — already patched"
+        return 0
+    fi
+    _patch_header 80 "src/box64_spawn.c" "create three-strategy spawn dispatcher"
+
+    cat > "$f" << 'EOF_SPAWN'
+/* OHOS_PATCH_BOX64_SPAWN
+ *
+ * Three-strategy spawn dispatcher for OHOS HAP environment.
+ *
+ * Strategy chosen by env BOX64_SPAWN_STRATEGY:
+ *   native  - direct execve / posix_spawn (only valid in hnp mode)
+ *   fork    - fork + box64_run (self-recursion)
+ *   sock    - delegate to HAP main process via control socket (default)
+ *
+ * Auto fallback: sock failure -> fork. Marked sticky in s_sock_broken.
+ */
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char** environ;
+extern int box64_run(int argc, const char** argv, const char** env);
+
+/* ================================================================
+ * [1] strategy config
+ * ================================================================ */
+enum spawn_strategy { SP_NATIVE = 0, SP_FORK = 1, SP_SOCK = 2 };
+static int s_strategy    = -1;
+static int s_sock_broken = 0;
+
+static const char* DEFAULT_SOCK_PATH =
+    "/data/storage/el2/base/haps/entry/files/.procmgr.sock";
+
+static enum spawn_strategy get_strategy(void) {
+    if (s_strategy != -1) return (enum spawn_strategy)s_strategy;
+    const char* v = getenv("BOX64_SPAWN_STRATEGY");
+    enum spawn_strategy s;
+    if      (!v || !*v)            s = SP_SOCK;
+    else if (!strcmp(v, "native")) s = SP_NATIVE;
+    else if (!strcmp(v, "fork"))   s = SP_FORK;
+    else if (!strcmp(v, "sock"))   s = SP_SOCK;
+    else                           s = SP_SOCK;
+    s_strategy = (int)s;
+    fprintf(stderr, "[box64-spawn] strategy=%s\n",
+        s == SP_NATIVE ? "native" : s == SP_FORK ? "fork" : "sock");
+    return s;
+}
+
+static const char* get_sock_path(void) {
+    const char* v = getenv("BOX64_PROCMGR_SOCK");
+    return (v && *v) ? v : DEFAULT_SOCK_PATH;
+}
+
+static int count_argv(char* const argv[]) {
+    int n = 0;
+    if (!argv) return 0;
+    while (argv[n]) n++;
+    return n;
+}
+
+/* ================================================================
+ * [2] socket client (used by sock strategy)
+ * ================================================================ */
+static int sock_write_all(int fd, const void* p, size_t n) {
+    const uint8_t* b = (const uint8_t*)p;
+    while (n) {
+        ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
+        if (w <= 0) { if (w < 0 && errno == EINTR) continue; return -1; }
+        b += w; n -= (size_t)w;
+    }
+    return 0;
+}
+static int sock_read_all(int fd, void* p, size_t n) {
+    uint8_t* b = (uint8_t*)p;
+    while (n) {
+        ssize_t r = recv(fd, b, n, 0);
+        if (r <= 0) { if (r < 0 && errno == EINTR) continue; return -1; }
+        b += r; n -= (size_t)r;
+    }
+    return 0;
+}
+static int frame_write(int fd, const char* p, size_t n) {
+    uint8_t h[4] = {
+        (uint8_t)(n >> 24), (uint8_t)(n >> 16),
+        (uint8_t)(n >>  8), (uint8_t) n
+    };
+    if (sock_write_all(fd, h, 4) < 0) return -1;
+    return sock_write_all(fd, p, n);
+}
+
+static int frame_read(int fd, char* buf, size_t cap, size_t* out_len) {
+    uint8_t h[4];
+    if (sock_read_all(fd, h, 4) < 0) return -1;
+    size_t n = ((size_t)h[0]<<24)|((size_t)h[1]<<16)
+             | ((size_t)h[2]<< 8)|(size_t)h[3];
+    if (n >= cap) return -1;
+    if (sock_read_all(fd, buf, n) < 0) return -1;
+    buf[n] = 0;
+    if (out_len) *out_len = n;
+    return 0;
+}
+
+static int sock_connect(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", get_sock_path());
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return -1;
+    }
+    return fd;
+}
+
+/* Append "KEY value\n" to *buf. *off / cap protected. */
+static int buf_appendf(char* buf, size_t cap, size_t* off,
+                       const char* fmt, ...) {
+    if (*off >= cap) return -1;
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, cap - *off, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= cap - *off) return -1;
+    *off += (size_t)n;
+    return 0;
+}
+
+/* Build CMD CREATE payload. Returns length, or -1 on overflow. */
+static int build_create_req(char* buf, size_t cap,
+                            const char* exe,
+                            char* const argv[], char* const envp[],
+                            int wait_flag) {
+    size_t off = 0;
+    if (buf_appendf(buf, cap, &off, "CMD CREATE\n")             < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "REQ_ID 1\n")               < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "EXE %s\n", exe ? exe : "") < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "KIND box64\n")             < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "WAIT %d\n", wait_flag)     < 0) return -1;
+    if (argv) {
+        for (int i = 0; argv[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ARG %s\n", argv[i]) < 0) return -1;
+        }
+    }
+    if (envp) {
+        for (int i = 0; envp[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ENV %s\n", envp[i]) < 0) return -1;
+        }
+    }
+    if (buf_appendf(buf, cap, &off, "END") < 0) return -1;
+    return (int)off;
+}
+
+/* Parse RESULT response. status_ok: 1=ok, 0=error. */
+static int parse_create_resp(const char* p, size_t n,
+                             int* status_ok, pid_t* out_pid,
+                             int* out_exit_code, char* msg, size_t msg_cap) {
+    *status_ok = 0;
+    if (out_pid)       *out_pid = -1;
+    if (out_exit_code) *out_exit_code = -1;
+    if (msg && msg_cap) msg[0] = 0;
+
+    size_t i = 0;
+    while (i < n) {
+        size_t j = i;
+        while (j < n && p[j] != '\n') j++;
+        size_t llen = j - i;
+        const char* line = p + i;
+
+        if      (llen == 9 && !strncmp(line, "STATUS ok", 9))    *status_ok = 1;
+        else if (llen >= 4 && !strncmp(line, "PID ", 4) && out_pid) {
+            *out_pid = (pid_t)atol(line + 4);
+        }
+        else if (llen >= 10 && !strncmp(line, "EXIT_CODE ", 10) && out_exit_code) {
+            *out_exit_code = atoi(line + 10);
+        }
+        else if (llen >= 4 && !strncmp(line, "MSG ", 4) && msg && msg_cap) {
+            size_t cp = llen - 4;
+            if (cp >= msg_cap) cp = msg_cap - 1;
+            memcpy(msg, line + 4, cp);
+            msg[cp] = 0;
+        }
+        else if (llen == 3 && !strncmp(line, "END", 3)) {
+            return 0;
+        }
+        i = j + 1;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * [3] FORK: child wine prereserve cleanup
+ * ================================================================ */
+struct unmap_region { unsigned long base; unsigned long size; const char* name; };
+static const struct unmap_region s_wine_reserve[] = {
+    { 0x00010000UL, 0x00008000UL,    "low-stub" },
+    { 0x00110000UL, 0x30000000UL,    "low-heap" },
+    { 0x7f000000UL, 0x00fe0000UL,    "high-pre-kuser" },
+    { 0x7ffe1000UL, 0x0201f000UL,    "high-post-kuser" },
+};
+
+static void child_unmap_wine_reserve(const char* tag) {
+    for (unsigned i = 0; i < sizeof(s_wine_reserve)/sizeof(s_wine_reserve[0]); i++) {
+        int rc = munmap((void*)s_wine_reserve[i].base, s_wine_reserve[i].size);
+        int e  = rc ? errno : 0;
+        fprintf(stderr, "[child-unmap %s] %s @0x%lx+0x%lx rc=%d errno=%d\n",
+            tag, s_wine_reserve[i].name,
+            s_wine_reserve[i].base, s_wine_reserve[i].size, rc, e);
+    }
+    fflush(stderr);
+}
+
+static void child_reserve_wine_holes(const char* tag) {
+    for (unsigned i = 0; i < sizeof(s_wine_reserve)/sizeof(s_wine_reserve[0]); i++) {
+        void* got = mmap((void*)s_wine_reserve[i].base, s_wine_reserve[i].size,
+                         PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        int rc = (got == MAP_FAILED) ? -1
+               : (got != (void*)s_wine_reserve[i].base) ? -2 : 0;
+        int e  = (got == MAP_FAILED) ? errno : 0;
+        fprintf(stderr, "[child-reserve %s] %s @0x%lx+0x%lx -> %p rc=%d errno=%d\n",
+            tag, s_wine_reserve[i].name,
+            s_wine_reserve[i].base, s_wine_reserve[i].size, got, rc, e);
+    }
+    fflush(stderr);
+}
+
+static void apply_envp(char* const envp[]) {
+    if (!envp || envp == environ) return;
+    for (int i = 0; envp[i]; ++i) {
+        char* kv = envp[i];
+        char* eq = strchr(kv, '=');
+        if (!eq) continue;
+        size_t klen = (size_t)(eq - kv);
+        char keybuf[256];
+        if (klen == 0 || klen >= sizeof(keybuf)) continue;
+        memcpy(keybuf, kv, klen);
+        keybuf[klen] = 0;
+        setenv(keybuf, eq + 1, 1);
+    }
+}
+
+/* Copy argv into a fresh blob so the child's later free()s on the parent
+ * heap don't corrupt our argv array. */
+static int build_argv_blob(char* const argv[], int argc,
+                           const char*** out_argv, char** out_blob) {
+    size_t total = 0;
+    for (int i = 0; i < argc; i++) total += strlen(argv[i]) + 1;
+    char* blob = (char*)malloc(total + 64);
+    const char** av = (const char**)malloc(sizeof(char*) * (argc + 1));
+    if (!blob || !av) { free(blob); free(av); return -1; }
+    size_t off = 0;
+    for (int i = 0; i < argc; i++) {
+        size_t n = strlen(argv[i]) + 1;
+        memcpy(blob + off, argv[i], n);
+        av[i] = blob + off;
+        off += n;
+    }
+    av[argc] = NULL;
+    *out_argv = av;
+    *out_blob = blob;
+    return 0;
+}
+
+/* ================================================================
+ * [4] strategy: NATIVE
+ * ================================================================ */
+static int execve_native(const char* path,
+                         char* const argv[], char* const envp[]) {
+    fprintf(stderr, "[spawn-native] execve(%s)\n", path ? path : "(null)");
+    return execve(path, argv, envp ? envp : environ);
+}
+
+static int spawn_native(int* outpid, const char* path,
+                        char* const argv[], char* const envp[]) {
+    fprintf(stderr, "[spawn-native] posix_spawn(%s)\n", path ? path : "(null)");
+    pid_t pid = -1;
+    int rc = posix_spawn(&pid, path, NULL, NULL,
+                         argv, envp ? envp : environ);
+    if (rc == 0 && outpid) *outpid = (int)pid;
+    return rc;
+}
+
+/* ================================================================
+ * [5] strategy: FORK (fork + box64_run)
+ * ================================================================ */
+static int execve_fork(const char* path,
+                       char* const argv[], char* const envp[]) {
+    (void)path;
+    int argc = count_argv(argv);
+    if (argc == 0) { errno = EINVAL; return -1; }
+
+    fprintf(stderr,
+        "[spawn-fork] execve fork+box64_run argc=%d argv[0]=%s argv[1]=%s\n",
+        argc, argv[0], argc > 1 ? argv[1] : "(none)");
+    fflush(stderr);
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        /* ---- child ---- */
+        apply_envp(envp);
+        child_unmap_wine_reserve("exec");
+        child_reserve_wine_holes("exec");
+
+        const char** argv2 = NULL; char* blob = NULL;
+        if (build_argv_blob(argv, argc, &argv2, &blob) < 0) {
+            fprintf(stderr, "[spawn-fork child] OOM, _exit 126\n");
+            _exit(126);
+        }
+        int rc = box64_run(argc, argv2, (const char**)environ);
+        fprintf(stderr,
+            "[spawn-fork child] box64_run returned %d, _exit\n", rc);
+        fflush(NULL);
+        _exit(rc & 0xff);
+    }
+
+    /* ---- parent ---- */
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) _exit(127);
+    }
+    int code;
+    if      (WIFEXITED(status))   code = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
+    else                          code = 1;
+
+    fprintf(stderr, "[spawn-fork] child pid=%d exited code=%d, _exit(self)\n",
+        (int)pid, code);
+    fflush(NULL);
+    _exit(code);   /* execve semantics: never return on success */
+}
+
+static int spawn_fork(int* outpid, const char* path,
+                      char* const argv[], char* const envp[]) {
+    (void)path;
+    int argc = count_argv(argv);
+    if (argc == 0) { return ENOENT; }
+
+    fprintf(stderr,
+        "[spawn-fork] posix_spawn fork+box64_run argc=%d argv[0]=%s argv[1]=%s\n",
+        argc, argv[0], argc > 1 ? argv[1] : "(none)");
+    fflush(stderr);
+
+    pid_t pid = fork();
+    if (pid < 0) return errno;
+
+    if (pid == 0) {
+        /* ---- child ---- */
+        apply_envp(envp);
+        child_unmap_wine_reserve("spawn");
+        child_reserve_wine_holes("spawn");
+
+        const char** argv2 = NULL; char* blob = NULL;
+        if (build_argv_blob(argv, argc, &argv2, &blob) < 0) {
+            fprintf(stderr, "[spawn-fork spawn-child] OOM, _exit 126\n");
+            _exit(126);
+        }
+        int rc = box64_run(argc, argv2, (const char**)environ);
+        fprintf(stderr,
+            "[spawn-fork spawn-child] box64_run returned %d, _exit\n", rc);
+        fflush(NULL);
+        _exit(rc & 0xff);
+    }
+
+    if (outpid) *outpid = (int)pid;
+    fprintf(stderr,
+        "[spawn-fork] spawn forked child pid=%d, returning 0\n", (int)pid);
+    fflush(stderr);
+    return 0;
+}
+
+/* ================================================================
+ * [6] strategy: SOCK (delegate to HAP main process)
+ * ================================================================ */
+#define SOCK_REQ_BUF_CAP   (256 * 1024)
+#define SOCK_RESP_BUF_CAP  (16  * 1024)
+
+static int sock_request(const char* exe, char* const argv[], char* const envp[],
+                        int wait_flag,
+                        int* out_status_ok, pid_t* out_pid,
+                        int* out_exit_code, char* errmsg, size_t errmsg_cap) {
+    int fd = sock_connect();
+    if (fd < 0) {
+        fprintf(stderr, "[spawn-sock] connect failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    char* req = (char*)malloc(SOCK_REQ_BUF_CAP);
+    char* rsp = (char*)malloc(SOCK_RESP_BUF_CAP);
+    if (!req || !rsp) { free(req); free(rsp); close(fd); return -1; }
+
+    int rn = build_create_req(req, SOCK_REQ_BUF_CAP,
+                              exe, argv, envp, wait_flag);
+    if (rn < 0) {
+        fprintf(stderr, "[spawn-sock] request build overflow\n");
+        free(req); free(rsp); close(fd); return -1;
+    }
+
+    if (frame_write(fd, req, (size_t)rn) < 0) {
+        fprintf(stderr, "[spawn-sock] frame_write failed: %s\n", strerror(errno));
+        free(req); free(rsp); close(fd); return -1;
+    }
+
+    size_t got = 0;
+    if (frame_read(fd, rsp, SOCK_RESP_BUF_CAP, &got) < 0) {
+        fprintf(stderr, "[spawn-sock] frame_read failed: %s\n", strerror(errno));
+        free(req); free(rsp); close(fd); return -1;
+    }
+
+    parse_create_resp(rsp, got, out_status_ok, out_pid, out_exit_code,
+                      errmsg, errmsg_cap);
+
+    free(req); free(rsp); close(fd);
+    return 0;
+}
+
+static int execve_sock(const char* path,
+                       char* const argv[], char* const envp[]) {
+    (void)path;
+    int status_ok = 0;
+    pid_t pid = -1;
+    int   exit_code = -1;
+    char  msg[256] = {0};
+    int rc = sock_request(argv ? argv[0] : path, argv, envp,
+                          /*wait_flag=*/1,
+                          &status_ok, &pid, &exit_code, msg, sizeof(msg));
+    if (rc < 0 || !status_ok) {
+        if (!status_ok && rc == 0) {
+            fprintf(stderr, "[spawn-sock] server error: %s\n", msg);
+        }
+        return -1;   /* signal fallback to fork */
+    }
+    fprintf(stderr,
+        "[spawn-sock] sync spawn ok pid=%d exit=%d, _exit(self)\n",
+        (int)pid, exit_code);
+    fflush(NULL);
+    _exit(exit_code & 0xff);
+}
+
+static int spawn_sock(int* outpid, const char* path,
+                      char* const argv[], char* const envp[]) {
+    (void)path;
+    int status_ok = 0;
+    pid_t pid = -1;
+    char  msg[256] = {0};
+    int rc = sock_request(argv ? argv[0] : path, argv, envp,
+                          /*wait_flag=*/0,
+                          &status_ok, &pid, NULL, msg, sizeof(msg));
+    if (rc < 0 || !status_ok) {
+        if (!status_ok && rc == 0) {
+            fprintf(stderr, "[spawn-sock] server error: %s\n", msg);
+        }
+        return -1;   /* signal fallback to fork */
+    }
+    if (outpid) *outpid = (int)pid;
+    fprintf(stderr, "[spawn-sock] async spawn ok pid=%d\n", (int)pid);
+    return 0;
+}
+
+/* ================================================================
+ * [7] public dispatchers
+ * ================================================================ */
+__attribute__((visibility("default")))
+int box64_self_execve(const char* path, char* const argv[], char* const envp[]) {
+    enum spawn_strategy s = get_strategy();
+
+    if (s == SP_SOCK && !s_sock_broken) {
+        int rc = execve_sock(path, argv, envp);
+        /* execve_sock only returns on failure */
+        s_sock_broken = 1;
+        fprintf(stderr, "[box64-spawn] sock failed, falling back to fork\n");
+        (void)rc;
+        s = SP_FORK;
+    }
+
+    if (s == SP_NATIVE) return execve_native(path, argv, envp);
+    if (s == SP_FORK)   return execve_fork(path, argv, envp);
+    return execve_fork(path, argv, envp);
+}
+
+__attribute__((visibility("default")))
+int box64_self_execv(const char* path, char* const argv[]) {
+    return box64_self_execve(path, argv, environ);
+}
+
+__attribute__((visibility("default")))
+int box64_self_posix_spawn(int* outpid, const char* path,
+                           const posix_spawn_file_actions_t* facts,
+                           const posix_spawnattr_t* attr,
+                           char* const argv[], char* const envp[]) {
+    (void)facts; (void)attr;
+    enum spawn_strategy s = get_strategy();
+
+    if (s == SP_SOCK && !s_sock_broken) {
+        int rc = spawn_sock(outpid, path, argv, envp);
+        if (rc == 0) return 0;
+        s_sock_broken = 1;
+        fprintf(stderr, "[box64-spawn] sock failed, falling back to fork\n");
+        s = SP_FORK;
+    }
+
+    if (s == SP_NATIVE) return spawn_native(outpid, path, argv, envp);
+    return spawn_fork(outpid, path, argv, envp);
+}
+
+__attribute__((visibility("default")))
+int box64_self_posix_spawnp(int* outpid, const char* path,
+                            const posix_spawn_file_actions_t* facts,
+                            const posix_spawnattr_t* attr,
+                            char* const argv[], char* const envp[]) {
+    /* path search not done here: callers already resolved to absolute */
+    return box64_self_posix_spawn(outpid, path, facts, attr, argv, envp);
+}
+EOF_SPAWN
+    echo "    [#80]   + $f"
+
+    if _already "$cm" "$mark"; then
+        echo "    [#80]   CMakeLists.txt — already patched"
+    else
+        echo "    [#80]   append target_sources to CMakeLists.txt"
+        cat >> "$cm" << EOF_CM
+# $mark =====================================
+if(TARGET box64)
+    target_sources(box64 PRIVATE \${CMAKE_SOURCE_DIR}/src/box64_spawn.c)
+endif()
+# =========================================
+EOF_CM
+    fi
+}
+
+# ================================================================
+# Patch 81 — 调用点路由: 7 处 execv/execve/posix_spawn{,p}
+# ================================================================
+# 把 box64 内部 self-spawn 改写后的调用点都路由到 patch 80 的
+# box64_self_* dispatcher.
+#
+# 调用点 (基于 vanilla source, grep 已确认):
+#   src/wrapped/wrappedlibc.c
+#     L2790  execve(newargv[0], (char* const*)newargv, envv)
+#     L2792  execv (newargv[0], (char* const*)newargv)
+#     L2844  execve(newargv[0], (char* const*)newargv, envp)
+#     L2853  return execve(path, argv2, envp)         (uname -m 重定向)
+#     L3209  posix_spawn (pid, newargv[0], actions, attrp, ...)
+#     L3253  posix_spawn (pid, newargv[0], actions, attrp, ...)
+#
+#   src/wrapped32/wrappedlibc.c
+#     L1949  execv (newargv[0], ...)
+#     L2030  execve(newargv[0], ..., newenvp)
+#     L2082  execv (newargv[0], ...)
+#     L2141  execve(newargv[0], ..., newenvp)
+#     L2273  posix_spawnp(pid, newargv[0], ...)
+#     L2325  posix_spawnp(pid, newargv[0], ...)
+#
+#   src/core.c
+#     L1268  execve(my_context->box64path, (void*)argv, newenv)
+#     L1400  execve(newargv[0], newargv, newenv)
+#
+# 替换规则 (与 vanilla 匹配):
+#   execv(newargv[0]            -> box64_self_execv(newargv[0]
+#   execve(newargv[0]           -> box64_self_execve(newargv[0]
+#   posix_spawn (pid, newargv[0]  -> box64_self_posix_spawn (pid, newargv[0]
+#   posix_spawnp(pid, newargv[0]  -> box64_self_posix_spawnp(pid, newargv[0]
+#   return execve(path, argv2, envp);
+#                              -> return box64_self_execve(path, argv2, envp);
+#   execve(my_context->box64path, (void*)argv, newenv)
+#                              -> box64_self_execve(my_context->box64path, (void*)argv, newenv)
+#   execve(newargv[0], newargv, newenv)
+#                              -> box64_self_execve(newargv[0], newargv, newenv)
+patch_81_route_self_exec() {
+    local mark='OHOS_PATCH_ROUTE_SELF_EXEC_V2'
+    local hdr="\\
+/* $mark */\\
+extern int box64_self_execv (const char* path, char* const argv[]);\\
+extern int box64_self_execve(const char* path, char* const argv[], char* const envp[]);\\
+extern int box64_self_posix_spawn (int* outpid, const char* path,\\
+                                   const void* facts, const void* attr,\\
+                                   char* const argv[], char* const envp[]);\\
+extern int box64_self_posix_spawnp(int* outpid, const char* path,\\
+                                   const void* facts, const void* attr,\\
+                                   char* const argv[], char* const envp[]);"
+
+    # ---- 64-bit wrappedlibc.c ----
+    local f1="$BOX64/src/wrapped/wrappedlibc.c"
+    if [ -f "$f1" ] && ! _already "$f1" "$mark"; then
+        _patch_header 81 "src/wrapped/wrappedlibc.c" "route 6 self-exec sites"
+        sed -i "1i$hdr" "$f1"
+
+        # newargv[0] 系列
+        sed -i 's|\bexecv(newargv\[0\]|box64_self_execv(newargv[0]|g'   "$f1"
+        sed -i 's|\bexecve(newargv\[0\]|box64_self_execve(newargv[0]|g' "$f1"
+        sed -i 's|\bposix_spawn(pid, newargv\[0\]|box64_self_posix_spawn(pid, newargv[0]|g' "$f1"
+        # 兼容大小写空格 (vanilla 是 'posix_spawn(pid, newargv[0]')
+        # uname -m 重定向那一行
+        sed -i 's|return execve(path, argv2, envp);|return box64_self_execve(path, argv2, envp);|' "$f1"
+    fi
+
+    # ---- 32-bit wrappedlibc.c ----
+    local f2="$BOX64/src/wrapped32/wrappedlibc.c"
+    if [ -f "$f2" ] && ! _already "$f2" "$mark"; then
+        _patch_header 81 "src/wrapped32/wrappedlibc.c" "route 6 self-exec sites"
+        sed -i "1i$hdr" "$f2"
+
+        sed -i 's|\bexecv(newargv\[0\]|box64_self_execv(newargv[0]|g'   "$f2"
+        sed -i 's|\bexecve(newargv\[0\]|box64_self_execve(newargv[0]|g' "$f2"
+        sed -i 's|\bposix_spawnp(pid, newargv\[0\]|box64_self_posix_spawnp(pid, newargv[0]|g' "$f2"
+    fi
+
+    # ---- core.c ----
+    local f3="$BOX64/src/core.c"
+    if [ -f "$f3" ] && ! _already "$f3" "$mark"; then
+        _patch_header 81 "src/core.c" "route 2 self-exec sites"
+        sed -i "1i$hdr" "$f3"
+
+        sed -i 's|execve(my_context->box64path, (void\*)argv, newenv)|box64_self_execve(my_context->box64path, (void*)argv, newenv)|' "$f3"
+        sed -i 's|execve(newargv\[0\], newargv, newenv)|box64_self_execve(newargv[0], newargv, newenv)|' "$f3"
+    fi
+}
+
+# ================================================================
+# Patch 82 — 把 OHOS bring-up 诊断输出按 BOX64_LOG 分级
+# ================================================================
+# 上游已把 box64_log 全局变量换成 BOX64ENV(log) 宏访问, 不便从
+# 我们这几个独立 .c 文件读. 改用各文件自己读 BOX64_LOG env var,
+# static 缓存. 与上游 box64 实际 log level 一致 (上游也读同一个
+# env var, 只是数值在 env_layout.c 里解析).
+#
+# 分级:
+#   BOX64_LOG=0 (默认): 静默. 仅 fatal 错误 (connect failed / fallback /
+#                       OOM 等用户必须看见的).
+#   BOX64_LOG>=1 INFO : 每次 spawn / 模块 init 概要 1 行
+#   BOX64_LOG>=2 DEBUG: mmap-noreplace, child-unmap/reserve 等 per-call.
+patch_82_log_gate() {
+    local mark='OHOS_PATCH_LOG_GATE'
+
+    # ---- 公用 helper 注入函数 ----
+    # 把同样的 helper 装到 4 个 .c 文件顶部. helper 名字不同避免符号冲突.
+    # (static, 同名也不会冲突, 但为可读性区分.)
+    _inject_log_helper() {
+        local file="$1"
+        local prefix="$2"   # 例如: ohos_spawn / ohos_remap / ohos_sigsys / ohos_wrappedlibc
+        python3 - "$file" "$mark" "$prefix" << 'PY'
+import sys, re
+p, mark, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+helper = '''/* %s */
+#include <stdlib.h>
+#include <stdio.h>
+static int %s_log_level(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("BOX64_LOG");
+        cached = (v && *v) ? atoi(v) : 0;
+        if (cached < 0) cached = 0;
+    }
+    return cached;
+}
+#define %s_INFO(...)  do { if (%s_log_level() >= 1) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+#define %s_DEBUG(...) do { if (%s_log_level() >= 2) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+''' % (mark, prefix, prefix.upper(), prefix, prefix.upper(), prefix)
+
+# 找最后一个 #include 行后面插入
+m = list(re.finditer(r'^#include\s+[<"][^>"]+[>"]\s*\n', s, re.M))
+if not m:
+    print("ERROR: no #include found in %s" % p, file=sys.stderr)
+    sys.exit(1)
+last = m[-1]
+s = s[:last.end()] + '\n' + helper + s[last.end():]
+open(p, 'w').write(s)
+print("  log helper injected into %s (prefix=%s)" % (p, prefix))
+PY
+    }
+
+    # ---- 1) box64_spawn.c (patch 80) ----
+    local f1="$BOX64/src/box64_spawn.c"
+    if [ -f "$f1" ] && ! grep -q "$mark" "$f1"; then
+        _patch_header 82 "box64_spawn.c" "gate child-unmap/reserve + spawn trace"
+        _inject_log_helper "$f1" "ohos_spawn"
+        python3 - "$f1" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+# DEBUG: 高频 per-fork trace (每次 fork 4 行 x 2 段)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[child-(unmap|reserve)',
+           r'OHOS_SPAWN_DEBUG("[child-\1', s)
+# INFO: 每次 spawn 概要
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[box64-spawn\] strategy=',
+           'OHOS_SPAWN_INFO("[box64-spawn] strategy=', s)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*\n\s*"\[spawn-fork\]',
+           'OHOS_SPAWN_INFO(\n        "[spawn-fork]', s)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[spawn-fork\]',
+           'OHOS_SPAWN_INFO("[spawn-fork]', s)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[spawn-native\]',
+           'OHOS_SPAWN_INFO("[spawn-native]', s)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*\n\s*"\[spawn-sock\] sync spawn ok',
+           'OHOS_SPAWN_INFO(\n        "[spawn-sock] sync spawn ok', s)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[spawn-sock\] async spawn ok',
+           'OHOS_SPAWN_INFO("[spawn-sock] async spawn ok', s)
+# 保持 fprintf 不变的错误类:
+#   [spawn-sock] connect failed / server error / frame_* failed / request build overflow
+#   [spawn-fork child] OOM
+#   [box64-spawn] sock failed, falling back to fork
+open(p, 'w').write(s)
+print("  patch_82 box64_spawn.c: gated")
+PY
+    fi
+
+    # ---- 2) wrappedlibc.c mmap-noreplace (patch 72) ----
+    local f2="$BOX64/src/wrapped/wrappedlibc.c"
+    if [ -f "$f2" ] && ! grep -q "$mark" "$f2"; then
+        _patch_header 82 "wrappedlibc.c" "gate [mmap-noreplace]"
+        # 用 sed 在 patch 09 prologue 之后注入 helper. 不能用 _inject_log_helper
+        # 因为 wrappedlibc.c 顶部已经被 patch 09/10/65/66 加了一堆东西,
+        # last include 位置不稳定. 直接在文件最末尾追加 helper.
+        # 然后再把 fprintf 替换成宏调用. 宏访问 helper 函数, 静态链接,
+        # 调用站点在 my_mmap64 中, 没问题.
+        cat >> "$f2" << EOF_HELPER
+
+/* $mark — log gate helper (appended at EOF, used by my_mmap64) */
+#include <stdlib.h>
+static int ohos_wrappedlibc_log_level(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("BOX64_LOG");
+        cached = (v && *v) ? atoi(v) : 0;
+        if (cached < 0) cached = 0;
+    }
+    return cached;
+}
+EOF_HELPER
+
+        # 替换 fprintf 调用. 注意 my_mmap64 在文件中间, 调用 helper
+        # 是前向引用 -- C 里函数声明可以隐式 (int(...)), static 定义
+        # 在后没问题, 但保险起见, 我们在调用点前加 forward decl.
+        python3 - "$f2" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+
+# 在 my_mmap64 函数定义之前插入 forward decl
+anchor = 'EXPORT void* my_mmap64('
+if anchor not in s:
+    print("ERROR: my_mmap64 anchor not found", file=sys.stderr); sys.exit(1)
+fwd = '/* OHOS_PATCH_LOG_GATE forward decl */\nstatic int ohos_wrappedlibc_log_level(void);\n\n'
+s = s.replace(anchor, fwd + anchor, 1)
+
+# 替换 mmap-noreplace 那一行 fprintf 为条件打印.
+# patch 72 注入的代码是:
+#   fprintf(stderr,
+#       "[mmap-noreplace] addr=%p len=0x%lx prot=0x%x flags=0x%x "
+#       "%s -> %p errno=%d\n",
+#       addr, ...);
+# 找到这个多行 fprintf, 把外层包成 if.
+pat = re.compile(
+    r'(fprintf\(\s*stderr\s*,\s*\n\s*"\[mmap-noreplace\].*?\);)',
+    re.DOTALL)
+def repl(m):
+    return ('if (ohos_wrappedlibc_log_level() >= 2) {\n            '
+            + m.group(1) + '\n        }')
+new_s, n = pat.subn(repl, s)
+print(f"  patch_82 wrappedlibc.c: gated {n} mmap-noreplace fprintf(s)")
+if n < 1:
+    print("WARN: mmap-noreplace fprintf not matched", file=sys.stderr)
+open(p, 'w').write(new_s)
+PY
+    fi
+
+    # ---- 3) box64_path_remap.c (patch 65/66) ----
+    local f3="$BOX64/src/box64_path_remap.c"
+    if [ -f "$f3" ] && ! grep -q "$mark" "$f3"; then
+        _patch_header 82 "box64_path_remap.c" "gate [box64-remap] setup lines"
+        _inject_log_helper "$f3" "ohos_remap"
+        python3 - "$f3" << 'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+# /tmp -> ... (启动期 1 行)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*\n?\s*"\[box64-remap\] /tmp ->',
+           'OHOS_REMAP_INFO("[box64-remap] /tmp ->', s)
+# WINEPREFIX/dosdevices/c: -> ... (启动期 1 行)
+s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[box64-remap\] %s -> %s',
+           'OHOS_REMAP_INFO("[box64-remap] %s -> %s', s)
+# WARN 类 (target not writable / sun_path too long / faked symlink)
+# 保持 fprintf 不变
+open(p, 'w').write(s)
+print("  patch_82 box64_path_remap.c: gated")
+PY
+    fi
+
+    # ---- 4) sigsys_fallback.c (patch 50) ----
+    local f4="$BOX64/src/sigsys_fallback.c"
+    if [ -f "$f4" ] && ! grep -q "$mark" "$f4"; then
+        _patch_header 82 "sigsys_fallback.c" "gate SIGSYS installed line"
+        # sigsys_fallback.c 用的是 write(2,...) 不是 fprintf. 单独处理.
+        python3 - "$f4" "$mark" << 'PY'
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+helper = '''
+/* %s */
+#include <stdlib.h>
+static int ohos_sigsys_log_level(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("BOX64_LOG");
+        cached = (v && *v) ? atoi(v) : 0;
+        if (cached < 0) cached = 0;
+    }
+    return cached;
+}
+''' % mark
+
+# 顶部加 helper. 找 #include <stdio.h> 之后插入.
+m = s.find('#include <stdio.h>')
+if m < 0:
+    print("ERROR: no <stdio.h> in sigsys_fallback.c", file=sys.stderr); sys.exit(1)
+eol = s.find('\n', m)
+s = s[:eol+1] + helper + s[eol+1:]
+
+# 把 SIGSYS installed write 包条件
+old = '''        const char *m = "[box64] SIGSYS fallback installed\\n";
+        (void)!write(2, m, strlen(m));'''
+if old in s:
+    new = '''        if (ohos_sigsys_log_level() >= 1) {
+            const char *m = "[box64] SIGSYS fallback installed\\n";
+            (void)!write(2, m, strlen(m));
+        }'''
+    s = s.replace(old, new, 1)
+    print("  patch_82 sigsys_fallback.c: gated install msg")
+else:
+    print("WARN: SIGSYS installed write not matched", file=sys.stderr)
+
+# WARN: install failed 保持原样, 不改
+open(p, 'w').write(s)
+PY
+    fi
+}
 
 # ================================================================
 # 调度
@@ -3483,8 +5331,6 @@ patch_25_myalign32_obstack_skip
 patch_26_wrappedlibc32
 patch_27_box32_link_stubs
 patch_28_box32_low4gb_allocator
-# patch_29_route_boxmalloc_in_box32   #  box64 内部已经在用 actual_* 宏做 BOX32 分流。patch_29 是多此一举
-# patch_30_default_prefer_wrapped_libs # 已废弃: 上游默认就是 1, sed 名字也对不上
 patch_31_box32_no_abort
 patch_32_box32_warn_caller
 patch_33_box32_prefill_io_globdata
@@ -3497,5 +5343,23 @@ patch_50_sigsys_fallback
 patch_51_box64_run_entry
 patch_52_rename_main
 patch_53_cmake_to_shared
+# ---- self-exec via fork+box64_run ------------------------------
+# patch_60_self_exec_helper
+# patch_61_route_self_exec
+patch_62_mmap_noreplace_fallback
+patch_63_wine_kuser_hole
+# patch_64_self_posix_spawn
+patch_65_path_remap
+patch_66_path_remap_v2
+patch_67_path_remap_v3_missing_wrappers
+# patch_68_path_remap_trace
+# patch_70_child_unmap_wine_reserve
+# patch_71_child_reserve_wine_holes
+patch_72_mmap_noreplace_split
+# ---- self-exec via three-strategy dispatcher (patch 80/81) -----
+patch_80_box64_spawn
+patch_81_route_self_exec
+# ---- diagnostic log gating ------------------------------------
+patch_82_log_gate
 
 echo "    all patches applied."

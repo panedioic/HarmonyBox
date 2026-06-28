@@ -74,7 +74,8 @@ export struct DebugPage {
     const env: string[] = [
       `BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`,
       `BOX64_LOG=${logLevel}`,
-      `BOX64_NOBANNER=0`
+      `BOX64_NOBANNER=0`,
+      // `BOX64_REMAP_TRACE=0`
     ];
     for (const e of WineService.buildLaunchEnv(ctx)) env.push(e);
     return env;
@@ -209,8 +210,8 @@ export struct DebugPage {
     this.append(`kernel32.dll = ${this.existsLabel(`${prefix}/drive_c/windows/system32/kernel32.dll`)}`);
   }
 
-  private async secSetupPrefix(): Promise<void> {
-    this.append('===== SETUP PREFIX (NAPI) =====');
+  private async secSetupPrefix(force: boolean = false): Promise<void> {
+    this.append(force ? '===== RESET + SETUP PREFIX =====' : '===== SETUP PREFIX (NAPI) =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const prefix: string = WineService.getPrefixDir(ctx);
     const wineRoot: string = WineService.getRootDir(ctx);
@@ -218,6 +219,18 @@ export struct DebugPage {
     this.append(`prefix    = ${prefix}`);
     this.append(`wineRoot  = ${wineRoot}`);
     this.append('');
+
+    if (force) {
+      const marker: string = `${prefix}/.box64_setup_done`;
+      try {
+        if (fs.accessSync(marker)) {
+          fs.unlinkSync(marker);
+          this.append(`removed marker: ${marker}`);
+        }
+      } catch (e) {
+        this.append(`unlink err: ${(e as Error).message}`);
+      }
+    }
 
     // 探测源目录布局, 帮排查 .dll vs .dll.so
     const sys32Src: string = `${wineRoot}/lib/wine/x86_64-windows`;
@@ -438,6 +451,31 @@ export struct DebugPage {
       this.append(`[ws] started pid=${pid}`);
     } else {
       this.append(`[ws] launch error pid=${pid}`);
+    }
+  }
+
+  private startWineserverBgSilent(): void {
+    if (this.wineserverPid > 0) {
+      this.append(`[ws] already running pid=${this.wineserverPid}`);
+      return;
+    }
+    this.append('===== START WINESERVER (silent) =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+
+    const env: string[] = this.buildEnv('0');
+    const args: string[] = ['box64', wineserver, '-f', '-p'];
+
+    // 用一个声明为可选/可空的类型变量, 而不是 any/unknown
+    const noCb: ((event: string, data: string) => void) | null = null;
+    const pid: number = wl.runBox64('box64', args, env, '', noCb);
+
+    if (pid > 0) {
+      this.wineserverPid = pid;
+      this.append(`[ws-silent] started pid=${pid} (output -> /dev/null)`);
+      this.append(`(静默模式无 exit 通知, 子进程真死后请手动 "停 wineserver")`);
+    } else {
+      this.append(`[ws-silent] launch error pid=${pid}`);
     }
   }
 
@@ -734,6 +772,86 @@ export struct DebugPage {
     this.append('[ok] stopped');
   }
 
+  private async secReinstallWine(): Promise<void> {
+    this.append('===== 替换 WINE (新版) =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+
+    // 1) 安全闸门: 必须先停 wineserver, 否则旧 server 句柄拿着旧 wine .so 不放
+    if (this.wineserverPid > 0) {
+      this.append('[1/5] 检测到 wineserver 运行中, 先停掉');
+      this.stopWineserverBg();
+      // 给它 1 秒退出, 否则下一步 rmdir 可能撞到 busy
+      await new Promise<void>((r): void => { setTimeout(r, 1000); });
+    } else {
+      this.append('[1/5] wineserver 未在跑, 跳过');
+    }
+
+    // 2) 清旧 wineprefix
+    this.append('[2/5] 清理旧 wineprefix');
+    try {
+      WineService.wipePrefix(ctx);
+      this.append('     prefix wiped');
+    } catch (e) {
+      this.append(`     wipe err: ${(e as Error).message}`);
+    }
+
+    // 2.1) 显式删 setup marker (即使 wipePrefix 不干净也保证下次重做)
+    const prefix: string = WineService.getPrefixDir(ctx);
+    const marker: string = `${prefix}/.box64_setup_done`;
+    try {
+      if (fs.accessSync(marker)) {
+        fs.unlinkSync(marker);
+        this.append('     marker removed');
+      }
+    } catch (e) { /* ignore */ }
+
+    // 2.5) 清 box64-tmp (wineserver 的 /tmp 替身, 有旧 socket/lock)
+    this.append('[2.5/5] 清理 box64-tmp');
+    const box64Tmp: string = '/data/storage/el2/base/cache/box64-tmp';
+    try {
+      if (fs.accessSync(box64Tmp)) {
+        fs.rmdirSync(box64Tmp);
+        this.append('     box64-tmp wiped');
+      } else {
+        this.append('     box64-tmp not present');
+      }
+    } catch (e) {
+      this.append(`     wipe err: ${(e as Error).message}`);
+    }
+
+    // 3) 卸载旧 wine 目录
+    this.append('[3/5] 卸载旧 wine');
+    try {
+      WineService.uninstall(ctx);
+      this.append('     uninstalled');
+    } catch (e) {
+      this.append(`     uninstall err: ${(e as Error).message}`);
+    }
+
+    // 4) 选目录 + 安装新版
+    this.append('[4/5] 选择新版 wine 根目录 (含 bin/wine)');
+    const msg: string = await WineService.pickAndInstall(ctx);
+    if (msg.length > 0) {
+      this.append(`     失败: ${msg}`);
+      return;
+    }
+    this.append('     install ok');
+
+    // 5) 重新预布置 prefix
+    this.append('[5/5] 预布置新 prefix');
+    // const prefix: string = WineService.getPrefixDir(ctx);
+    const wineRoot: string = WineService.getRootDir(ctx);
+    try {
+      const ok: boolean = wl.setupWinePrefix(prefix, wineRoot);
+      this.append(`     setupWinePrefix = ${ok ? 'OK' : 'FAIL'}`);
+    } catch (e) {
+      this.append(`     setup err: ${(e as Error).message}`);
+    }
+
+    this.append('');
+    this.append('done. 下一步: 起 wineserver -> wineboot (复用 ws)');
+  }
+
   private async runOne(fn: () => Promise<void>): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -808,42 +926,26 @@ export struct DebugPage {
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineVersion()); })
-        Button('wineserver -v').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secWineserver()); })
         Button('prefix').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secPrefix()); })
-        Button('重建 prefix').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secWineboot()); })
         Button('预布置 prefix').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secSetupPrefix()); })
-        Button('重置+预布置').fontSize(12).height(30)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secSetupPrefix(false)); })
+        Button('强制重布').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secResetAndSetup()); })
-        Button('secWineserverProbe').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secWineserverProbe()); })
-        Button('box64-tmp').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secBox64Tmp()); })
-        Button('wineserver -f').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secWineserverFg()); })
+          .onClick((): void => { this.runOne((): Promise<void> => this.secSetupPrefix(true)); })
         Button('起 wineserver').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running && this.wineserverPid === 0)
           .onClick((): void => { this.startWineserverBg(); })
+        Button('🔇 起 wineserver (静默)').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE).enabled(!this.running && this.wineserverPid === 0)
+          .onClick((): void => { this.startWineserverBgSilent(); })
         Button('停 wineserver').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor('#F0F0F0').fontColor('#333333').enabled(!this.running && this.wineserverPid > 0)
@@ -871,6 +973,11 @@ export struct DebugPage {
           .backgroundColor('#F0F0F0').fontColor('#333333')
           .enabled(!this.running && this.sockStarted)
           .onClick((): void => { this.secStopSock(); })
+        Button('🔄 替换 Wine').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor('#E8743C').fontColor(Color.White)
+          .enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secReinstallWine()); })
       }
       .width('100%').margin({ bottom: 4 })
 
