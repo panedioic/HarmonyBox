@@ -283,8 +283,10 @@ void StreamReaderMain(int fd, pid_t pid, StreamSink sink) {
     if (waitpid(pid, &status, 0) > 0) {
         code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     }
-    Manager::Instance().MarkExited(pid, code);
+    // 顺序: 先 on_exit (sink.on_exit 内的 tsfn 还有效),
+    // 再 MarkExited (可能触发 shared_ptr deleter 释放 tsfn).
     if (sink.on_exit) sink.on_exit(pid, code);
+    Manager::Instance().MarkExited(pid, code);
 }
 
 void CaptureReaderMain(int fd, pid_t pid, CaptureSink sink) {
@@ -308,8 +310,8 @@ void CaptureReaderMain(int fd, pid_t pid, CaptureSink sink) {
     if (waitpid(pid, &status, 0) > 0) {
         code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     }
-    Manager::Instance().MarkExited(pid, code);
     if (sink.on_done) sink.on_done(code, std::move(out));
+    Manager::Instance().MarkExited(pid, code);
 }
 
 // 没有 sink 的进程也要回收,避免僵尸 + Registry 状态滞后
@@ -333,6 +335,54 @@ int WaitChildSync(pid_t pid) {
     else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
     Manager::Instance().MarkExited(pid, code);
     return code;
+}
+
+// 同步路径专用 reader. 只读 pipe + 喂 sink.on_line,
+// 不做 waitpid (由主线程 WaitChildSync 负责),
+// 不调 sink.on_exit (避免 sock 链上每代 child 都给 ArkTS 发 'exit').
+//
+// 顶层 NAPI 直调那条进程的 reader 仍走 StreamReaderMain, 它在最终
+// pipe EOF 时触发唯一一次 on_exit, 把 'exit' 事件交给 ArkTS.
+void StreamReaderNoWaitMain(int fd, pid_t pid, StreamSink sink) {
+    char buf[2048];
+    std::string pending;
+    while (true) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = 0;
+            pending.append(buf, n);
+            size_t pos;
+            while ((pos = pending.find('\n')) != std::string::npos) {
+                if (sink.on_line) sink.on_line(pid, pending.substr(0, pos));
+                pending.erase(0, pos + 1);
+            }
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    if (!pending.empty() && sink.on_line) sink.on_line(pid, pending);
+    close(fd);
+    // 故意不做 waitpid / MarkExited / on_exit
+}
+
+void CaptureReaderNoWaitMain(int fd, pid_t pid, CaptureSink sink) {
+    std::string out;
+    char buf[1024];
+    while (true) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n > 0) {
+            out.append(buf, n);
+            if (out.size() > sink.max_bytes) break;
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    close(fd);
+    (void)pid; (void)out;   // sync_wait 路径不调 on_done
 }
 
 // ============================================================
@@ -454,9 +504,18 @@ pid_t SpawnNative(const SpawnRequest& req) {
         _exit(127);
     }
 
+    // ---- parent ----
     if (req.sync_wait) {
-        // 同步模式: 不起 reader/waiter, 由 Spawn() 父侧 waitpid
-        if (read_fd >= 0) close(read_fd);
+        // 同步模式 + sink: 起 NoWait reader 喂 sink.on_line, 但 waitpid
+        // 由 Spawn() 主线程的 WaitChildSync 做. 同步模式无 sink: read_fd
+        // 就是 -1 (need_pipe=false), 不起任何线程.
+        if (req.stream && read_fd >= 0) {
+            std::thread(StreamReaderNoWaitMain, read_fd, pid, *req.stream).detach();
+        } else if (req.capture && read_fd >= 0) {
+            std::thread(CaptureReaderNoWaitMain, read_fd, pid, *req.capture).detach();
+        } else if (read_fd >= 0) {
+            close(read_fd);
+        }
     } else {
         StartReader(read_fd, pid, req.stream, req.capture);
     }
@@ -523,8 +582,15 @@ pid_t SpawnBox64(const SpawnRequest& req) {
         _exit(rc & 0xFF);
     }
 
+    // ---- parent ----
     if (req.sync_wait) {
-        if (read_fd >= 0) close(read_fd);
+        if (req.stream && read_fd >= 0) {
+            std::thread(StreamReaderNoWaitMain, read_fd, pid, *req.stream).detach();
+        } else if (req.capture && read_fd >= 0) {
+            std::thread(CaptureReaderNoWaitMain, read_fd, pid, *req.capture).detach();
+        } else if (read_fd >= 0) {
+            close(read_fd);
+        }
     } else {
         StartReader(read_fd, pid, req.stream, req.capture);
     }
@@ -553,11 +619,12 @@ SpawnResult Spawn(const SpawnRequest& req_in) {
         OH_LOG_ERROR(LOG_APP, "%{public}s", res.error.c_str());
         return res;
     }
-    if (req.sync_wait && (req.stream || req.capture)) {
-        res.error = "sync_wait excludes stream/capture";
-        OH_LOG_ERROR(LOG_APP, "%{public}s", res.error.c_str());
-        return res;
-    }
+    // deleted this validcation
+    // if (req.sync_wait && (req.stream || req.capture)) {
+    //     res.error = "sync_wait excludes stream/capture";
+    //     OH_LOG_ERROR(LOG_APP, "%{public}s", res.error.c_str());
+    //     return res;
+    // }
     if (req.exe_path.empty()) {
         res.error = "exe_path is empty";
         return res;
