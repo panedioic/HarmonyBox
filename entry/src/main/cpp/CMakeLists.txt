@@ -65,6 +65,7 @@ add_library(entry SHARED
     wayland_server.cpp
     xdg_shell.cpp
     xdg-shell-protocol.c
+    viewporter-protocol.c
     napi_utils.cpp
     fs_utils.cpp
 #    process_runner.cpp

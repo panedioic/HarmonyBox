@@ -127,6 +127,7 @@ static void xs_set_window_geometry(wl_client*, wl_resource* xsRes,
 
 static void xs_ack_configure(wl_client*, wl_resource*, uint32_t serial) {
     OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_CFG_ACK serial=%{public}u", serial);
+    OH_LOG_INFO(LOG_APP, "★ACK_CONFIGURE serial=%{public}u", serial);
 }
 
 static const struct xdg_surface_interface kSurfaceImpl = {
@@ -175,7 +176,7 @@ static const struct xdg_wm_base_interface kWmBaseImpl = {
 
 static void wm_base_bind(wl_client* client, void*, uint32_t version, uint32_t id) {
     wl_resource* r = wl_resource_create(
-        client, &xdg_wm_base_interface, std::min(version, 3u), id);
+        client, &xdg_wm_base_interface, std::min(version, 5u), id);
     wl_resource_set_implementation(r, &kWmBaseImpl, nullptr, nullptr);
     OH_LOG_INFO(LOG_APP, "xdg_wm_base bound v=%{public}u", std::min(version, 3u));
 }
@@ -183,6 +184,6 @@ static void wm_base_bind(wl_client* client, void*, uint32_t version, uint32_t id
 } // namespace
 
 extern "C" void RegisterXdgShell(wl_display* display) {
-    wl_global_create(display, &xdg_wm_base_interface, 3, nullptr, wm_base_bind);
+    wl_global_create(display, &xdg_wm_base_interface, 5, nullptr, wm_base_bind);
     OH_LOG_INFO(LOG_APP, "xdg_wm_base global created");
 }

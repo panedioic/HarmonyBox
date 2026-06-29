@@ -167,6 +167,23 @@ void CloseInheritedFdsExceptList(int keep1, int keep2,
     closedir(d);
 }
 
+pid_t GetPPid(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    char line[256];
+    pid_t ppid = -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "PPid:", 5) == 0) {
+            ppid = (pid_t)atoi(line + 5);
+            break;
+        }
+    }
+    fclose(f);
+    return ppid;
+}
+
 // ============================================================
 //  子进程内: box64 装载
 // ============================================================
@@ -423,7 +440,7 @@ pid_t ForkWithIo(bool need_pipe,
         }
         fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
     }
-
+    
     pid_t pid = fork();
     if (pid < 0) {
         if (need_pipe) { close(pipefd[0]); close(pipefd[1]); }
@@ -1001,16 +1018,26 @@ void HandleCreate(const std::vector<std::string>& lines,
     // 反查 peer 的 ProcessInfo, 继承 sink + 记录逻辑父
     if (peer_pid > 0) {
         auto parent = Manager::Instance().Lookup(peer_pid);
+        pid_t walk = peer_pid;
+        int hops = 0;
+        while (!parent && walk > 1 && hops < 16) {
+            pid_t pp = GetPPid(walk);
+            if (pp <= 0 || pp == walk) break;
+            walk = pp;
+            parent = Manager::Instance().Lookup(walk);
+            hops++;
+        }
         if (parent) {
             req.shared_stream  = parent->shared_stream;
             req.shared_capture = parent->shared_capture;
             req.caller_pid     = peer_pid;
             OH_LOG_INFO(LOG_APP,
-                "[ctrl] inherit from peer pid=%{public}d has_stream=%{public}d",
-                (int)peer_pid, req.shared_stream ? 1 : 0);
+                "[ctrl] inherit from peer=%{public}d (via ancestor=%{public}d, hops=%{public}d) has_stream=%{public}d",
+                (int)peer_pid, (int)walk, hops,
+                req.shared_stream ? 1 : 0);
         } else {
             OH_LOG_WARN(LOG_APP,
-                "[ctrl] peer pid=%{public}d not in Manager (will use root)",
+                "[ctrl] peer pid=%{public}d and ancestors not in Manager, no sink",
                 (int)peer_pid);
         }
     }

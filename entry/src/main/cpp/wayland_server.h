@@ -111,6 +111,45 @@ public:
     // for minimize window
     void SetMinimizeCallback(std::function<void()> cb) { minimizeCallback_ = std::move(cb); }
     void FireMinimizeRequest();
+    
+    // wl_subcompositor / wl_subsurface stub
+    static void wl_subcompositor_bind(wl_client* client, void* data,
+                                       uint32_t version, uint32_t id);
+    static void wl_subcompositor_destroy(wl_client*, wl_resource* r);
+    static void wl_subcompositor_get_subsurface(wl_client* client,
+                                                 wl_resource* res,
+                                                 uint32_t id,
+                                                 wl_resource* surface,
+                                                 wl_resource* parent);
+    
+    static void wl_subsurface_destroy(wl_client*, wl_resource* r);
+    static void wl_subsurface_set_position(wl_client*, wl_resource*,
+                                            int32_t, int32_t);
+    static void wl_subsurface_place_above(wl_client*, wl_resource*,
+                                           wl_resource*);
+    static void wl_subsurface_place_below(wl_client*, wl_resource*,
+                                           wl_resource*);
+    static void wl_subsurface_set_sync(wl_client*, wl_resource*);
+    static void wl_subsurface_set_desync(wl_client*, wl_resource*);
+    
+    // wp_viewporter / wp_viewport stub
+    static void wp_viewporter_bind(wl_client* client, void* data,
+                                    uint32_t version, uint32_t id);
+    static void wp_viewporter_destroy(wl_client*, wl_resource* r);
+    static void wp_viewporter_get_viewport(wl_client* client, wl_resource* res,
+                                            uint32_t id, wl_resource* surface);
+    
+    static void wp_viewport_destroy(wl_client*, wl_resource* r);
+    static void wp_viewport_set_source(wl_client*, wl_resource*,
+                                        wl_fixed_t, wl_fixed_t,
+                                        wl_fixed_t, wl_fixed_t);
+    static void wp_viewport_set_destination(wl_client*, wl_resource*,
+                                             int32_t, int32_t);
+    
+    // wl_output stub
+    static void wl_output_bind(wl_client* client, void* data,
+                               uint32_t version, uint32_t id);
+    static void wl_output_release(wl_client*, wl_resource* r);
 
 private:
     WaylandServer() = default;

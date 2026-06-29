@@ -1,6 +1,7 @@
 // wayland_server.cpp
 #include "wayland_server.h"
 #include "xdg-shell-server-protocol.h"
+#include "viewporter-server-protocol.h"
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
@@ -20,7 +21,7 @@ int memfd_create(const char* name, unsigned int flags);
 extern "C" void RegisterXdgShell(wl_display* display);
 
 #undef LOG_TAG
-#define LOG_TAG "WL_Server"
+#define LOG_TAG "HBox_NAPI_WL_Server"
 #include <hilog/log.h>
 
 static const struct wl_surface_interface k_surface_impl = {
@@ -46,6 +47,34 @@ static const struct wl_region_interface k_region_impl = {
 static const struct wl_compositor_interface k_compositor_impl = {
     .create_surface = WaylandServer::compositor_create_surface,
     .create_region  = WaylandServer::compositor_create_region,
+};
+
+static const struct wl_subsurface_interface k_subsurface_impl = {
+    .destroy      = WaylandServer::wl_subsurface_destroy,
+    .set_position = WaylandServer::wl_subsurface_set_position,
+    .place_above  = WaylandServer::wl_subsurface_place_above,
+    .place_below  = WaylandServer::wl_subsurface_place_below,
+    .set_sync     = WaylandServer::wl_subsurface_set_sync,
+    .set_desync   = WaylandServer::wl_subsurface_set_desync,
+};
+
+static const struct wl_subcompositor_interface k_subcompositor_impl = {
+    .destroy        = WaylandServer::wl_subcompositor_destroy,
+    .get_subsurface = WaylandServer::wl_subcompositor_get_subsurface,
+};
+
+static const struct wp_viewport_interface k_wp_viewport_impl = {
+    .destroy         = WaylandServer::wp_viewport_destroy,
+    .set_source      = WaylandServer::wp_viewport_set_source,
+    .set_destination = WaylandServer::wp_viewport_set_destination,
+};
+static const struct wp_viewporter_interface k_wp_viewporter_impl = {
+    .destroy      = WaylandServer::wp_viewporter_destroy,
+    .get_viewport = WaylandServer::wp_viewporter_get_viewport,
+};
+
+static const struct wl_output_interface k_output_impl = {
+    .release = WaylandServer::wl_output_release,
 };
 
 WaylandServer* WaylandServer::GetInstance() {
@@ -85,6 +114,9 @@ bool WaylandServer::Start(const std::string& socketPath) {
     // 注册 globals
     wl_global_create(display_, &wl_compositor_interface, 4, this, compositor_bind);
     wl_display_init_shm(display_); // wl_shm 由 libwayland 内置实现
+    wl_global_create(display_, &wl_subcompositor_interface, 1, this, wl_subcompositor_bind);
+    wl_global_create(display_, &wp_viewporter_interface, 1, this, wp_viewporter_bind);
+    wl_global_create(display_, &wl_output_interface, 4, this, wl_output_bind);
     
     RegisterXdgShell(display_);
     
@@ -157,9 +189,14 @@ void WaylandServer::surface_attach(wl_client*, wl_resource* surfRes, wl_resource
 
 void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(surfRes));
-    // NULL buffer commit(客户端隐藏窗口/关闭流程的标准信号)
-    //   仍要消耗 frame callback,否则客户端会卡在等下一帧
+
+    // ─── 1. NULL buffer commit ───
     if (!s->pendingBuffer) {
+        static int null_count = 0;
+        if (++null_count % 20 == 1) {
+            OH_LOG_INFO(LOG_APP, "★COMMIT_NULL surf=%{public}p count=%{public}d",
+                        surfRes, null_count);
+        }
         if (!s->frameCallbacks.empty()) {
             uint32_t now = (uint32_t)(time(nullptr) * 1000);
             for (auto* cb : s->frameCallbacks) {
@@ -170,20 +207,25 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         }
         return;
     }
-    
+
     auto* self = WaylandServer::GetInstance();
-    // 1. 首次有 buffer 提交的 surface，作为排他的主渲染窗口
+
+    // ─── 2. main surface 排他选举 ───
     if (self->mainSurface_ == nullptr) {
         self->mainSurface_ = surfRes;
-        OH_LOG_INFO(LOG_APP, "Main surface bound to %{public}p", surfRes);
+        OH_LOG_INFO(LOG_APP, "★MAIN_SET surf=%{public}p", surfRes);
     }
-    // 2. 如果提交的不是主窗口（比如是客户端用来显示鼠标光标的32x32 surface）
-    // 拦截像素拷贝，直接释放 buffer 并归还 frame callback 防止客户端卡死
+
+    // ─── 3. 非主 surface (光标/装饰): 释放 buffer + 消耗 callback 后返回 ───
     if (self->mainSurface_ != surfRes) {
+        static int nonmain_count = 0;
+        if (++nonmain_count % 20 == 1) {
+            OH_LOG_INFO(LOG_APP, "★COMMIT_NONMAIN surf=%{public}p main=%{public}p count=%{public}d",
+                        surfRes, self->mainSurface_, nonmain_count);
+        }
         wl_buffer_send_release(s->pendingBuffer);
         s->currentBuffer = s->pendingBuffer;
         s->pendingBuffer = nullptr;
-        // 必须消耗掉 frame callback，否则对应组件/光标动画会卡死在第一帧
         uint32_t now = (uint32_t)(time(nullptr) * 1000);
         for (auto* cb : s->frameCallbacks) {
             wl_callback_send_done(cb, now);
@@ -192,13 +234,14 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         s->frameCallbacks.clear();
         return;
     }
-    // 3. 以下为主窗口的正常渲染搬运逻辑 (原代码保持不变)
+
+    // ─── 4. 主窗口的正常搬运 ───
     wl_shm_buffer* shm = wl_shm_buffer_get(s->pendingBuffer);
     if (shm) {
         int32_t bufW = wl_shm_buffer_get_width(shm);
         int32_t bufH = wl_shm_buffer_get_height(shm);
         int32_t stride = wl_shm_buffer_get_stride(shm);
-        
+
         // ★ 按 xdg_surface.set_window_geometry 裁剪掉 CSD 阴影边距
         WindowGeom g = self->GetWindowGeometry(surfRes);
         int32_t srcX = 0, srcY = 0;
@@ -215,7 +258,7 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
 
         wl_shm_buffer_begin_access(shm);
         const uint8_t* src = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm));
-        
+
         {
             std::lock_guard<std::mutex> lk(self->frameMutex_);
             const int dstStride = outW * 4;
@@ -235,14 +278,17 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
             self->dirty_ = true;
         }
         wl_shm_buffer_end_access(shm);
-        // 把 buffer 尺寸通知到 ArkTS,用于 resize 鸿蒙子窗口
-        // 用裁剪后的尺寸通知 ArkTS resize
+
+        // 把 buffer 尺寸通知到 ArkTS
         if (self->lastNotifiedW_ != outW || self->lastNotifiedH_ != outH) {
             self->lastNotifiedW_ = outW;
             self->lastNotifiedH_ = outH;
-            OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_BUF_NEW %{public}dx%{public}d", outW, outH);
+            OH_LOG_INFO(LOG_APP, "★BUF_NEW %{public}dx%{public}d", outW, outH);
             if (self->sizeCallback_) self->sizeCallback_(outW, outH);
         }
+    } else {
+        OH_LOG_INFO(LOG_APP, "★COMMIT_NON_SHM buffer=%{public}p (DMA-BUF?)",
+                    s->pendingBuffer);
     }
 
     wl_buffer_send_release(s->pendingBuffer);
@@ -256,15 +302,18 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         wl_resource_destroy(cb);
     }
     s->frameCallbacks.clear();
-    
+
     static FpsCounter commitFps("commit");
     commitFps.Tick();
-    
+
     // 首帧到达 → 通知 UI
     if (self->MarkFirstCommit()) {
+        OH_LOG_INFO(LOG_APP, "★FIRST_COMMIT_REACHED surf=%{public}p, firing active",
+                    surfRes);
         self->SetKeyboardFocus(surfRes);
         self->SetPointerFocus(surfRes);
         self->FireState("active");
+        OH_LOG_INFO(LOG_APP, "★FIRE_STATE returned");
     }
 }
 
@@ -666,4 +715,105 @@ void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
 void WaylandServer::FireMinimizeRequest() {
     ReleaseAllPointerButtons();
     if (minimizeCallback_) minimizeCallback_();
+}
+
+// ─── wl_subsurface stub ───
+void WaylandServer::wl_subsurface_destroy(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+void WaylandServer::wl_subsurface_set_position(wl_client*, wl_resource*,
+                                                int32_t, int32_t) {}
+void WaylandServer::wl_subsurface_place_above(wl_client*, wl_resource*,
+                                               wl_resource*) {}
+void WaylandServer::wl_subsurface_place_below(wl_client*, wl_resource*,
+                                               wl_resource*) {}
+void WaylandServer::wl_subsurface_set_sync(wl_client*, wl_resource*) {}
+void WaylandServer::wl_subsurface_set_desync(wl_client*, wl_resource*) {}
+
+// ─── wl_subcompositor stub ───
+void WaylandServer::wl_subcompositor_destroy(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+
+void WaylandServer::wl_subcompositor_get_subsurface(wl_client* client,
+                                                     wl_resource* res,
+                                                     uint32_t id,
+                                                     wl_resource* /*surface*/,
+                                                     wl_resource* /*parent*/) {
+    wl_resource* sub = wl_resource_create(client, &wl_subsurface_interface,
+                                          wl_resource_get_version(res), id);
+    if (sub) {
+        wl_resource_set_implementation(sub, &k_subsurface_impl, nullptr, nullptr);
+    }
+}
+
+void WaylandServer::wl_subcompositor_bind(wl_client* client, void*,
+                                           uint32_t /*version*/, uint32_t id) {
+    wl_resource* res = wl_resource_create(client, &wl_subcompositor_interface,
+                                          1, id);
+    wl_resource_set_implementation(res, &k_subcompositor_impl, nullptr, nullptr);
+    OH_LOG_INFO(LOG_APP, "wl_subcompositor bound");
+}
+
+// wp_viewporter / wp_viewport stub
+void WaylandServer::wp_viewport_destroy(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+void WaylandServer::wp_viewport_set_source(wl_client*, wl_resource*,
+                                            wl_fixed_t, wl_fixed_t,
+                                            wl_fixed_t, wl_fixed_t) {}
+void WaylandServer::wp_viewport_set_destination(wl_client*, wl_resource*,
+                                                 int32_t, int32_t) {}
+void WaylandServer::wp_viewporter_destroy(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+void WaylandServer::wp_viewporter_get_viewport(wl_client* client,
+                                                wl_resource* res,
+                                                uint32_t id,
+                                                wl_resource* /*surface*/) {
+    wl_resource* vp = wl_resource_create(client, &wp_viewport_interface,
+                                          wl_resource_get_version(res), id);
+    if (vp) {
+        wl_resource_set_implementation(vp, &k_wp_viewport_impl, nullptr, nullptr);
+    }
+}
+void WaylandServer::wp_viewporter_bind(wl_client* client, void*,
+                                        uint32_t /*version*/, uint32_t id) {
+    wl_resource* res = wl_resource_create(client, &wp_viewporter_interface,
+                                          1, id);
+    wl_resource_set_implementation(res, &k_wp_viewporter_impl,
+                                    nullptr, nullptr);
+    OH_LOG_INFO(LOG_APP, "wp_viewporter bound");
+}
+
+void WaylandServer::wl_output_release(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+
+void WaylandServer::wl_output_bind(wl_client* client, void*,
+                                    uint32_t version, uint32_t id) {
+    uint32_t use_ver = std::min(version, 4u);
+    wl_resource* res = wl_resource_create(client, &wl_output_interface,
+                                          use_ver, id);
+    wl_resource_set_implementation(res, &k_output_impl, nullptr, nullptr);
+
+    // 虚拟显示器: 1920x1080 @ 60Hz, scale=1, 在 (0,0)
+    wl_output_send_geometry(res,
+        0, 0,                                       // x, y
+        340, 190,                                   // 物理尺寸 mm
+        WL_OUTPUT_SUBPIXEL_UNKNOWN,
+        "HarmonyBox", "Virtual",                    // make, model
+        WL_OUTPUT_TRANSFORM_NORMAL);
+
+    wl_output_send_mode(res,
+        WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
+        1920, 1080,                                 // width, height
+        60000);                                     // refresh in mHz
+
+    if (use_ver >= 2) {
+        wl_output_send_scale(res, 1);
+        wl_output_send_done(res);
+    }
+
+    OH_LOG_INFO(LOG_APP, "wl_output bound v=%{public}u", use_ver);
 }

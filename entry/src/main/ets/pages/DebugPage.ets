@@ -7,6 +7,9 @@ import { WineService } from '../service/WineService';
 import { LibStore } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
 import { ResourceService, ResourceProbe } from '../service/ResourceService';
+import { CliService, LaunchOptions, LaunchResult } from '../service/CliService';
+import { window, display } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 interface GeneratedTypeLiteralInterface_1 {
   v: boolean;
@@ -852,6 +855,159 @@ export struct DebugPage {
     this.append('done. 下一步: 起 wineserver -> wineboot (复用 ws)');
   }
 
+  private async secLaunchNotepad(): Promise<void> {
+    this.append('===== 打开 notepad =====');
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+
+    const wlSvc = WaylandService.getInstance();
+    if (!wlSvc.isServerReady()) {
+      this.append('[err] Wayland server 未就绪');
+      return;
+    }
+
+    // ★ 必须有 wineserver 在跑, 否则 wine notepad 父进程会 detach+exit
+    if (this.wineserverPid <= 0) {
+      this.append('[err] wineserver 未运行, 请先点 "启动 wineserver (后台)"');
+      return;
+    }
+    this.append(`[info] 复用 wineserver pid=${this.wineserverPid}`);
+
+    const cli = CliService.getInstance();
+    cli.init(ctx);
+
+    const appId: string = 'notepad-debug';
+    const opts: LaunchOptions = {
+      exeAbsPath: 'notepad',
+      extraArgs: [],
+      cwd: '',
+      extraEnv: [],   // ★ 不再加 WINEDEBUG, 用 WineService 已有的设置
+      appDir: '',
+      useWine: true,
+      gui: true,
+      streaming: true,
+      appId
+    };
+    const result: LaunchResult = cli.launchBox64(opts);
+
+    if (result.pid <= 0) {
+      this.append(`[err] 启动失败 code=${result.code} msg=${result.errorMsg}`);
+      return;
+    }
+    this.append(`[ok] notepad pid=${result.pid}, 等待 wayland 窗口...`);
+
+    const pid: number = result.pid;
+    const LOG_FULL_LIMIT: number = 80;
+    let logBuf: string[] = [];
+    let flushTimer: number = -1;
+    const scheduleFlush = (): void => {
+      if (flushTimer >= 0) return;
+      flushTimer = setTimeout((): void => {
+        flushTimer = -1;
+        if (logBuf.length === 0) return;
+        const batch: string[] = logBuf;
+        logBuf = [];
+        if (batch.length <= LOG_FULL_LIMIT) {
+          for (const line of batch) {
+            this.append(`[np] ${line}`);
+          }
+        } else {
+          const last: string = batch[batch.length - 1];
+          this.append(`[np] +${batch.length} lines (>${LOG_FULL_LIMIT}), tail: ${last}`);
+        }
+      }, 100);
+    };
+    cli.subscribe(pid, {
+      onLine: (line: string): void => {
+        logBuf.push(line);
+        scheduleFlush();
+      },
+      onExit: (code: number): void => {
+        this.append(`[np] (parent) exited code=${code} — 子进程可能仍在跑`);
+        cli.unsubscribe(pid);
+        cli.clear(pid);
+        if (flushTimer >= 0) {
+          clearTimeout(flushTimer);
+          flushTimer = -1;
+        }
+      }
+    });
+
+    // wayland 信号由 native commit 触发, 不依赖 cli pid 存活
+    const ok: boolean = await wlSvc.waitActive(120000);
+
+    if (!ok) {
+      this.append('[err] wayland 120s 未 active');
+      this.append('[hint] 检查 hilog: grep "wl_subcompositor bound" / "commit rate" / "wayland_process_init"');
+      // 不立刻返回, 即便没收到 active 也尝试创建窗口看效果
+      // return;
+    }
+    this.append(ok ? '[ok] wayland active' : '[warn] active 信号未收到, 强制创建窗口');
+    await this.createNotepadHostWindow(pid);
+  }
+
+  private async createNotepadHostWindow(cliPid: number): Promise<void> {
+    try {
+      const windowStage = AppStorage.get<window.WindowStage>('windowStage');
+      if (!windowStage) {
+        this.append('[err] windowStage 未注册到 AppStorage');
+        return;
+      }
+      const main = windowStage.getMainWindowSync();
+      AppStorage.setOrCreate<string>('currentAppName', 'notepad');
+
+      const wlSvc = WaylandService.getInstance();
+      const useNative: boolean = wlSvc.getUseNativeDecor();
+
+      const subWin = await main.createSubWindowWithOptions(
+        `notepad_debug_${Date.now()}`,
+        {
+          title: 'notepad',
+          decorEnabled: useNative,
+          isModal: false,
+          maximizeSupported: true
+        }
+      );
+      await subWin.loadContent('pages/AppRunner');
+
+      // 初始尺寸: 优先用 wayland 已经 commit 的 buffer 尺寸
+      const sz = wlSvc.getLatestBufferSize();
+      const scale: number = wlSvc.getUiScale();
+      const bufW: number = sz.w > 0 ? sz.w : 800;
+      const bufH: number = sz.h > 0 ? sz.h : 600;
+      const totalW: number = Math.max(1, Math.round(bufW * scale));
+      const totalH: number = Math.max(1, Math.round(bufH * scale));
+
+      await subWin.resize(totalW, totalH);
+
+      const prop = main.getWindowProperties();
+      const di = display.getDisplayByIdSync(prop.displayId);
+      await subWin.moveWindowToGlobal(
+        Math.round((di.availableWidth - totalW) / 2),
+        Math.round((di.availableHeight - totalH) / 2),
+        { displayId: prop.displayId }
+      );
+
+      await subWin.setWindowCornerRadius?.(useNative ? 8 : 0);
+      await subWin.setWindowBackgroundColor('#FF000000');
+
+      // 窗口关闭时收尾
+      subWin.on('windowEvent', (event: window.WindowEventType): void => {
+        if (event === window.WindowEventType.WINDOW_DESTROYED) {
+          CliService.getInstance().stop(cliPid);
+          WaylandService.getInstance().releaseSlot('notepad-debug');
+          this.append('[np] host window destroyed');
+        }
+      });
+
+      await subWin.showWindow();
+      this.append(`[ok] notepad host window shown ${totalW}x${totalH}`);
+    } catch (e) {
+      const err = e as BusinessError;
+      this.append(`[err] createNotepadHostWindow code=${err.code} msg=${err.message}`);
+      WaylandService.getInstance().releaseSlot('notepad-debug');
+    }
+  }
+
   private async runOne(fn: () => Promise<void>): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -978,6 +1134,11 @@ export struct DebugPage {
           .backgroundColor('#E8743C').fontColor(Color.White)
           .enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secReinstallWine()); })
+        Button('🗒 打开 notepad').fontSize(12).height(30)
+          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+          .backgroundColor(Theme.HM_BLUE)
+          .enabled(!this.running)
+          .onClick((): void => { this.runOne((): Promise<void> => this.secLaunchNotepad()); })
       }
       .width('100%').margin({ bottom: 4 })
 
