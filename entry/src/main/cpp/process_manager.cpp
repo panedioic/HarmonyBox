@@ -27,6 +27,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/uio.h>      // struct iovec, recvmsg/sendmsg 用
 
 #undef LOG_TAG
 #define LOG_TAG "HBox_NAPI_ProcMgr"
@@ -144,6 +145,24 @@ void CloseInheritedFdsExcept(int keep1, int keep2) {
     while ((e = readdir(d))) {
         int fd = atoi(e->d_name);
         if (fd > 2 && fd != dfd && fd != keep1 && fd != keep2) close(fd);
+    }
+    closedir(d);
+}
+
+void CloseInheritedFdsExceptList(int keep1, int keep2,
+                                 const std::vector<int>& extra_keep) {
+    DIR* d = opendir("/proc/self/fd");
+    if (!d) return;
+    int dfd = dirfd(d);
+    struct dirent* e;
+    while ((e = readdir(d))) {
+        int fd = atoi(e->d_name);
+        if (fd <= 2) continue;
+        if (fd == dfd || fd == keep1 || fd == keep2) continue;
+        bool keep = false;
+        for (int k : extra_keep) { if (fd == k) { keep = true; break; } }
+        if (keep) continue;
+        close(fd);
     }
     closedir(d);
 }
@@ -394,6 +413,7 @@ void CaptureReaderNoWaitMain(int fd, pid_t pid, CaptureSink sink) {
 pid_t ForkWithIo(bool need_pipe,
                  const std::string& cwd,
                  const char* proc_name,
+                 const std::vector<SpawnRequest::InheritedFd>& inherited_fds,
                  int* out_read_fd) {
     int pipefd[2] = {-1, -1};
     if (need_pipe) {
@@ -434,9 +454,32 @@ pid_t ForkWithIo(bool need_pipe,
         if (proc_name && proc_name[0]) {
             prctl(PR_SET_NAME, proc_name, 0, 0, 0);
         }
-        CloseInheritedFdsExcept(STDOUT_FILENO, STDERR_FILENO);
+        
+        // 先把 inherited fd 放到 target 位置, 再 close 其余, 顺序很重要.
+        std::vector<int> keep_target_fds;
+        keep_target_fds.reserve(inherited_fds.size());
+        for (const auto& f : inherited_fds) {
+            if (f.source_fd == f.target_fd) {
+                // 已经在目标位置, 清掉 CLOEXEC 即可
+                int fl = fcntl(f.target_fd, F_GETFD);
+                if (fl >= 0) fcntl(f.target_fd, F_SETFD, fl & ~FD_CLOEXEC);
+            } else {
+                if (dup2(f.source_fd, f.target_fd) < 0) {
+                    fprintf(stderr,
+                        "[procmgr child] dup2(%d -> %d) failed: %s\n",
+                        f.source_fd, f.target_fd, strerror(errno));
+                    _exit(124);
+                }
+                close(f.source_fd);
+                int fl = fcntl(f.target_fd, F_GETFD);
+                if (fl >= 0) fcntl(f.target_fd, F_SETFD, fl & ~FD_CLOEXEC);
+            }
+            keep_target_fds.push_back(f.target_fd);
+            fprintf(stderr, "[procmgr child] inherited fd ready: %d\n",
+                    f.target_fd);
+        }
+        CloseInheritedFdsExceptList(STDOUT_FILENO, STDERR_FILENO, keep_target_fds);
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
-
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
             fprintf(stderr, "chdir(%s) failed: %s\n",
                     cwd.c_str(), strerror(errno));
@@ -472,9 +515,9 @@ pid_t SpawnNative(const SpawnRequest& req) {
     bool need_pipe = (req.stream || req.capture);
     int read_fd = -1;
     pid_t pid = ForkWithIo(need_pipe, req.cwd,
-                           req.proc_name.empty() ? "cli-app"
-                                                 : req.proc_name.c_str(),
-                           &read_fd);
+                       req.proc_name.empty() ? "..." : req.proc_name.c_str(),
+                       req.inherited_fds,
+                       &read_fd);
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -526,9 +569,9 @@ pid_t SpawnBox64(const SpawnRequest& req) {
     bool need_pipe = (req.stream || req.capture);
     int read_fd = -1;
     pid_t pid = ForkWithIo(need_pipe, req.cwd,
-                           req.proc_name.empty() ? "wl-client"
-                                                 : req.proc_name.c_str(),
-                           &read_fd);
+                       req.proc_name.empty() ? "..." : req.proc_name.c_str(),
+                       req.inherited_fds,
+                       &read_fd);
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -772,14 +815,95 @@ bool WriteExact(int fd, const void* buf, size_t n) {
     return true;
 }
 
+// 第一段用 recvmsg 拿头 + cmsg, 后续 payload 用 recv 续读.
+// 单次 sendmsg 帧 = 4B 长度 + payload. cmsg 只附在第一段.
+bool ReadFrameWithFds(int fd, std::string* out_payload,
+                     std::vector<int>* out_fds) {
+    out_payload->clear();
+    out_fds->clear();
+
+    char first_buf[4096];
+    char cmsg_buf[CMSG_SPACE(sizeof(int) * 16)];
+
+    struct iovec iov;
+    iov.iov_base = first_buf;
+    iov.iov_len  = sizeof(first_buf);
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov        = &iov;
+    msg.msg_iovlen     = 1;
+    msg.msg_control    = cmsg_buf;
+    msg.msg_controllen = sizeof(cmsg_buf);
+
+    ssize_t n;
+    do { n = recvmsg(fd, &msg, 0); }
+    while (n < 0 && errno == EINTR);
+    if (n < 4) return false;
+
+    // 收割 cmsg fds (可能为 0)
+    for (struct cmsghdr* cm = CMSG_FIRSTHDR(&msg); cm;
+         cm = CMSG_NXTHDR(&msg, cm)) {
+        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS) {
+            size_t n_fds = (cm->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            const int* fds = (const int*)CMSG_DATA(cm);
+            for (size_t i = 0; i < n_fds; i++) {
+                int got = fds[i];
+                // 立刻 unset CLOEXEC, 否则 fork+execve 时会被 kernel 关掉
+                int fl = fcntl(got, F_GETFD);
+                if (fl >= 0) fcntl(got, F_SETFD, fl & ~FD_CLOEXEC);
+                out_fds->push_back(got);
+            }
+        }
+    }
+
+    // 解析长度头 (大端)
+    uint32_t total = ((uint32_t)(uint8_t)first_buf[0] << 24)
+                   | ((uint32_t)(uint8_t)first_buf[1] << 16)
+                   | ((uint32_t)(uint8_t)first_buf[2] << 8)
+                   |  (uint32_t)(uint8_t)first_buf[3];
+    if (total > 1024 * 1024) {
+        OH_LOG_ERROR(LOG_APP, "[ctrl] frame too large: %{public}u", total);
+        for (int f : *out_fds) close(f);
+        out_fds->clear();
+        return false;
+    }
+
+    size_t got_payload = (size_t)(n - 4);
+    if (got_payload > total) got_payload = total;
+    out_payload->assign(first_buf + 4, got_payload);
+
+    if (got_payload < total) {
+        size_t remaining = total - got_payload;
+        size_t off = out_payload->size();
+        out_payload->resize(total);
+        uint8_t* p = (uint8_t*)&(*out_payload)[off];
+        while (remaining) {
+            ssize_t r = recv(fd, p, remaining, 0);
+            if (r == 0) {
+                for (int f : *out_fds) close(f);
+                out_fds->clear();
+                return false;
+            }
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                for (int f : *out_fds) close(f);
+                out_fds->clear();
+                return false;
+            }
+            p += r;
+            remaining -= (size_t)r;
+        }
+    }
+    return true;
+}
+
+// 兼容老调用: 不要 fds. 任何 cmsg 附带的 fd 直接 close 掉避免泄漏.
 bool ReadFrame(int fd, std::string* out) {
-    uint8_t hdr[4];
-    if (!ReadExact(fd, hdr, 4)) return false;
-    uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
-                   ((uint32_t)hdr[2] << 8)  |  (uint32_t)hdr[3];
-    if (len > 1024 * 1024) return false;  // 1 MiB 上限,防滥用
-    out->resize(len);
-    return ReadExact(fd, out->data(), len);
+    std::vector<int> dummy;
+    bool ok = ReadFrameWithFds(fd, out, &dummy);
+    for (int f : dummy) close(f);
+    return ok;
 }
 
 bool WriteFrame(int fd, const std::string& payload) {
@@ -800,27 +924,79 @@ std::pair<std::string, std::string> SplitKV(const std::string& line) {
 }
 
 void HandleCreate(const std::vector<std::string>& lines,
+                  std::vector<int>& cmsg_fds,    // 注意: 引用, 我们会接管 fd 所有权
                   pid_t peer_pid,
                   std::string* resp) {
     SpawnRequest req;
     int req_id = 0;
     bool sync_wait = false;
+    int proto_ver = 1;
+    std::vector<int> fdref_targets;
+
     for (const auto& ln : lines) {
         auto kv = SplitKV(ln);
-        if      (kv.first == "REQ_ID") req_id = atoi(kv.second.c_str());
-        else if (kv.first == "EXE")    req.exe_path = kv.second;
-        else if (kv.first == "ARG")    req.argv.push_back(kv.second);
-        else if (kv.first == "ENV")    req.env.push_back(kv.second);
-        else if (kv.first == "CWD")    req.cwd = kv.second;
-        else if (kv.first == "WAIT")   sync_wait = (kv.second == "1");
+        if      (kv.first == "PROTO_VER") proto_ver = atoi(kv.second.c_str());
+        else if (kv.first == "REQ_ID")    req_id    = atoi(kv.second.c_str());
+        else if (kv.first == "EXE")       req.exe_path = kv.second;
+        else if (kv.first == "ARG")       req.argv.push_back(kv.second);
+        else if (kv.first == "ENV")       req.env.push_back(kv.second);
+        else if (kv.first == "CWD")       req.cwd = kv.second;
+        else if (kv.first == "WAIT")      sync_wait = (kv.second == "1");
+        else if (kv.first == "FDREF") {
+            fdref_targets.push_back(atoi(kv.second.c_str()));
+        }
         else if (kv.first == "KIND") {
             if      (kv.second == "native") req.kind_hint = KindHint::kForceNative;
             else if (kv.second == "box64")  req.kind_hint = KindHint::kForceBox64;
             else                            req.kind_hint = KindHint::kAuto;
         }
     }
-    
+
     req.sync_wait = sync_wait;
+
+    // ---- FDREF / cmsg pairing ----
+    auto fail_resp = [&](const char* msg) {
+        for (int f : cmsg_fds) close(f);
+        cmsg_fds.clear();
+        std::string& s = *resp;
+        s  = "RESULT\nREQ_ID " + std::to_string(req_id) + "\n";
+        s += "STATUS error\nMSG " + std::string(msg) + "\nEND";
+    };
+
+    if (proto_ver >= 2) {
+        if (fdref_targets.size() != cmsg_fds.size()) {
+            OH_LOG_ERROR(LOG_APP,
+                "[ctrl] FDREF/SCM_RIGHTS mismatch: fdref=%{public}zu cmsg=%{public}zu",
+                fdref_targets.size(), cmsg_fds.size());
+            fail_resp("fdref_count_mismatch");
+            return;
+        }
+        for (size_t i = 0; i < cmsg_fds.size(); i++) {
+            int tgt = fdref_targets[i];
+            if (tgt <= 2) {
+                OH_LOG_ERROR(LOG_APP,
+                    "[ctrl] refuse FDREF target=%{public}d (<=2)", tgt);
+                fail_resp("fdref_bad_target");
+                return;
+            }
+            SpawnRequest::InheritedFd f;
+            f.target_fd = tgt;
+            f.source_fd = cmsg_fds[i];
+            req.inherited_fds.push_back(f);
+            OH_LOG_INFO(LOG_APP,
+                "[ctrl] FDREF accepted: source=%{public}d -> target=%{public}d",
+                f.source_fd, f.target_fd);
+        }
+    } else if (!cmsg_fds.empty()) {
+        // 老协议但带了 fd, 一律 close
+        OH_LOG_WARN(LOG_APP,
+            "[ctrl] proto v1 but got %{public}zu cmsg fds, discarding",
+            cmsg_fds.size());
+        for (int f : cmsg_fds) close(f);
+        cmsg_fds.clear();
+    }
+    // cmsg_fds 的所有权已经移交给 req.inherited_fds (或被 close 掉)
+    cmsg_fds.clear();
     
     // 反查 peer 的 ProcessInfo, 继承 sink + 记录逻辑父
     if (peer_pid > 0) {
@@ -840,6 +1016,14 @@ void HandleCreate(const std::vector<std::string>& lines,
     }
 
     SpawnResult r = Spawn(req);
+
+    // ---- 不管 spawn 成功失败, procmgr 这一侧的 source_fd 都要关 ----
+    // (成功: child 已经 dup2 + close 自己的拷贝; 父进程的拷贝必须关)
+    // (失败: fork 没发生, source_fd 还在 procmgr 这边, 必须关)
+    for (const auto& f : req.inherited_fds) {
+        close(f.source_fd);
+    }
+
     std::string& s = *resp;
     s  = "RESULT\nREQ_ID " + std::to_string(req_id) + "\n";
     if (r.pid > 0) {
@@ -881,7 +1065,9 @@ void HandleClient(int fd) {
     
     while (g_ctrl.running.load()) {
         std::string frame;
-        if (!ReadFrame(fd, &frame)) break;
+        std::vector<int> cmsg_fds;
+        // if (!ReadFrame(fd, &frame)) break;
+        if (!ReadFrameWithFds(fd, &frame, &cmsg_fds)) break;
 
         // 拆行
         std::vector<std::string> lines;
@@ -895,36 +1081,43 @@ void HandleClient(int fd) {
             lines.push_back(frame.substr(start, nl - start));
             start = nl + 1;
         }
-        if (lines.empty()) continue;
+        if (lines.empty()) {
+            for (int f : cmsg_fds) close(f);
+            continue;
+        }
 
         std::string resp;
         auto cmd = SplitKV(lines[0]);
         if (cmd.first == "CMD" && cmd.second == "CREATE") {
-            HandleCreate(lines, peer_pid, &resp);
-        } else if (cmd.first == "CMD" && cmd.second == "PING") {
-            resp = "PONG\nEND";
-        } else if (cmd.first == "CMD" && cmd.second == "TERMINATE") {
-            int pid = 0;
-            for (const auto& ln : lines) {
-                auto kv = SplitKV(ln);
-                if (kv.first == "PID") pid = atoi(kv.second.c_str());
-            }
-            Terminate(pid);
-            resp = "RESULT\nSTATUS ok\nEND";
-        } else if (cmd.first == "CMD" && cmd.second == "LIST") {
-            resp = "LIST\n";
-            for (auto& info : ListProcesses()) {
-                resp += "INFO pid=" + std::to_string(info.pid)
-                     +  " kind=" + KindCStr(info.kind)
-                     +  " alive=" + (info.alive ? "1" : "0")
-                     +  " code=" + std::to_string(info.exit_code)
-                     +  "\n";
-            }
-            resp += "END";
+            HandleCreate(lines, cmsg_fds, peer_pid, &resp);
+            // HandleCreate 已接管 cmsg_fds, 这里不再处理
         } else {
-            resp = "RESULT\nSTATUS error\nMSG unknown_command\nEND";
+            // 非 CREATE 命令不该带 fd, 一律 close
+            for (int f : cmsg_fds) close(f);
+            if (cmd.first == "CMD" && cmd.second == "PING") {
+                resp = "PONG\nEND";
+            } else if (cmd.first == "CMD" && cmd.second == "TERMINATE") {
+                int pid = 0;
+                for (const auto& ln : lines) {
+                    auto kv = SplitKV(ln);
+                    if (kv.first == "PID") pid = atoi(kv.second.c_str());
+                }
+                Terminate(pid);
+                resp = "RESULT\nSTATUS ok\nEND";
+            } else if (cmd.first == "CMD" && cmd.second == "LIST") {
+                resp = "LIST\n";
+                for (auto& info : ListProcesses()) {
+                    resp += "INFO pid=" + std::to_string(info.pid)
+                         +  " kind=" + KindCStr(info.kind)
+                         +  " alive=" + (info.alive ? "1" : "0")
+                         +  " code=" + std::to_string(info.exit_code)
+                         +  "\n";
+                }
+                resp += "END";
+            } else {
+                resp = "RESULT\nSTATUS error\nMSG unknown_command\nEND";
+            }
         }
-
         if (!WriteFrame(fd, resp)) break;
     }
     close(fd);

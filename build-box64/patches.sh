@@ -3022,7 +3022,6 @@ if n != 1:
     print(f"ERROR: GO(fclose,...) match count = {n}", file=sys.stderr)
     sys.exit(1)
 open(p, 'w').write(new_s)
-print(f"  patch_35 private.h: fclose GO->GOM applied")
 PY
 }
 
@@ -3417,7 +3416,6 @@ new = '''    /* OHOS_PATCH_MMAP_NOREPLACE_FALLBACK START
 
 s = s.replace(old, new, 1)
 open(p, 'w').write(s)
-print("  patch_62: my_mmap64 fallback inserted")
 PY
 }
 
@@ -3477,7 +3475,6 @@ if old not in s:
 
 s = s.replace(old, new, 1)
 open(p, 'w').write(s)
-print("  patch_63: prereserve table split (KUSER_SHARED_DATA hole carved)")
 PY
 }
 
@@ -3776,7 +3773,6 @@ inj = ('    /* OHOS_PATCH_PATH_REMAP */\n'
 s = s[:m.end()] + inj + s[m.end():]
 
 open(p, 'w').write(s)
-print("  patch_65: my_lstat + my_open64 remap inject OK")
 PY
 
         # 文件末尾追加新的 my_xxx 实现
@@ -4055,7 +4051,6 @@ s = inject(s,
     '    path = (void*)box64_remap_path((const char*)path, _remap_buf_rp, sizeof(_remap_buf_rp));\n')
 
 open(p, 'w').write(s)
-print("  patch_66: my_stat/my_fstatat/my_readlink/my_realpath remap inject OK")
 PY
 
         cat >> "$f_libc" << 'EOF_NEW_V2'
@@ -4200,7 +4195,6 @@ if header not in s:
     s = header + s
 
 open(p, 'w').write(s)
-print("  patch_67: my_open remap injected")
 PY
 }
 
@@ -4283,7 +4277,6 @@ else:
     print("WARN: MISS branch not matched (skip)", file=sys.stderr)
 
 open(p, 'w').write(s)
-print("  patch_68: trace inserted")
 PY
 }
 
@@ -4398,7 +4391,6 @@ if (ret == MAP_FAILED && (e == ENOSYS || e == EINVAL)
 
 s = s[:i0] + new_block + s[i1:]
 open(p, 'w').write(s)
-print("  patch_72: NOREPLACE fallback split by prot, trace added")
 PY
 }
 
@@ -5217,7 +5209,6 @@ def repl(m):
     return ('if (ohos_wrappedlibc_log_level() >= 2) {\n            '
             + m.group(1) + '\n        }')
 new_s, n = pat.subn(repl, s)
-print(f"  patch_82 wrappedlibc.c: gated {n} mmap-noreplace fprintf(s)")
 if n < 1:
     print("WARN: mmap-noreplace fprintf not matched", file=sys.stderr)
 open(p, 'w').write(new_s)
@@ -5242,7 +5233,6 @@ s = re.sub(r'fprintf\(\s*stderr\s*,\s*"\[box64-remap\] %s -> %s',
 # WARN 类 (target not writable / sun_path too long / faked symlink)
 # 保持 fprintf 不变
 open(p, 'w').write(s)
-print("  patch_82 box64_path_remap.c: gated")
 PY
     fi
 
@@ -5288,7 +5278,6 @@ if old in s:
             (void)!write(2, m, strlen(m));
         }'''
     s = s.replace(old, new, 1)
-    print("  patch_82 sigsys_fallback.c: gated install msg")
 else:
     print("WARN: SIGSYS installed write not matched", file=sys.stderr)
 
@@ -5297,6 +5286,285 @@ open(p, 'w').write(s)
 PY
     fi
 }
+
+# ================================================================
+# Patch 83 — sock 策略走 SCM_RIGHTS 传递 envp 引用的 fd
+# ================================================================
+# 现象:
+#   wineboot --init 在 sock 模式下间歇性失败:
+#       0024:err:environ:run_wineboot failed to start wineboot 1
+#       [BOX64] N|Ask to run at NULL, will segfault
+#
+# 根因:
+#   wine 用 WINESERVERSOCKET=<fd 数字> 通过 envp 把 wineserver 连接
+#   socket 传给子进程, 依赖 fork 的 fd 表继承.
+#   sock 策略下子进程是 HAP main 的孩子, fd 表完全不同, 子进程拿
+#   到的 WINESERVERSOCKET=7 在自己的 fd 表里要么无效要么是无关 fd,
+#   wineserver 握手错乱, wineboot 提前夭折.
+#
+# 修法:
+#   spawn 请求帧加:
+#     PROTO_VER 2                ← 协议版本
+#     FDREF <target_fd>          ← 每个继承 fd 一行
+#   同时用 SCM_RIGHTS 把 fd 通过 unix socket 真实送到 procmgr.
+#   procmgr 在 fork 出的 child 里 dup2(source_fd, target_fd) 还原
+#   父进程视角的 fd 号. wine 子进程看到的 WINESERVERSOCKET=7 真的
+#   指向 wineserver socket.
+#
+#   白名单只匹配已知 fd 类环境变量, 当前只有 WINESERVERSOCKET.
+#   再撞别的, 直接加到 kBox64FdInheritVars[] 即可.
+#
+# 兼容:
+#   PROTO_VER 行未出现时, procmgr 走老逻辑. 新旧组合在最差情况下
+#   退化为本 bug 的现状, 不会更糟.
+patch_83_sock_fd_inherit() {
+    local f="$BOX64/src/box64_spawn.c"
+    local mark='OHOS_PATCH_SOCK_FD_INHERIT'
+
+    [ -f "$f" ] || { _patch_header 83 "(skip) box64_spawn.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 83 "src/box64_spawn.c" "sock fd inherit — already"
+        return 0
+    fi
+    if ! grep -q 'OHOS_PATCH_BOX64_SPAWN' "$f"; then
+        _patch_header 83 "(skip) patch 80 not applied yet" ""
+        return 0
+    fi
+    _patch_header 83 "src/box64_spawn.c" \
+        "SCM_RIGHTS fd inheritance via sock strategy"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+
+if mark in s:
+    sys.exit(0)
+
+# ---- 1) 顶部加 <sys/uio.h> (struct iovec) ----
+inc_old = '#include <sys/socket.h>'
+inc_new = '#include <sys/socket.h>\n#include <sys/uio.h>      /* OHOS_PATCH_SOCK_FD_INHERIT */'
+if inc_old in s and '<sys/uio.h>' not in s:
+    s = s.replace(inc_old, inc_new, 1)
+
+# ---- 2) 在 sock client 段开头插入 helpers ----
+anchor1 = ('/* ================================================================\n'
+           ' * [2] socket client (used by sock strategy)\n'
+           ' * ================================================================ */')
+if anchor1 not in s:
+    print("ERROR: anchor1 (socket client header) not found", file=sys.stderr)
+    sys.exit(1)
+
+helpers = r'''
+
+/* ==== OHOS_PATCH_SOCK_FD_INHERIT helpers ====
+ * Whitelist envp keys whose value is "an fd number" we must forward
+ * via SCM_RIGHTS so the procmgr-spawned child sees the same fd
+ * number its parent did. */
+
+#define BOX64_FD_REF_MAX 16
+
+typedef struct {
+    int  target_fd;   /* number child must see (same as current proc fd) */
+    int  source_fd;   /* fd in current process, payload of SCM_RIGHTS */
+    char name[64];    /* env var name, for logging */
+} box64_fd_ref_t;
+
+static const char* const kBox64FdInheritVars[] = {
+    "WINESERVERSOCKET",
+    NULL
+};
+
+static int collect_envp_fd_refs(char* const envp[],
+                                box64_fd_ref_t* out, int max) {
+    if (!envp || !out || max <= 0) return 0;
+    int n = 0;
+    for (int i = 0; envp[i] && n < max; i++) {
+        const char* e = envp[i];
+        const char* eq = strchr(e, '=');
+        if (!eq) continue;
+        size_t name_len = (size_t)(eq - e);
+        for (int j = 0; kBox64FdInheritVars[j]; j++) {
+            const char* vn = kBox64FdInheritVars[j];
+            if (strlen(vn) != name_len) continue;
+            if (memcmp(e, vn, name_len) != 0) continue;
+            const char* val = eq + 1;
+            if (!*val) break;
+            char* end = NULL;
+            long fd = strtol(val, &end, 10);
+            if (end == val || fd < 3 || fd > 65535) break;
+            if (fcntl((int)fd, F_GETFD) < 0) {
+                fprintf(stderr,
+                    "[spawn-sock] WARN env %s=%ld fd invalid: %s\n",
+                    vn, fd, strerror(errno));
+                break;
+            }
+            out[n].target_fd = (int)fd;
+            out[n].source_fd = (int)fd;
+            snprintf(out[n].name, sizeof(out[n].name), "%s", vn);
+            fprintf(stderr,
+                "[spawn-sock] FDREF %s=%d (will SCM_RIGHTS)\n",
+                vn, (int)fd);
+            n++;
+            break;
+        }
+    }
+    return n;
+}
+
+/* sendmsg: [4 byte length] + payload, with optional SCM_RIGHTS.
+ * Single-shot send; short send treated as fatal (cmsg only attaches
+ * to first byte, recovery would lose fds). */
+static int sock_send_with_fds(int sockfd, const char* payload, size_t len,
+                              const box64_fd_ref_t* fds, int n_fds) {
+    if (n_fds < 0) n_fds = 0;
+    if (n_fds > BOX64_FD_REF_MAX) n_fds = BOX64_FD_REF_MAX;
+
+    uint8_t hdr[4] = {
+        (uint8_t)(len >> 24), (uint8_t)(len >> 16),
+        (uint8_t)(len >>  8), (uint8_t) len
+    };
+
+    struct iovec iov[2];
+    iov[0].iov_base = hdr;          iov[0].iov_len = 4;
+    iov[1].iov_base = (void*)payload; iov[1].iov_len = len;
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov    = iov;
+    msg.msg_iovlen = 2;
+
+    char cmsg_buf[CMSG_SPACE(sizeof(int) * BOX64_FD_REF_MAX)];
+    memset(cmsg_buf, 0, sizeof(cmsg_buf));
+
+    if (n_fds > 0) {
+        msg.msg_control    = cmsg_buf;
+        msg.msg_controllen = CMSG_SPACE(sizeof(int) * n_fds);
+        struct cmsghdr* cm = CMSG_FIRSTHDR(&msg);
+        cm->cmsg_level = SOL_SOCKET;
+        cm->cmsg_type  = SCM_RIGHTS;
+        cm->cmsg_len   = CMSG_LEN(sizeof(int) * n_fds);
+        int* fdp = (int*)CMSG_DATA(cm);
+        for (int i = 0; i < n_fds; i++) fdp[i] = fds[i].source_fd;
+    }
+
+    while (1) {
+        ssize_t w = sendmsg(sockfd, &msg, MSG_NOSIGNAL);
+        if (w == (ssize_t)(4 + len)) return 0;
+        if (w < 0 && errno == EINTR) continue;
+        return -1;
+    }
+}
+/* ==== OHOS_PATCH_SOCK_FD_INHERIT helpers END ==== */
+'''
+s = s.replace(anchor1, anchor1 + helpers, 1)
+
+# ---- 3) 改 build_create_req: 加 PROTO_VER + FDREF ----
+old_build = r'''static int build_create_req(char* buf, size_t cap,
+                            const char* exe,
+                            char* const argv[], char* const envp[],
+                            int wait_flag) {
+    size_t off = 0;
+    if (buf_appendf(buf, cap, &off, "CMD CREATE\n")             < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "REQ_ID 1\n")               < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "EXE %s\n", exe ? exe : "") < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "KIND box64\n")             < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "WAIT %d\n", wait_flag)     < 0) return -1;
+    if (argv) {
+        for (int i = 0; argv[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ARG %s\n", argv[i]) < 0) return -1;
+        }
+    }
+    if (envp) {
+        for (int i = 0; envp[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ENV %s\n", envp[i]) < 0) return -1;
+        }
+    }
+    if (buf_appendf(buf, cap, &off, "END") < 0) return -1;
+    return (int)off;
+}'''
+
+new_build = r'''static int build_create_req(char* buf, size_t cap,
+                            const char* exe,
+                            char* const argv[], char* const envp[],
+                            int wait_flag,
+                            const box64_fd_ref_t* fdrefs, int n_fdrefs) {
+    size_t off = 0;
+    if (buf_appendf(buf, cap, &off, "CMD CREATE\n")             < 0) return -1;
+    /* OHOS_PATCH_SOCK_FD_INHERIT: opt-in to v2 (FDREF + SCM_RIGHTS) */
+    if (buf_appendf(buf, cap, &off, "PROTO_VER 2\n")            < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "REQ_ID 1\n")               < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "EXE %s\n", exe ? exe : "") < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "KIND box64\n")             < 0) return -1;
+    if (buf_appendf(buf, cap, &off, "WAIT %d\n", wait_flag)     < 0) return -1;
+    if (argv) {
+        for (int i = 0; argv[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ARG %s\n", argv[i]) < 0) return -1;
+        }
+    }
+    if (envp) {
+        for (int i = 0; envp[i]; i++) {
+            if (buf_appendf(buf, cap, &off, "ENV %s\n", envp[i]) < 0) return -1;
+        }
+    }
+    /* FDREF order MUST match SCM_RIGHTS fd order. */
+    for (int i = 0; i < n_fdrefs; i++) {
+        if (buf_appendf(buf, cap, &off, "FDREF %d\n",
+                        fdrefs[i].target_fd) < 0) return -1;
+    }
+    if (buf_appendf(buf, cap, &off, "END") < 0) return -1;
+    return (int)off;
+}'''
+
+if old_build not in s:
+    print("ERROR: anchor2 (build_create_req) not matched", file=sys.stderr)
+    sys.exit(1)
+s = s.replace(old_build, new_build, 1)
+
+# ---- 4) 改 sock_request: 收集 fds + 用 sendmsg ----
+old_send = r'''    int rn = build_create_req(req, SOCK_REQ_BUF_CAP,
+                              exe, argv, envp, wait_flag);
+    if (rn < 0) {
+        fprintf(stderr, "[spawn-sock] request build overflow\n");
+        free(req); free(rsp); close(fd); return -1;
+    }
+
+    if (frame_write(fd, req, (size_t)rn) < 0) {
+        fprintf(stderr, "[spawn-sock] frame_write failed: %s\n", strerror(errno));
+        free(req); free(rsp); close(fd); return -1;
+    }'''
+
+new_send = r'''    /* OHOS_PATCH_SOCK_FD_INHERIT: pick out envp-referenced fds. */
+    box64_fd_ref_t fdrefs[BOX64_FD_REF_MAX];
+    int n_fdrefs = collect_envp_fd_refs(envp, fdrefs, BOX64_FD_REF_MAX);
+
+    int rn = build_create_req(req, SOCK_REQ_BUF_CAP,
+                              exe, argv, envp, wait_flag,
+                              fdrefs, n_fdrefs);
+    if (rn < 0) {
+        fprintf(stderr, "[spawn-sock] request build overflow\n");
+        free(req); free(rsp); close(fd); return -1;
+    }
+
+    if (sock_send_with_fds(fd, req, (size_t)rn, fdrefs, n_fdrefs) < 0) {
+        fprintf(stderr, "[spawn-sock] sendmsg failed: %s\n", strerror(errno));
+        free(req); free(rsp); close(fd); return -1;
+    }'''
+
+if old_send not in s:
+    print("ERROR: anchor3 (sock_request send) not matched", file=sys.stderr)
+    sys.exit(1)
+s = s.replace(old_send, new_send, 1)
+
+# ---- mark at top ----
+if '/* ' + mark + ' */' not in s:
+    s = '/* ' + mark + ' */\n' + s
+
+open(p, 'w').write(s)
+PY
+}
+
+
 
 # ================================================================
 # 调度
@@ -5361,5 +5629,6 @@ patch_80_box64_spawn
 patch_81_route_self_exec
 # ---- diagnostic log gating ------------------------------------
 patch_82_log_gate
+patch_83_sock_fd_inherit
 
 echo "    all patches applied."

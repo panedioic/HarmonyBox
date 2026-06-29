@@ -58,6 +58,12 @@ struct SpawnRequest {
     std::shared_ptr<CaptureSink> shared_capture;
     
     pid_t caller_pid = -1;   // sock 路径下由 HandleCreate 填; NAPI 直调时 -1
+    
+    struct InheritedFd {
+        int target_fd;   // 子进程应看到的 fd 编号
+        int source_fd;   // procmgr 进程里对应的 fd
+    };
+    std::vector<InheritedFd> inherited_fds;
 };
 
 struct SpawnResult {
