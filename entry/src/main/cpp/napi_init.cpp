@@ -6,6 +6,7 @@
 #include "fs_utils.h"
 #include "process_manager.h"
 #include "wineprefix_setup.h"
+#include "shell/shell_napi.h"
 
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
@@ -61,6 +62,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         
         // ---- wineprefix prebuild ----
         {"setupWinePrefix",       nullptr, wineprefix::SetupWinePrefixNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
+        
+        // ---- shell ----
+        {"shellInit",           nullptr, shell::ShellInitNapi,            nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"shellInput",          nullptr, shell::ShellInputNapi,           nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"shellResize",         nullptr, shell::ShellResizeNapi,          nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"shellShutdown",       nullptr, shell::ShellShutdownNapi,        nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

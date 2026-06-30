@@ -73,6 +73,10 @@ add_library(entry SHARED
     client_napi.cpp
     input_window_napi.cpp
     wineprefix_setup.cpp
+    shell/shell_engine.cpp
+    shell/shell_output.cpp
+    shell/shell_readline.cpp
+    shell/shell_napi.cpp
 )
 
 target_link_libraries(entry PUBLIC

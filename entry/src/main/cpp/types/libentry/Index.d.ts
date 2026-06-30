@@ -199,3 +199,19 @@ export const ensureBox64TmpDir: () => boolean;
 
 //
 export const setupWinePrefix: (wineprefix: string, wineRoot: string) => boolean;
+
+// ---- shell ----
+export interface ShellInitOptions {
+  homeDir: string;
+  logDir: string;
+  cols: number;
+  rows: number;
+}
+
+export const shellInit: (
+  opts: ShellInitOptions,
+  outputCb: (data: string) => void
+) => boolean;
+export const shellInput: (data: string) => void;
+export const shellResize: (cols: number, rows: number) => void;
+export const shellShutdown: () => void;
