@@ -47,6 +47,7 @@ set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(
     ${NATIVERENDER_ROOT_PATH}
     ${NATIVERENDER_ROOT_PATH}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/shell
 )
 
 # 预编译好的 libwayland
@@ -77,6 +78,17 @@ add_library(entry SHARED
     shell/shell_output.cpp
     shell/shell_readline.cpp
     shell/shell_napi.cpp
+    shell/shell_tokenizer.cpp
+    shell/shell_path.cpp
+    shell/shell_dispatcher.cpp
+    shell/builtins/cmd_help.cpp
+    shell/builtins/cmd_clear.cpp
+    shell/builtins/cmd_echo.cpp
+    shell/builtins/cmd_pwd.cpp
+    shell/builtins/cmd_cd.cpp
+    shell/builtins/cmd_ls.cpp
+    shell/builtins/cmd_cat.cpp
+    shell/builtins/builtins_register.cpp
 )
 
 target_link_libraries(entry PUBLIC
@@ -85,6 +97,7 @@ target_link_libraries(entry PUBLIC
     libnative_window.so
     libEGL.so
     libGLESv3.so
+    libuv.so
     libhilog_ndk.z.so
     wayland_server_lib
     dl

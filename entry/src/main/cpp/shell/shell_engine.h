@@ -7,6 +7,7 @@
 #include "napi/native_api.h"
 #include "shell_output.h"
 #include "shell_readline.h"
+#include "shell_dispatcher.h"
 
 namespace shell {
 
@@ -28,6 +29,20 @@ public:
     void Input(const std::string& data);
     void Resize(int cols, int rows);
 
+    // 给 builtins 用
+    void Write(const std::string& data);
+    void Writeln(const std::string& data);
+    void WriteErr(const std::string& data);          // 红色
+
+    const std::string& Cwd() const  { return cwd_; }
+    const std::string& Home() const { return cfg_.home_dir; }
+    int Cols() const                { return cfg_.cols; }
+    int LastExit() const            { return last_exit_; }
+
+    void SetCwd(const std::string& p) { cwd_ = p; UpdatePrompt(); }
+
+    ShellDispatcher& Dispatcher()   { return dispatcher_; }
+
 private:
     ShellEngine() = default;
     ShellEngine(const ShellEngine&) = delete;
@@ -41,8 +56,10 @@ private:
     ShellConfig cfg_;
     std::unique_ptr<ShellOutput> output_;
     ShellReadline readline_;
+    ShellDispatcher dispatcher_;
 
     std::string cwd_;
+    int last_exit_ = 0;
 };
 
 } // namespace shell
