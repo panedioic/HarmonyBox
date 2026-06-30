@@ -1,5 +1,6 @@
 import { webview } from '@kit.ArkWeb';
 import { ShellEngine } from '../shell/ShellEngine';
+import { common } from '@kit.AbilityKit';
 
 @Component
 export struct DebugShellPage {
@@ -47,7 +48,8 @@ export struct DebugShellPage {
         })
         .onPageEnd((): void => {
           this.pageReady = true;
-          this.engine = new ShellEngine(this.controller);
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          this.engine = new ShellEngine(this.controller, ctx);
           this.engine.start();
           // 把启动期间堆积的输入冲洗一下
           this.controller.runJavaScript('window.flushPendingInput && window.flushPendingInput()');
