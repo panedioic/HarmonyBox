@@ -16,6 +16,7 @@ import { SettingsPage } from '../components/SettingsPage';
 import { FilesPage } from '../components/FilesPage';
 import { ProcManagerPage } from '../components/ProcManagerPage';
 import { DebugPage } from '../pages/DebugPage';
+import { DebugShellPage } from './DebugShellPage';
 
 interface MovableWindow { startMoving?: () => Promise<void>; }
 interface ResizableWindow { startResizing?: (edges: number) => Promise<void>; }
@@ -688,6 +689,8 @@ struct Index {
       FilesPage()
     } else if (this.currentPage === PageType.PROC_MANAGER) {
       ProcManagerPage()
+    } else if (this.currentPage === PageType.DEBUG_SHELL) {
+      DebugShellPage()
     } else if (this.currentPage === PageType.DEBUG) {
       DebugPage()
     }

@@ -16,7 +16,8 @@ export struct Sidebar {
     { id: PageType.SETTINGS, label: '环境设置', icon: '⚙️' },
     { id: PageType.FILES, label: '沙箱文件', icon: '📂' },
     { id: PageType.PROC_MANAGER, label: '进程管理', icon: '🛡️' },
-    { id: PageType.DEBUG, label: '测试页面', icon: '🔧' }
+    { id: PageType.DEBUG_SHELL, label: '调试终端', icon: '🐚' },
+    { id: PageType.DEBUG, label: '调试页面（旧）', icon: '🧪' }
   ];
 
   build() {
