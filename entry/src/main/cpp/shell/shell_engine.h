@@ -9,12 +9,14 @@
 #include "shell_readline.h"
 #include "shell_dispatcher.h"
 #include "shell_session.h"
+#include "shell_env.h"
 
 namespace shell {
 
 struct ShellConfig {
     std::string home_dir;
     std::string log_dir;
+    std::string env_persist_path;
     int cols = 80;
     int rows = 24;
 };
@@ -22,10 +24,14 @@ struct ShellConfig {
 class ShellEngine {
 public:
     static ShellEngine& Instance();
+    
+    ShellEnv& Env() { return env_; }
 
     bool Init(napi_env env, const ShellConfig& cfg, napi_value output_cb);
     void Shutdown();
     bool IsInitialized() const { return initialized_; }
+    void InjectSystemEnv(const std::string& key, const std::string& val);
+    void MarkReadonlyEnv(const std::string& key);
 
     void Input(const std::string& data);
     void Resize(int cols, int rows);
@@ -40,7 +46,7 @@ public:
     int Cols() const                { return cfg_.cols; }
     int LastExit() const            { return last_exit_; }
 
-    void SetCwd(const std::string& p) { cwd_ = p; UpdatePrompt(); }
+    void SetCwd(const std::string& p);
 
     ShellDispatcher& Dispatcher()   { return dispatcher_; }
 
@@ -63,6 +69,8 @@ private:
     int last_exit_ = 0;
     
     ShellSession session_;
+    
+    ShellEnv env_;
 };
 
 } // namespace shell

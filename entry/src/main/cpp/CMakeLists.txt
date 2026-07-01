@@ -90,6 +90,10 @@ add_library(entry SHARED
     shell/builtins/cmd_ls.cpp
     shell/builtins/cmd_cat.cpp
     shell/builtins/builtins_register.cpp
+    shell/shell_env.cpp
+    shell/builtins/cmd_env.cpp
+    shell/builtins/cmd_export.cpp
+    shell/builtins/cmd_unset.cpp
 )
 
 target_link_libraries(entry PUBLIC

@@ -14,6 +14,9 @@ int CmdPwd  (ShellEngine& e, const std::vector<std::string>& args);
 int CmdCd   (ShellEngine& e, const std::vector<std::string>& args);
 int CmdLs   (ShellEngine& e, const std::vector<std::string>& args);
 int CmdCat  (ShellEngine& e, const std::vector<std::string>& args);
+int CmdEnv    (ShellEngine& e, const std::vector<std::string>& args);
+int CmdExport (ShellEngine& e, const std::vector<std::string>& args);
+int CmdUnset  (ShellEngine& e, const std::vector<std::string>& args);
 
 void RegisterBuiltins(ShellDispatcher& d);
 

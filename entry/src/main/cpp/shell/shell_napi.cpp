@@ -55,6 +55,35 @@ napi_value MakeBool(napi_env env, bool b) {
 
 } // anonymous namespace
 
+// shellSetSystemEnv(vars: string[]): void
+// 每个元素形如 "KEY=VAL". 只能在 shellInit 之后调用.
+napi_value ShellSetSystemEnvNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return nullptr;
+
+    bool is_arr = false;
+    napi_is_array(env, args[0], &is_arr);
+    if (!is_arr) return nullptr;
+
+    uint32_t len = 0;
+    napi_get_array_length(env, args[0], &len);
+
+    auto& engine = ShellEngine::Instance();
+    if (!engine.IsInitialized()) return nullptr;
+
+    for (uint32_t i = 0; i < len; ++i) {
+        napi_value item = nullptr;
+        napi_get_element(env, args[0], i, &item);
+        std::string s = ReadStringValue(env, item);
+        size_t eq = s.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        engine.InjectSystemEnv(s.substr(0, eq), s.substr(eq + 1));
+    }
+    return nullptr;
+}
+
 // shellInit(opts: {homeDir,logDir,cols,rows}, outputCb: (data:string)=>void): boolean
 napi_value ShellInitNapi(napi_env env, napi_callback_info info) {
     size_t argc = 2;
@@ -83,6 +112,7 @@ napi_value ShellInitNapi(napi_env env, napi_callback_info info) {
     cfg.log_dir  = ReadStringProp(env, args[0], "logDir");
     cfg.cols     = ReadInt32Prop(env, args[0], "cols", 80);
     cfg.rows     = ReadInt32Prop(env, args[0], "rows", 24);
+    cfg.env_persist_path = ReadStringProp(env, args[0], "envPersistPath");
 
     bool ok = ShellEngine::Instance().Init(env, cfg, args[1]);
     return MakeBool(env, ok);

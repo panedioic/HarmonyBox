@@ -31,6 +31,16 @@ bool ShellEngine::Init(napi_env env, const ShellConfig& cfg, napi_value output_c
         session_.Init(cfg_.log_dir);
     }
     
+    env_.Init(cfg_.env_persist_path);
+    // 默认只读键. 用户可以 export 覆盖也可以, 但先保守: PWD/HOME 只读
+    env_.AddReadonly("PWD");
+    env_.AddReadonly("HOME");
+    env_.AddReadonly("SHELL");
+    // PWD/HOME 作为 system var 曝光 (值来自 cfg)
+    env_.SetSystemVar("HOME", cfg_.home_dir);
+    env_.SetSystemVar("PWD",  cwd_);
+    env_.SetSystemVar("SHELL", "hbsh");
+    
     readline_.Init(
         [this](const std::string& data) { output_->Write(data); },
         [this](const std::string& line) { OnCommit(line); }
@@ -157,6 +167,20 @@ void ShellEngine::WriteBanner() {
         Write("\x1b[90mlog: " + session_.GetLogPath() + "\x1b[0m\r\n");
     }
     Write("\r\n");
+}
+
+void ShellEngine::SetCwd(const std::string& p) { 
+    cwd_ = p; 
+    env_.SetSystemVar("PWD", cwd_); 
+    UpdatePrompt(); 
+}
+
+void ShellEngine::InjectSystemEnv(const std::string& key, const std::string& val) {
+    env_.SetSystemVar(key, val);
+}
+
+void ShellEngine::MarkReadonlyEnv(const std::string& key) {
+    env_.AddReadonly(key);
 }
 
 } // namespace shell

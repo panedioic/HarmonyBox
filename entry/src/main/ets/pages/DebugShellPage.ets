@@ -18,10 +18,13 @@ export struct DebugShellPage {
   private initShell(): void {
     if (this.inited) return;
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const filesDir = ctx.filesDir;
+
     const ok: boolean = wl.shellInit(
       {
-        homeDir: ctx.filesDir,
-        logDir: `${ctx.filesDir}/shell-logs`,
+        homeDir: filesDir,
+        logDir: `${filesDir}/shell-logs`,
+        envPersistPath: `${filesDir}/shell-env.conf`,   // 新增
         cols: 80,
         rows: 24
       },
@@ -34,7 +37,27 @@ export struct DebugShellPage {
     this.inited = ok;
     if (!ok) {
       console.error('shellInit failed');
+      return;
     }
+
+    // 注入 system env: WineService/LibStore 计算出来的 box64/wayland env
+    try {
+      const sysEnv: string[] = this.buildSystemEnv(ctx);
+      wl.shellSetSystemEnv(sysEnv);
+    } catch (e) {
+      console.error('shellSetSystemEnv failed: ' + (e as Error).message);
+    }
+  }
+
+  private buildSystemEnv(ctx: common.UIAbilityContext): string[] {
+    const out: string[] = [];
+    // 最小集: 让 shell 里 env 命令能显示这些
+    out.push(`FILES_DIR=${ctx.filesDir}`);
+    out.push(`CACHE_DIR=${ctx.cacheDir}`);
+    // 后续 M8 spawn box64 会用到, 先埋:
+    // const ldPaths = WineService.buildLdPaths(ctx);
+    // out.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
+    return out;
   }
 
   build() {

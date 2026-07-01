@@ -215,3 +215,13 @@ export const shellInit: (
 export const shellInput: (data: string) => void;
 export const shellResize: (cols: number, rows: number) => void;
 export const shellShutdown: () => void;
+
+export interface ShellInitOptions {
+  homeDir: string;
+  logDir: string;
+  envPersistPath: string;
+  cols: number;
+  rows: number;
+}
+
+export const shellSetSystemEnv: (vars: string[]) => void;

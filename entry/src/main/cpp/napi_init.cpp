@@ -68,6 +68,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"shellInput",          nullptr, shell::ShellInputNapi,           nullptr,nullptr,nullptr, napi_default,nullptr},
         {"shellResize",         nullptr, shell::ShellResizeNapi,          nullptr,nullptr,nullptr, napi_default,nullptr},
         {"shellShutdown",       nullptr, shell::ShellShutdownNapi,        nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"shellSetSystemEnv",   nullptr, shell::ShellSetSystemEnvNapi,    nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

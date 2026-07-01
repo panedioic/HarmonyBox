@@ -9,6 +9,7 @@ napi_value ShellInitNapi(napi_env env, napi_callback_info info);
 napi_value ShellInputNapi(napi_env env, napi_callback_info info);
 napi_value ShellResizeNapi(napi_env env, napi_callback_info info);
 napi_value ShellShutdownNapi(napi_env env, napi_callback_info info);
+napi_value ShellSetSystemEnvNapi(napi_env env, napi_callback_info info);
 
 } // namespace shell
 

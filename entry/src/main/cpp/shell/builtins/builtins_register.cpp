@@ -17,6 +17,12 @@ void RegisterBuiltins(ShellDispatcher& d) {
                       "ls [-a] [-l] [path...]", CmdLs);
     d.RegisterBuiltin("cat",   "print file contents",
                       "cat <file...>", CmdCat);
+    d.RegisterBuiltin("env",    "list environment variables",
+                      "env [prefix]", CmdEnv);
+    d.RegisterBuiltin("export", "set (and optionally persist) a variable",
+                      "export [-p] KEY=VAL...", CmdExport);
+    d.RegisterBuiltin("unset",  "unset a variable",
+                      "unset [-p] KEY...", CmdUnset);
 }
 
 } // namespace shell
