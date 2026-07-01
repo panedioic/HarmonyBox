@@ -8,6 +8,7 @@
 #include "shell_output.h"
 #include "shell_readline.h"
 #include "shell_dispatcher.h"
+#include "shell_session.h"
 
 namespace shell {
 
@@ -60,6 +61,8 @@ private:
 
     std::string cwd_;
     int last_exit_ = 0;
+    
+    ShellSession session_;
 };
 
 } // namespace shell

@@ -81,6 +81,7 @@ add_library(entry SHARED
     shell/shell_tokenizer.cpp
     shell/shell_path.cpp
     shell/shell_dispatcher.cpp
+    shell/shell_session.cpp
     shell/builtins/cmd_help.cpp
     shell/builtins/cmd_clear.cpp
     shell/builtins/cmd_echo.cpp

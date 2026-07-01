@@ -27,6 +27,10 @@ bool ShellEngine::Init(napi_env env, const ShellConfig& cfg, napi_value output_c
     cwd_ = cfg_.home_dir;
     last_exit_ = 0;
 
+    if (!cfg_.log_dir.empty()) {
+        session_.Init(cfg_.log_dir);
+    }
+    
     readline_.Init(
         [this](const std::string& data) { output_->Write(data); },
         [this](const std::string& line) { OnCommit(line); }
@@ -44,6 +48,8 @@ bool ShellEngine::Init(napi_env env, const ShellConfig& cfg, napi_value output_c
 void ShellEngine::Shutdown() {
     if (!initialized_) return;
     readline_.Reset();
+    output_->Flush();
+    session_.Shutdown();
     output_.reset();
     initialized_ = false;
 }
@@ -60,14 +66,15 @@ void ShellEngine::Resize(int cols, int rows) {
 
 void ShellEngine::Write(const std::string& data) {
     if (output_) output_->Write(data);
+    session_.Append(data);
 }
 
 void ShellEngine::Writeln(const std::string& data) {
-    if (output_) output_->Write(data + "\r\n");
+    Write(data + "\r\n");
 }
 
 void ShellEngine::WriteErr(const std::string& data) {
-    if (output_) output_->Write("\x1b[31m" + data + "\x1b[0m\r\n");
+    Write("\x1b[31m" + data + "\x1b[0m\r\n");
 }
 
 void ShellEngine::OnCommit(const std::string& line) {
@@ -76,6 +83,11 @@ void ShellEngine::OnCommit(const std::string& line) {
         return;
     }
 
+    // 给日志加一行 "$ command", 不输出到 xterm
+    if (session_.IsOpen()) {
+        session_.AppendDirect("$ " + line + "\n");
+    }
+    
     TokenizeResult tk = Tokenize(line);
     if (!tk.ok) {
         WriteErr("hbsh: " + tk.error);
@@ -137,10 +149,14 @@ void ShellEngine::UpdatePrompt() {
 }
 
 void ShellEngine::WriteBanner() {
-    output_->Write("\x1b[1;32m╭─────────────────────────────────╮\x1b[0m\r\n");
-    output_->Write("\x1b[1;32m│  HarmonyBox Debug Shell  v0.1   │\x1b[0m\r\n");
-    output_->Write("\x1b[1;32m╰─────────────────────────────────╯\x1b[0m\r\n");
-    output_->Write("type \x1b[33mhelp\x1b[0m to list commands\r\n\r\n");
+    Write("\x1b[1;32m╭─────────────────────────────────╮\x1b[0m\r\n");
+    Write("\x1b[1;32m│  HarmonyBox Debug Shell  v0.1   │\x1b[0m\r\n");
+    Write("\x1b[1;32m╰─────────────────────────────────╯\x1b[0m\r\n");
+    Write("type \x1b[33mhelp\x1b[0m to list commands\r\n");
+    if (session_.IsOpen()) {
+        Write("\x1b[90mlog: " + session_.GetLogPath() + "\x1b[0m\r\n");
+    }
+    Write("\r\n");
 }
 
 } // namespace shell
