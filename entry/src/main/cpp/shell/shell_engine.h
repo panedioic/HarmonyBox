@@ -3,6 +3,10 @@
 
 #include <memory>
 #include <string>
+#include <deque>
+#include <mutex>
+#include <uv.h>
+#include <sys/types.h>
 
 #include "napi/native_api.h"
 #include "shell_output.h"
@@ -50,6 +54,14 @@ public:
 
     ShellDispatcher& Dispatcher()   { return dispatcher_; }
 
+    // 命令启动异步任务后调这些, 从任意线程都可
+    void PostAsyncOutput(std::string data);
+    void PostAsyncExit(int code);
+    // 供命令实现调用 (只在 JS 主线程)
+    void BeginBusy(pid_t pid, const std::string& label);
+    bool IsBusy() const { return busy_; }
+    pid_t BusyPid() const { return busy_pid_; }
+
 private:
     ShellEngine() = default;
     ShellEngine(const ShellEngine&) = delete;
@@ -71,6 +83,25 @@ private:
     ShellSession session_;
     
     ShellEnv env_;
+
+    struct AsyncEvent {
+        enum Type { kOutput, kExit };
+        Type type;
+        std::string data;
+        int exit_code;
+    };
+    static void OnAsync(uv_async_t* h);
+    void DrainAsync();
+    void EndBusy(int code);
+    void KillBusy();
+    // 异步通道
+    uv_async_t* async_ = nullptr;
+    std::mutex async_mu_;
+    std::deque<AsyncEvent> async_queue_;
+    // busy state
+    bool busy_ = false;
+    pid_t busy_pid_ = 0;
+    std::string busy_label_;
 };
 
 } // namespace shell

@@ -94,6 +94,12 @@ add_library(entry SHARED
     shell/builtins/cmd_env.cpp
     shell/builtins/cmd_export.cpp
     shell/builtins/cmd_unset.cpp
+    shell/shell_process.cpp
+    shell/builtins/cmd_box64.cpp
+    shell/builtins/cmd_wine.cpp
+    shell/builtins/cmd_wineserver.cpp
+    shell/builtins/cmd_procmgr.cpp
+    shell/builtins/cmd_status.cpp
 )
 
 target_link_libraries(entry PUBLIC

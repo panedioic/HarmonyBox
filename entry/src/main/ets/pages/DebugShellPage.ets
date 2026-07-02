@@ -1,6 +1,8 @@
 import wl from 'libentry.so';
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
+import { WineService } from '../service/WineService';
+import { LibStore } from '../service/LibStore';
 
 @Component
 export struct DebugShellPage {
@@ -50,13 +52,38 @@ export struct DebugShellPage {
   }
 
   private buildSystemEnv(ctx: common.UIAbilityContext): string[] {
-    const out: string[] = [];
-    // 最小集: 让 shell 里 env 命令能显示这些
-    out.push(`FILES_DIR=${ctx.filesDir}`);
-    out.push(`CACHE_DIR=${ctx.cacheDir}`);
-    // 后续 M8 spawn box64 会用到, 先埋:
-    // const ldPaths = WineService.buildLdPaths(ctx);
-    // out.push(`BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`);
+    const filesDir = ctx.filesDir;
+    const cacheDir = ctx.cacheDir;
+    const wineRoot = WineService.getRootDir(ctx);
+    const wineBin = WineService.getBinPath(ctx);
+    const winePrefix = WineService.getPrefixDir(ctx);
+    const ldPaths = WineService.buildLdPaths(ctx);
+    const x64LibsDir = LibStore.getDir(ctx);
+    if (x64LibsDir) ldPaths.push(x64LibsDir);
+
+    const out: string[] = [
+      `FILES_DIR=${filesDir}`,
+      `CACHE_DIR=${cacheDir}`,
+
+      // wine 路径, 供 shell 内 wine/wineserver 命令自动拼接
+      `HBOX_WINE_ROOT=${wineRoot}`,
+      `HBOX_WINE_BIN=${wineBin}`,
+      `HBOX_WINESERVER_BIN=${wineRoot}/bin/wineserver`,
+
+      // box64 / wine 环境
+      `BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`,
+      `BOX64_LOG=0`,
+      `BOX64_NOBANNER=0`,
+      `WINEPREFIX=${winePrefix}`,
+
+      // procmgr sock 默认路径
+      `HBOX_PROCMGR_SOCK=${filesDir}/.procmgr.sock`,
+    ];
+
+    // wine service 自身还需要一些 (WINEDLLPATH 等)
+    for (const kv of WineService.buildLaunchEnv(ctx)) {
+      out.push(kv);
+    }
     return out;
   }
 

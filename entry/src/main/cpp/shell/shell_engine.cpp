@@ -5,6 +5,8 @@
 #include "shell_tokenizer.h"
 #include "builtins/builtins.h"
 
+#include "process_manager.h"
+
 #undef LOG_TAG
 #define LOG_TAG "HBox_NAPI_Shell_SEngine"
 
@@ -45,6 +47,17 @@ bool ShellEngine::Init(napi_env env, const ShellConfig& cfg, napi_value output_c
         [this](const std::string& data) { output_->Write(data); },
         [this](const std::string& line) { OnCommit(line); }
     );
+    
+    uv_loop_t* loop = nullptr;
+    if (napi_get_uv_event_loop(env, &loop) == napi_ok && loop) {
+        async_ = new uv_async_t();
+        if (uv_async_init(loop, async_, &ShellEngine::OnAsync) == 0) {
+            async_->data = this;
+        } else {
+            delete async_;
+            async_ = nullptr;
+        }
+    }
 
     RegisterBuiltins(dispatcher_);
 
@@ -57,15 +70,46 @@ bool ShellEngine::Init(napi_env env, const ShellConfig& cfg, napi_value output_c
 
 void ShellEngine::Shutdown() {
     if (!initialized_) return;
+
+    // 有 busy 进程先 kill 掉
+    if (busy_ && busy_pid_ > 0) {
+        KillBusy();
+    }
+
     readline_.Reset();
     output_->Flush();
     session_.Shutdown();
+
+    if (async_) {
+        uv_close(reinterpret_cast<uv_handle_t*>(async_),
+                 [](uv_handle_t* h) {
+                     delete reinterpret_cast<uv_async_t*>(h);
+                 });
+        async_ = nullptr;
+    }
+
+    // 丢掉未处理的 async event
+    std::lock_guard<std::mutex> lk(async_mu_);
+    async_queue_.clear();
+
     output_.reset();
+    busy_ = false;
+    busy_pid_ = 0;
     initialized_ = false;
 }
 
 void ShellEngine::Input(const std::string& data) {
     if (!initialized_) return;
+    if (busy_) {
+        // 只处理 Ctrl+C, 其他忽略
+        for (char c : data) {
+            if (c == 0x03) {
+                Write("^C\r\n");
+                KillBusy();
+            }
+        }
+        return;
+    }
     readline_.Feed(data);
 }
 
@@ -130,6 +174,8 @@ void ShellEngine::OnCommit(const std::string& line) {
         last_exit_ = 1;
     }
 
+    // 如果命令启动了异步任务, 不打 prompt
+    if (busy_) return;
     readline_.ShowPrompt();
 }
 
@@ -181,6 +227,73 @@ void ShellEngine::InjectSystemEnv(const std::string& key, const std::string& val
 
 void ShellEngine::MarkReadonlyEnv(const std::string& key) {
     env_.AddReadonly(key);
+}
+
+void ShellEngine::PostAsyncOutput(std::string data) {
+    {
+        std::lock_guard<std::mutex> lk(async_mu_);
+        AsyncEvent ev;
+        ev.type = AsyncEvent::kOutput;
+        ev.data = std::move(data);
+        ev.exit_code = 0;
+        async_queue_.push_back(std::move(ev));
+    }
+    if (async_) uv_async_send(async_);
+}
+
+void ShellEngine::PostAsyncExit(int code) {
+    {
+        std::lock_guard<std::mutex> lk(async_mu_);
+        AsyncEvent ev;
+        ev.type = AsyncEvent::kExit;
+        ev.exit_code = code;
+        async_queue_.push_back(std::move(ev));
+    }
+    if (async_) uv_async_send(async_);
+}
+
+void ShellEngine::OnAsync(uv_async_t* h) {
+    auto* self = static_cast<ShellEngine*>(h->data);
+    if (self) self->DrainAsync();
+}
+
+void ShellEngine::DrainAsync() {
+    std::deque<AsyncEvent> local;
+    {
+        std::lock_guard<std::mutex> lk(async_mu_);
+        local.swap(async_queue_);
+    }
+    if (!initialized_) return;
+    for (auto& ev : local) {
+        if (ev.type == AsyncEvent::kOutput) {
+            Write(ev.data);
+        } else if (ev.type == AsyncEvent::kExit) {
+            EndBusy(ev.exit_code);
+        }
+    }
+}
+
+void ShellEngine::BeginBusy(pid_t pid, const std::string& label) {
+    busy_ = true;
+    busy_pid_ = pid;
+    busy_label_ = label;
+}
+
+void ShellEngine::EndBusy(int code) {
+    if (!busy_) return;
+    busy_ = false;
+    busy_pid_ = 0;
+    last_exit_ = code;
+    std::string tag = code == 0 ? "\x1b[90m" : "\x1b[31m";
+    Writeln(tag + "[" + busy_label_ + " exit=" + std::to_string(code) + "]\x1b[0m");
+    busy_label_.clear();
+    readline_.ShowPrompt();
+}
+
+void ShellEngine::KillBusy() {
+    if (busy_pid_ > 0) {
+        procmgr::Terminate(busy_pid_);
+    }
 }
 
 } // namespace shell

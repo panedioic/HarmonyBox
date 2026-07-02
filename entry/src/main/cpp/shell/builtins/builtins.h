@@ -17,6 +17,12 @@ int CmdCat  (ShellEngine& e, const std::vector<std::string>& args);
 int CmdEnv    (ShellEngine& e, const std::vector<std::string>& args);
 int CmdExport (ShellEngine& e, const std::vector<std::string>& args);
 int CmdUnset  (ShellEngine& e, const std::vector<std::string>& args);
+int CmdBox64      (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWine       (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWineserver (ShellEngine& e, const std::vector<std::string>& args);
+int CmdProcMgrStart(ShellEngine& e, const std::vector<std::string>& args);
+int CmdProcMgrStop (ShellEngine& e, const std::vector<std::string>& args);
+int CmdStatus     (ShellEngine& e, const std::vector<std::string>& args);
 
 void RegisterBuiltins(ShellDispatcher& d);
 

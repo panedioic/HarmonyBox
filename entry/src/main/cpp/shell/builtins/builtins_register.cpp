@@ -23,6 +23,18 @@ void RegisterBuiltins(ShellDispatcher& d) {
                       "export [-p] KEY=VAL...", CmdExport);
     d.RegisterBuiltin("unset",  "unset a variable",
                       "unset [-p] KEY...", CmdUnset);
+    d.RegisterBuiltin("box64",      "run box64 with args",
+                      "box64 <args...>", CmdBox64);
+    d.RegisterBuiltin("wine",       "run wine (auto box64 prefix)",
+                      "wine <args...>", CmdWine);
+    d.RegisterBuiltin("wineserver", "run wineserver (auto box64 prefix)",
+                      "wineserver [-f -p -k]", CmdWineserver);
+    d.RegisterBuiltin("procmgr.start", "start reverse-spawn control socket",
+                      "procmgr.start [sock-path]", CmdProcMgrStart);
+    d.RegisterBuiltin("procmgr.stop",  "stop control socket",
+                      "procmgr.stop", CmdProcMgrStop);
+    d.RegisterBuiltin("status", "show shell / wine / procmgr status",
+                      "status", CmdStatus);
 }
 
 } // namespace shell
