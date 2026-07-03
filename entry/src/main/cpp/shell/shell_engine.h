@@ -14,6 +14,7 @@
 #include "shell_dispatcher.h"
 #include "shell_session.h"
 #include "shell_env.h"
+#include "shell_jobs.h"
 
 namespace shell {
 
@@ -61,6 +62,12 @@ public:
     void BeginBusy(pid_t pid, const std::string& label);
     bool IsBusy() const { return busy_; }
     pid_t BusyPid() const { return busy_pid_; }
+    
+    ShellJobs& Jobs() { return jobs_; }
+    // 由后台任务的 exit 事件调 (async 线程 -> 主线程后)
+    void OnBgJobExit(pid_t pid, int code);
+    
+    void PostBgExit(pid_t pid, int code);
 
 private:
     ShellEngine() = default;
@@ -89,6 +96,7 @@ private:
         Type type;
         std::string data;
         int exit_code;
+        pid_t pid;
     };
     static void OnAsync(uv_async_t* h);
     void DrainAsync();
@@ -102,6 +110,8 @@ private:
     bool busy_ = false;
     pid_t busy_pid_ = 0;
     std::string busy_label_;
+    
+    ShellJobs jobs_;
 };
 
 } // namespace shell

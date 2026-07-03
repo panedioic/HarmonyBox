@@ -91,6 +91,9 @@ void ShellEngine::Shutdown() {
     // 丢掉未处理的 async event
     std::lock_guard<std::mutex> lk(async_mu_);
     async_queue_.clear();
+    
+    // 不 kill 后台任务, 只关 log fd
+    jobs_.Clear();
 
     output_.reset();
     busy_ = false;
@@ -269,6 +272,8 @@ void ShellEngine::DrainAsync() {
             Write(ev.data);
         } else if (ev.type == AsyncEvent::kExit) {
             EndBusy(ev.exit_code);
+        } else if (ev.type == AsyncEvent::kBgExit) {
+            OnBgJobExit(ev.pid, ev.exit_code);
         }
     }
 }
@@ -293,6 +298,33 @@ void ShellEngine::EndBusy(int code) {
 void ShellEngine::KillBusy() {
     if (busy_pid_ > 0) {
         procmgr::Terminate(busy_pid_);
+    }
+}
+
+void ShellEngine::PostBgExit(pid_t pid, int code) {
+    {
+        std::lock_guard<std::mutex> lk(async_mu_);
+        AsyncEvent ev;
+        ev.type = AsyncEvent::kBgExit;
+        ev.exit_code = code;
+        ev.pid = pid;
+        async_queue_.push_back(std::move(ev));
+    }
+    if (async_) uv_async_send(async_);
+}
+
+void ShellEngine::OnBgJobExit(pid_t pid, int code) {
+    jobs_.MarkExited(pid, code);
+    // busy 状态下不打断当前提示, 只在空闲时通知
+    if (!busy_) {
+        // 把提示写在当前行头
+        Write("\r\x1b[K");
+        std::string tag = code == 0 ? "\x1b[90m" : "\x1b[33m";
+        const ShellJob* j = jobs_.Get(pid);
+        std::string label = j ? j->label : "job";
+        Writeln(tag + "[" + label + " pid=" + std::to_string(pid) +
+                " exit=" + std::to_string(code) + "]\x1b[0m");
+        readline_.ShowPrompt();
     }
 }
 

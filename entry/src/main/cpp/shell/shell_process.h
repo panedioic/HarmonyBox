@@ -15,6 +15,13 @@ int SpawnBox64FromShell(ShellEngine& e,
                         const std::vector<std::string>& box64_args,
                         const std::string& label);
 
+// 后台模式: 立刻返回, 输出重定向到 log_path
+// 返回 pid (>0) 或 -1
+pid_t SpawnBox64Background(ShellEngine& e,
+                           const std::vector<std::string>& box64_args,
+                           const std::string& label,
+                           const std::string& log_path);
+
 } // namespace shell
 
 #endif

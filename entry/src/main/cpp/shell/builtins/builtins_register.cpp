@@ -35,6 +35,18 @@ void RegisterBuiltins(ShellDispatcher& d) {
                       "procmgr.stop", CmdProcMgrStop);
     d.RegisterBuiltin("status", "show shell / wine / procmgr status",
                       "status", CmdStatus);
+    d.RegisterBuiltin("bg",   "run command in background (output to log file)",
+                      "bg <cmd> [args...]", CmdBg);
+    d.RegisterBuiltin("jobs", "list background jobs of this session",
+                      "jobs", CmdJobs);
+    d.RegisterBuiltin("kill", "send SIGTERM to pid",
+                      "kill <pid...>", CmdKill);
+    d.RegisterBuiltin("wineserver.start",  "start wineserver -f -p in background",
+                      "wineserver.start [extra args]", CmdWineserverStart);
+    d.RegisterBuiltin("wineserver.stop",   "kill wineserver started by this shell",
+                      "wineserver.stop", CmdWineserverStop);
+    d.RegisterBuiltin("wineserver.status", "show wineserver state",
+                      "wineserver.status", CmdWineserverStatus);
 }
 
 } // namespace shell

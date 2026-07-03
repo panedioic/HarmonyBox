@@ -23,6 +23,12 @@ int CmdWineserver (ShellEngine& e, const std::vector<std::string>& args);
 int CmdProcMgrStart(ShellEngine& e, const std::vector<std::string>& args);
 int CmdProcMgrStop (ShellEngine& e, const std::vector<std::string>& args);
 int CmdStatus     (ShellEngine& e, const std::vector<std::string>& args);
+int CmdBg              (ShellEngine& e, const std::vector<std::string>& args);
+int CmdJobs            (ShellEngine& e, const std::vector<std::string>& args);
+int CmdKill            (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWineserverStart (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWineserverStop  (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWineserverStatus(ShellEngine& e, const std::vector<std::string>& args);
 
 void RegisterBuiltins(ShellDispatcher& d);
 
