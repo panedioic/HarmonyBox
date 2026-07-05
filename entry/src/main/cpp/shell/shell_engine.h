@@ -92,7 +92,7 @@ private:
     ShellEnv env_;
 
     struct AsyncEvent {
-        enum Type { kOutput, kExit };
+        enum Type { kOutput, kExit, kBgExit };
         Type type;
         std::string data;
         int exit_code;
