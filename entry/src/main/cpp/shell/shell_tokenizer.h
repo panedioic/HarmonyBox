@@ -1,10 +1,13 @@
 #ifndef HBOX_SHELL_TOKENIZER_H
 #define HBOX_SHELL_TOKENIZER_H
 
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace shell {
+
+using EnvLookupFn = std::function<std::string(const std::string&)>;
 
 struct TokenizeResult {
     std::vector<std::string> tokens;
@@ -12,9 +15,9 @@ struct TokenizeResult {
     std::string error;
 };
 
-// 简易分词: 空白分隔, 支持单/双引号, 反斜杠转义
-// 不支持: 变量展开 / 通配符 / 管道重定向 (留给后续阶段)
-TokenizeResult Tokenize(const std::string& line);
+// lookup 为空时不做变量展开.
+// 支持 $VAR, ${VAR}. 单引号内不展开, 双引号内展开.
+TokenizeResult Tokenize(const std::string& line, EnvLookupFn lookup = nullptr);
 
 } // namespace shell
 

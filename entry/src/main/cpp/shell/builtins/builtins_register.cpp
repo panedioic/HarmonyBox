@@ -47,6 +47,16 @@ void RegisterBuiltins(ShellDispatcher& d) {
                       "wineserver.stop", CmdWineserverStop);
     d.RegisterBuiltin("wineserver.status", "show wineserver state",
                       "wineserver.status", CmdWineserverStatus);
+    d.RegisterBuiltin("ps",      "list processes in procmgr registry",
+                      "ps [-a]", CmdPs);
+    d.RegisterBuiltin("head",    "print first N lines of file",
+                      "head [-n N] <file...>", CmdHead);
+    d.RegisterBuiltin("tail",    "print last N lines of file",
+                      "tail [-n N] <file...>", CmdTail);
+    d.RegisterBuiltin("grep",    "search for pattern in files (literal string)",
+                      "grep [-i -v -n -c] <pattern> <file...>", CmdGrep);
+    d.RegisterBuiltin("history", "show command history",
+                      "history [N|-c]", CmdHistory);
 }
 
 } // namespace shell

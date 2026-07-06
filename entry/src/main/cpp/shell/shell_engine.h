@@ -68,6 +68,9 @@ public:
     void OnBgJobExit(pid_t pid, int code);
     
     void PostBgExit(pid_t pid, int code);
+    
+    const std::vector<std::string>& HistoryRef() const { return readline_.History(); }
+    void ClearHistory() { readline_.ClearHistory(); }
 
 private:
     ShellEngine() = default;

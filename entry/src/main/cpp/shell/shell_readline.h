@@ -20,6 +20,8 @@ public:
     void SetPrompt(const std::string& prompt, int visible_len);
     void ShowPrompt();
     void Reset();  // 清空当前编辑状态，不输出
+    const std::vector<std::string>& History() const { return history_; }
+    void ClearHistory() { history_.clear(); history_idx_ = -1; }
 
 private:
     void HandleByte(unsigned char b);

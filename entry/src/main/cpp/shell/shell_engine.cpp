@@ -145,7 +145,7 @@ void ShellEngine::OnCommit(const std::string& line) {
         session_.AppendDirect("$ " + line + "\n");
     }
     
-    TokenizeResult tk = Tokenize(line);
+    TokenizeResult tk = Tokenize(line, [this](const std::string& k) { return env_.Get(k); });
     if (!tk.ok) {
         WriteErr("hbsh: " + tk.error);
         last_exit_ = 2;

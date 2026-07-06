@@ -105,6 +105,11 @@ add_library(entry SHARED
     shell/builtins/cmd_jobs.cpp
     shell/builtins/cmd_kill.cpp
     shell/builtins/cmd_wineserver_ctl.cpp
+    shell/builtins/cmd_ps.cpp
+    shell/builtins/cmd_head.cpp
+    shell/builtins/cmd_tail.cpp
+    shell/builtins/cmd_grep.cpp
+    shell/builtins/cmd_history.cpp
 )
 
 target_link_libraries(entry PUBLIC
