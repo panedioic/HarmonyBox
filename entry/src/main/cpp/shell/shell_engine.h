@@ -26,6 +26,14 @@ struct ShellConfig {
     int rows = 24;
 };
 
+struct ExternalCallPayload {
+    std::string cmd_name;
+    std::vector<std::string> args;
+    std::vector<std::pair<std::string, std::string>> env_kv;
+};
+// tsfn call_js_cb 实现 (定义在 shell_napi.cpp)
+void ExternalCallJs(napi_env env, napi_value js_cb, void* ctx, void* data);
+
 class ShellEngine {
 public:
     static ShellEngine& Instance();
@@ -71,6 +79,10 @@ public:
     
     const std::vector<std::string>& HistoryRef() const { return readline_.History(); }
     void ClearHistory() { readline_.ClearHistory(); }
+    
+    // 外部命令派发 (ArkTS handler resolve 后调):
+    void CommandDone(int code);
+    void StreamWrite(const std::string& data);
 
 private:
     ShellEngine() = default;
@@ -115,6 +127,10 @@ private:
     std::string busy_label_;
     
     ShellJobs jobs_;
+    
+    // 派发外部命令: 通过 tsfn 调 ArkTS handler
+    void DispatchExternal(const CommandEntry& cmd,
+                          const std::vector<std::string>& args);
 };
 
 } // namespace shell

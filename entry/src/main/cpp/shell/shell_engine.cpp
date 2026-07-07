@@ -72,10 +72,17 @@ void ShellEngine::Shutdown() {
     if (!initialized_) return;
 
     // 有 busy 进程先 kill 掉
-    if (busy_ && busy_pid_ > 0) {
-        KillBusy();
+    if (busy_) {
+        if (busy_pid_ > 0) {
+            KillBusy();
+        } else {
+            // 外部命令: 无法 kill ArkTS handler, 只能标记结束
+            // handler 之后若还调 shellCommandDone, 会因 !busy_ 而忽略
+            busy_ = false;
+        }
     }
 
+    dispatcher_.ReleaseAllExternal();
     readline_.Reset();
     output_->Flush();
     session_.Shutdown();
@@ -168,9 +175,14 @@ void ShellEngine::OnCommit(const std::string& line) {
 
     try {
         std::vector<std::string> args(tk.tokens.begin() + 1, tk.tokens.end());
-        last_exit_ = cmd->fn(*this, args);
-    } catch (const std::exception& e) {
-        WriteErr(std::string("hbsh: exception: ") + e.what());
+        if (cmd->kind == CommandKind::kBuiltin) {
+            last_exit_ = cmd->fn(*this, args);
+        } else if (cmd->kind == CommandKind::kExternal) {
+            DispatchExternal(*cmd, args);
+            // busy 状态由 DispatchExternal 内部设置
+        }
+    } catch (const std::exception& ex) {
+        WriteErr(std::string("hbsh: exception: ") + ex.what());
         last_exit_ = 1;
     } catch (...) {
         WriteErr("hbsh: unknown exception");
@@ -328,4 +340,90 @@ void ShellEngine::OnBgJobExit(pid_t pid, int code) {
     }
 }
 
+void ShellEngine::DispatchExternal(const CommandEntry& cmd,
+                                   const std::vector<std::string>& args) {
+    if (!cmd.tsfn) {
+        WriteErr("hbsh: external command '" + cmd.name + "' has null tsfn");
+        return;
+    }
+    auto* payload = new ExternalCallPayload();
+    payload->cmd_name = cmd.name;
+    payload->args = args;
+
+    // 把 env 打包
+    for (auto& e : env_.All()) {
+        payload->env_kv.push_back({ e.key, e.val });
+    }
+
+    // busy_pid 用负数表示"外部命令", label 用 cmd 名
+    BeginBusy((pid_t)(-1), cmd.name);
+
+    napi_status st = napi_call_threadsafe_function(
+        cmd.tsfn, payload, napi_tsfn_blocking);
+    if (st != napi_ok) {
+        OH_LOG_ERROR(LOG_APP, "shell external tsfn call failed: %{public}d",
+                     (int)st);
+        delete payload;
+        EndBusy(1);
+    }
+}
+
+void ShellEngine::CommandDone(int code) {
+    if (!busy_) return;
+    // 外部命令没有 pid, 通过 async 走一遍保持顺序 (与流式 output 有序)
+    PostAsyncExit(code);
+}
+
+void ShellEngine::StreamWrite(const std::string& data) {
+    if (!busy_ || data.empty()) return;
+    PostAsyncOutput(data);
+}
+
 } // namespace shell
+
+namespace shell {
+
+void ExternalCallJs(napi_env env, napi_value js_cb,
+                    void* /*ctx*/, void* raw) {
+    auto* payload = static_cast<ExternalCallPayload*>(raw);
+    if (!payload) return;
+    if (!env || !js_cb) { delete payload; return; }
+
+    napi_value js_args = nullptr;
+    napi_create_array_with_length(env, payload->args.size(), &js_args);
+    for (size_t i = 0; i < payload->args.size(); ++i) {
+        napi_value s = nullptr;
+        napi_create_string_utf8(env, payload->args[i].c_str(),
+                                payload->args[i].size(), &s);
+        napi_set_element(env, js_args, (uint32_t)i, s);
+    }
+
+    napi_value js_env = nullptr;
+    napi_create_object(env, &js_env);
+    for (auto& kv : payload->env_kv) {
+        napi_value v = nullptr;
+        napi_create_string_utf8(env, kv.second.c_str(), kv.second.size(), &v);
+        napi_set_named_property(env, js_env, kv.first.c_str(), v);
+    }
+
+    napi_value js_meta = nullptr;
+    napi_create_object(env, &js_meta);
+    napi_value js_name = nullptr;
+    napi_create_string_utf8(env, payload->cmd_name.c_str(),
+                            payload->cmd_name.size(), &js_name);
+    napi_set_named_property(env, js_meta, "name", js_name);
+
+    napi_value undef = nullptr;
+    napi_get_undefined(env, &undef);
+    napi_value call_args[3] = { js_args, js_env, js_meta };
+    napi_value ret = nullptr;
+    napi_status st = napi_call_function(env, undef, js_cb, 3, call_args, &ret);
+    if (st != napi_ok) {
+        OH_LOG_ERROR(LOG_APP, "shell external handler call failed: %{public}d",
+                     (int)st);
+        ShellEngine::Instance().CommandDone(1);
+    }
+    delete payload;
+}
+
+}  // namespace shell

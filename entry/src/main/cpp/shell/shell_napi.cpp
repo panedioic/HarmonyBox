@@ -148,4 +148,87 @@ napi_value ShellShutdownNapi(napi_env env, napi_callback_info /*info*/) {
     return nullptr;
 }
 
+// shellRegister(name: string, meta: {desc,usage,streaming}, handler: fn): boolean
+napi_value ShellRegisterNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = { nullptr, nullptr, nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 3) {
+        OH_LOG_ERROR(LOG_APP, "shellRegister: need 3 args");
+        return MakeBool(env, false);
+    }
+    std::string name = ReadStringValue(env, args[0]);
+    if (name.empty()) return MakeBool(env, false);
+
+    napi_valuetype vt;
+    napi_typeof(env, args[1], &vt);
+    if (vt != napi_object) return MakeBool(env, false);
+    napi_typeof(env, args[2], &vt);
+    if (vt != napi_function) return MakeBool(env, false);
+
+    std::string desc  = ReadStringProp(env, args[1], "desc");
+    std::string usage = ReadStringProp(env, args[1], "usage");
+
+    napi_value stv = nullptr;
+    napi_get_named_property(env, args[1], "streaming", &stv);
+    bool streaming = false;
+    if (stv) {
+        napi_valuetype t;
+        napi_typeof(env, stv, &t);
+        if (t == napi_boolean) napi_get_value_bool(env, stv, &streaming);
+    }
+
+    napi_threadsafe_function tsfn = nullptr;
+    napi_value res_name = nullptr;
+    napi_create_string_utf8(env, ("ShellExtCmd:" + name).c_str(),
+                            NAPI_AUTO_LENGTH, &res_name);
+    napi_status st = napi_create_threadsafe_function(
+        env, args[2], nullptr, res_name,
+        0, 1,
+        nullptr, nullptr, nullptr,
+        ExternalCallJs,
+        &tsfn);
+    if (st != napi_ok || !tsfn) {
+        OH_LOG_ERROR(LOG_APP, "shellRegister tsfn create failed: %{public}d",
+                     (int)st);
+        return MakeBool(env, false);
+    }
+
+    ShellEngine::Instance().Dispatcher().RegisterExternal(
+        name, desc, usage, streaming, tsfn);
+    return MakeBool(env, true);
+}
+
+napi_value ShellUnregisterNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return MakeBool(env, false);
+    std::string name = ReadStringValue(env, args[0]);
+    if (name.empty()) return MakeBool(env, false);
+    bool ok = ShellEngine::Instance().Dispatcher().UnregisterExternal(name);
+    return MakeBool(env, ok);
+}
+
+// shellCommandDone(code: number): void
+napi_value ShellCommandDoneNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t code = (argc >= 1) ? ReadInt32Value(env, args[0], 0) : 0;
+    ShellEngine::Instance().CommandDone(code);
+    return nullptr;
+}
+
+// shellStreamWrite(data: string): void
+napi_value ShellStreamWriteNapi(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return nullptr;
+    std::string data = ReadStringValue(env, args[0]);
+    ShellEngine::Instance().StreamWrite(data);
+    return nullptr;
+}
+
 } // namespace shell

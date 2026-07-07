@@ -3,6 +3,7 @@ import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
 import { WineService } from '../service/WineService';
 import { LibStore } from '../service/LibStore';
+import { ShellRegistry, ShellIO } from '../shell/ShellRegistry';
 
 @Component
 export struct DebugShellPage {
@@ -49,6 +50,8 @@ export struct DebugShellPage {
     } catch (e) {
       console.error('shellSetSystemEnv failed: ' + (e as Error).message);
     }
+
+    this.registerCommands(ctx);
   }
 
   private buildSystemEnv(ctx: common.UIAbilityContext): string[] {
@@ -85,6 +88,49 @@ export struct DebugShellPage {
       out.push(kv);
     }
     return out;
+  }
+
+  private registerCommands(ctx: common.UIAbilityContext): void {
+    ShellRegistry.register('wine.version', {
+      desc: 'show wine version',
+      streaming: false
+    }, async (args: string[], env: Record<string, string>, io: ShellIO): Promise<number> => {
+      const wineBin: string = env['HBOX_WINE_BIN'] ?? '';
+      if (!wineBin) {
+        io.err('HBOX_WINE_BIN not set');
+        return 1;
+      }
+      io.writeln('wine binary: \x1b[36m' + wineBin + '\x1b[0m');
+      io.writeln('prefix:      \x1b[36m' + (env['WINEPREFIX'] ?? '(unset)') + '\x1b[0m');
+      return 0;
+    });
+
+    ShellRegistry.register('wine.info', {
+      desc: 'dump wine/box64 related env',
+      streaming: false
+    }, async (args: string[], env: Record<string, string>, io: ShellIO): Promise<number> => {
+      const prefix: string = args[0] ?? 'WINE';
+      const keys: string[] = Object.keys(env).filter((k: string) => k.startsWith(prefix)).sort();
+      if (keys.length === 0) {
+        io.writeln('\x1b[90mno vars matching prefix ' + prefix + '\x1b[0m');
+        return 0;
+      }
+      for (const k of keys) {
+        io.writeln('\x1b[36m' + k + '\x1b[0m=' + env[k]);
+      }
+      return 0;
+    });
+
+    ShellRegistry.register('demo.stream', {
+      desc: 'demo streaming output (10 lines with delay)',
+      streaming: true
+    }, async (args: string[], env: Record<string, string>, io: ShellIO): Promise<number> => {
+      for (let i = 1; i <= 10; i++) {
+        io.writeln('line ' + i + '  \x1b[90m(' + new Date().toISOString() + ')\x1b[0m');
+        await new Promise<void>((r: () => void) => setTimeout(r, 300));
+      }
+      return 0;
+    });
   }
 
   build() {

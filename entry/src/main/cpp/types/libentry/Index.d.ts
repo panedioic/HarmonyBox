@@ -225,3 +225,24 @@ export interface ShellInitOptions {
 }
 
 export const shellSetSystemEnv: (vars: string[]) => void;
+
+export interface ShellCmdMeta {
+  desc: string;
+  usage?: string;
+  streaming?: boolean;
+}
+
+export interface ShellCmdContext {
+  name: string;
+}
+
+export type ShellCmdHandler = (
+  args: string[],
+  env: Record<string, string>,
+  ctx: ShellCmdContext
+) => Promise<number> | number | void;
+
+export const shellRegister:    (name: string, meta: ShellCmdMeta, handler: ShellCmdHandler) => boolean;
+export const shellUnregister:  (name: string) => boolean;
+export const shellCommandDone: (code: number) => void;
+export const shellStreamWrite: (data: string) => void;
