@@ -110,6 +110,8 @@ add_library(entry SHARED
     shell/builtins/cmd_tail.cpp
     shell/builtins/cmd_grep.cpp
     shell/builtins/cmd_history.cpp
+    shell/builtins/cmd_wine_setup.cpp
+    shell/builtins/cmd_app.cpp
 )
 
 target_link_libraries(entry PUBLIC

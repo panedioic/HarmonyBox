@@ -34,6 +34,8 @@ int CmdHead    (ShellEngine& e, const std::vector<std::string>& args);
 int CmdTail    (ShellEngine& e, const std::vector<std::string>& args);
 int CmdGrep    (ShellEngine& e, const std::vector<std::string>& args);
 int CmdHistory (ShellEngine& e, const std::vector<std::string>& args);
+int CmdWineSetup(ShellEngine& e, const std::vector<std::string>& args);
+int CmdAppLaunch(ShellEngine& e, const std::vector<std::string>& args);
 
 void RegisterBuiltins(ShellDispatcher& d);
 

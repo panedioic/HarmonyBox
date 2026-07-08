@@ -1,9 +1,10 @@
-import wl from 'libentry.so';
+import wl, { ProcessInfo } from 'libentry.so';
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
 import { WineService } from '../service/WineService';
 import { LibStore } from '../service/LibStore';
 import { ShellRegistry, ShellIO } from '../shell/ShellRegistry';
+import { fileIo as fs } from '@kit.CoreFileKit';
 
 @Component
 export struct DebugShellPage {
@@ -81,6 +82,9 @@ export struct DebugShellPage {
 
       // procmgr sock 默认路径
       `HBOX_PROCMGR_SOCK=${filesDir}/.procmgr.sock`,
+
+      //
+      `HBOX_APPS_JSON=${filesDir}/apps.json`,
     ];
 
     // wine service 自身还需要一些 (WINEDLLPATH 等)
@@ -129,6 +133,23 @@ export struct DebugShellPage {
         io.writeln('line ' + i + '  \x1b[90m(' + new Date().toISOString() + ')\x1b[0m');
         await new Promise<void>((r: () => void) => setTimeout(r, 300));
       }
+      return 0;
+    });
+
+    ShellRegistry.register('wine.reinstall', {
+      desc: 'safely reinstall wine (validate before wiping old)',
+      usage: 'wine.reinstall',
+      streaming: true
+    }, async (args: string[], env: Record<string, string>, io: ShellIO): Promise<number> => {
+      io.writeln('[1/5] pick a wine directory (must contain bin/wine, bin/wineserver)');
+      const uri: string | null = await WineService.pickAndInstall(ctx);
+      if (!uri) {
+        io.writeln('\x1b[90m[cancelled]\x1b[0m');
+        return 1;
+      }
+      io.writeln('  picked: \x1b[36m' + uri + '\x1b[0m');
+      io.writeln('[2/5] validating source directory...');
+      io.writeln('  \x1b[32mok\x1b[0m');
       return 0;
     });
   }

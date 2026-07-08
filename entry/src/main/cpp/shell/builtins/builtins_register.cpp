@@ -57,6 +57,10 @@ void RegisterBuiltins(ShellDispatcher& d) {
                       "grep [-i -v -n -c] <pattern> <file...>", CmdGrep);
     d.RegisterBuiltin("history", "show command history",
                       "history [N|-c]", CmdHistory);
+    d.RegisterBuiltin("wine.setup", "initialize wineprefix (SetupWinePrefix)",
+                      "wine.setup [-f]", CmdWineSetup);
+    d.RegisterBuiltin("app.launch", "launch app by name from app.json (stub)",
+                      "app.launch <name>", CmdAppLaunch);
 }
 
 } // namespace shell
