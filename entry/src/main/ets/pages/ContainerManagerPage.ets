@@ -1,14 +1,16 @@
 import { common } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
 import { ContainerInfo, containerTypeLabel } from '../model/ContainerInfo';
-import { ContainerService } from '../service/ContainerService';
+import { ContainerService, InstallResult } from '../service/ContainerService';
 import { InstallContainerDialog } from '../components/InstallContainerDialog';
+import { picker } from '@kit.CoreFileKit';
 
 @Component
 export struct ContainerManagerPage {
   @State containers: ContainerInfo[] = [];
   @State expandedId: string = '';
   @State busy: string = '';   // 正在启停的容器 id
+  @State exporting: string = '';
 
   private installDialog: CustomDialogController = new CustomDialogController({
     builder: InstallContainerDialog({
@@ -75,6 +77,39 @@ export struct ContainerManagerPage {
         }
       }
     });
+  }
+
+  private async doExport(c: ContainerInfo): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const p: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
+      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      opts.newFileNames = [`${c.id}.tar`];
+      const uris: string[] = await p.save(opts);
+      if (!uris || uris.length === 0) return;
+      this.exporting = c.id;
+      const r: InstallResult = await ContainerService.exportContainer(
+        ctx as common.Context, c, uris[0]);
+      this.exporting = '';
+      if (r.ok) {
+        AlertDialog.show({
+          title: '导出成功',
+          message: `容器已导出到:\n${uris[0]}`,
+          confirm: { value: '好的', action: (): void => {} },
+          alignment: DialogAlignment.Center
+        });
+      } else {
+        AlertDialog.show({
+          title: '导出失败',
+          message: r.error,
+          confirm: { value: '好的', action: (): void => {} },
+          alignment: DialogAlignment.Center
+        });
+      }
+    } catch (e) {
+      this.exporting = '';
+      console.error(`export failed: ${(e as Error).message}`);
+    }
   }
 
   build() {
@@ -262,6 +297,11 @@ export struct ContainerManagerPage {
       // 底部操作
       Row({ space: 10 }) {
         Blank()
+        Button(this.exporting === c.id ? '导出中...' : '导出为 tar')
+          .fontSize(12).height(32)
+          .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
+          .enabled(this.exporting !== c.id)
+          .onClick((): void => { this.doExport(c); })
         Button('删除容器').fontSize(12).height(32)
           .backgroundColor('#FEE4E4').fontColor('#E64545')
           .onClick((): void => { this.confirmDelete(c); })

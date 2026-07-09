@@ -78,6 +78,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         // ...
         {"tarExtract", nullptr, tar::TarExtractNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
         {"tarCreate",  nullptr, tar::TarCreateNapi,  nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"tarExtractFd", nullptr, tar::TarExtractFdNapi, nullptr,nullptr,nullptr,napi_default,nullptr},
+        {"tarCreateFd",  nullptr, tar::TarCreateFdNapi,  nullptr,nullptr,nullptr,napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);

@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utime.h>
 #include <vector>
 
 #undef LOG_TAG
@@ -64,21 +63,10 @@ std::string BuildEntryName(const RawHeader& h) {
     return name;
 }
 
-// 判 dest+"/"+entry 是否会跳出 dest。用字符串比较, 假设两者都是清洁路径。
-bool IsPathInside(const std::string& dest_abs, const std::string& target_abs) {
-    if (target_abs.size() < dest_abs.size()) return false;
-    if (target_abs.compare(0, dest_abs.size(), dest_abs) != 0) return false;
-    if (target_abs.size() == dest_abs.size()) return true;
-    return target_abs[dest_abs.size()] == '/';
-}
-
-// 拼接 dest/entry, 拒绝: 绝对路径, 含 ".." 段, 空路径
-// 返回空串表示拒绝
 std::string ResolveSafeTarget(const std::string& dest_dir,
                               const std::string& entry_name) {
     if (entry_name.empty()) return "";
-    if (entry_name[0] == '/') return "";     // 绝对路径拒绝
-    // 逐段检查 ..
+    if (entry_name[0] == '/') return "";
     size_t i = 0;
     while (i < entry_name.size()) {
         size_t j = entry_name.find('/', i);
@@ -112,96 +100,142 @@ bool EnsureParentDir(const std::string& file_path) {
     return MkdirRecursive(file_path.substr(0, slash), 0755);
 }
 
-}  // anonymous namespace
+// 有边界的 fd Reader
+class BoundedReader {
+public:
+    BoundedReader(int fd, int64_t start, int64_t length)
+        : fd_(fd), length_(length), cursor_(0) {
+        // 起始定位
+        if (start != 0) lseek(fd_, start, SEEK_SET);
+    }
 
-ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
-    ExtractResult r;
-    int fd = open(archive.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        r.error = std::string("open archive: ") + strerror(errno);
+    // 读满 n 字节, 返回是否成功
+    bool ReadExact(void* buf, size_t n) {
+        if (!CanRead((int64_t)n)) return false;
+        char* p = static_cast<char*>(buf);
+        size_t off = 0;
+        while (off < n) {
+            ssize_t r = read(fd_, p + off, n - off);
+            if (r == 0) return false;
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                return false;
+            }
+            off += (size_t)r;
+            cursor_ += r;
+        }
+        return true;
+    }
+
+    // 尝试读 n, 返回实际读到的字节
+    ssize_t ReadSome(void* buf, size_t n) {
+        if (length_ >= 0) {
+            int64_t remain = length_ - cursor_;
+            if (remain <= 0) return 0;
+            if ((int64_t)n > remain) n = (size_t)remain;
+        }
+        ssize_t r = read(fd_, buf, n);
+        if (r > 0) cursor_ += r;
         return r;
     }
 
-    // 保证 dest 存在
+    bool Skip(int64_t n) {
+        if (n <= 0) return true;
+        if (length_ >= 0 && cursor_ + n > length_) return false;
+        if (lseek(fd_, n, SEEK_CUR) < 0) return false;
+        cursor_ += n;
+        return true;
+    }
+
+    bool AtEnd() const {
+        return length_ >= 0 && cursor_ >= length_;
+    }
+
+private:
+    bool CanRead(int64_t n) const {
+        if (length_ < 0) return true;
+        return cursor_ + n <= length_;
+    }
+    int fd_;
+    int64_t length_;
+    int64_t cursor_;
+};
+
+// 核心解压逻辑, 只依赖 BoundedReader
+ExtractResult ExtractCore(BoundedReader& reader, const std::string& dest_dir) {
+    ExtractResult r;
+
     if (!MkdirRecursive(dest_dir, 0755)) {
         r.error = "cannot create dest_dir";
-        close(fd);
         return r;
     }
 
-    // 缓存 GNU LongName / LongLink 的名字
     std::string pending_longname;
     std::string pending_longlink;
-    int zero_blocks_in_a_row = 0;
+    int zero_blocks = 0;
 
     while (true) {
         RawHeader hdr;
-        ssize_t got = read(fd, &hdr, kBlockSize);
+        // 读一个 block; EOF 表示归档结束
+        if (reader.AtEnd()) break;
+        ssize_t got = reader.ReadSome(&hdr, kBlockSize);
         if (got == 0) break;
         if (got != (ssize_t)kBlockSize) {
-            r.error = "unexpected EOF in header";
-            close(fd);
-            return r;
+            // 需要补齐
+            if (!reader.ReadExact(reinterpret_cast<char*>(&hdr) + got,
+                                  kBlockSize - got)) {
+                r.error = "unexpected EOF in header";
+                return r;
+            }
         }
+
         if (IsAllZero(hdr)) {
-            zero_blocks_in_a_row++;
-            if (zero_blocks_in_a_row >= 2) break;  // 双零块=归档结束
+            zero_blocks++;
+            if (zero_blocks >= 2) break;
             continue;
         }
-        zero_blocks_in_a_row = 0;
+        zero_blocks = 0;
 
         if (!ChecksumOk(hdr)) {
             r.error = "header checksum mismatch";
-            close(fd);
             return r;
         }
 
         int64_t size = ParseOctal(hdr.size, sizeof(hdr.size));
-        if (size < 0) {
-            r.error = "bad size field";
-            close(fd);
-            return r;
-        }
+        if (size < 0) { r.error = "bad size field"; return r; }
         int64_t padded = (size + kBlockSize - 1) & ~(int64_t)(kBlockSize - 1);
         char type = hdr.typeflag;
 
-        // 处理 GNU 长名头: 下一个数据块就是长名字, 覆盖 pending_*
         if (type == kTypeGnuLongName || type == kTypeGnuLongLink) {
-            std::vector<char> buf(padded);
-            if (read(fd, buf.data(), padded) != padded) {
+            std::vector<char> buf((size_t)padded);
+            if (!reader.ReadExact(buf.data(), (size_t)padded)) {
                 r.error = "eof in long name payload";
-                close(fd);
                 return r;
             }
             std::string name(buf.data(), (size_t)size);
-            // 去掉尾部 NUL
             while (!name.empty() && name.back() == '\0') name.pop_back();
             if (type == kTypeGnuLongName) pending_longname = name;
             else                          pending_longlink = name;
             continue;
         }
 
-        // 组装 entry name
         std::string entry_name = !pending_longname.empty()
-            ? pending_longname
-            : BuildEntryName(hdr);
+            ? pending_longname : BuildEntryName(hdr);
         std::string linkname = !pending_longlink.empty()
             ? pending_longlink
             : FieldToString(hdr.linkname, sizeof(hdr.linkname));
         pending_longname.clear();
         pending_longlink.clear();
 
-        // 目录名末尾可能有 /, 保留
         std::string safe_name = entry_name;
         if (!safe_name.empty() && safe_name.back() == '/') safe_name.pop_back();
 
         std::string target = ResolveSafeTarget(dest_dir, safe_name);
         if (target.empty()) {
-            OH_LOG_WARN(LOG_APP, "tar: reject unsafe entry '%{public}s'",
+            OH_LOG_WARN(LOG_APP, "tar: reject unsafe '%{public}s'",
                         entry_name.c_str());
             r.skipped++;
-            // 跳过数据部分
-            if (padded > 0) lseek(fd, padded, SEEK_CUR);
+            if (padded > 0) reader.Skip(padded);
             continue;
         }
 
@@ -211,7 +245,6 @@ ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
         if (type == kTypeDirectory) {
             if (!MkdirRecursive(target, mode & 0777 ? mode & 0777 : 0755)) {
                 r.error = "mkdir failed: " + target + ": " + strerror(errno);
-                close(fd);
                 return r;
             }
             r.extracted++;
@@ -219,7 +252,6 @@ ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
                    || type == kTypeContiguous) {
             if (!EnsureParentDir(target)) {
                 r.error = "cannot create parent for: " + target;
-                close(fd);
                 return r;
             }
             int outfd = open(target.c_str(),
@@ -227,7 +259,6 @@ ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
                              mode & 0777);
             if (outfd < 0) {
                 r.error = "open '" + target + "': " + strerror(errno);
-                close(fd);
                 return r;
             }
             int64_t remain = size;
@@ -235,34 +266,30 @@ ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
             while (remain > 0) {
                 size_t want = remain > (int64_t)sizeof(buf)
                               ? sizeof(buf) : (size_t)remain;
-                ssize_t n = read(fd, buf, want);
+                ssize_t n = reader.ReadSome(buf, want);
                 if (n <= 0) {
-                    r.error = "eof in file payload: " + target;
+                    r.error = "eof in file: " + target;
                     close(outfd);
-                    close(fd);
                     return r;
                 }
                 ssize_t w = write(outfd, buf, n);
                 if (w != n) {
                     r.error = "write '" + target + "': " + strerror(errno);
                     close(outfd);
-                    close(fd);
                     return r;
                 }
                 remain -= n;
             }
             close(outfd);
-            // 消耗 padding
             int64_t pad = padded - size;
-            if (pad > 0) lseek(fd, pad, SEEK_CUR);
+            if (pad > 0) reader.Skip(pad);
             r.extracted++;
         } else if (type == kTypeSymlink) {
             if (!EnsureParentDir(target)) {
                 r.error = "cannot create parent for symlink: " + target;
-                close(fd);
                 return r;
             }
-            unlink(target.c_str());  // 覆盖旧的
+            unlink(target.c_str());
             if (symlink(linkname.c_str(), target.c_str()) != 0) {
                 OH_LOG_WARN(LOG_APP,
                     "tar: symlink '%{public}s' -> '%{public}s' failed: %{public}s",
@@ -271,20 +298,40 @@ ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
             } else {
                 r.extracted++;
             }
-            // symlink 无 payload, size 应为 0
-            if (padded > 0) lseek(fd, padded, SEEK_CUR);
+            if (padded > 0) reader.Skip(padded);
         } else {
-            // 硬链接 / char / block / fifo 全跳过
             OH_LOG_WARN(LOG_APP, "tar: skip type '%{public}c' entry '%{public}s'",
                         type, entry_name.c_str());
             r.skipped++;
-            if (padded > 0) lseek(fd, padded, SEEK_CUR);
+            if (padded > 0) reader.Skip(padded);
         }
     }
 
-    close(fd);
     r.ok = true;
     return r;
+}
+
+}  // anonymous namespace
+
+ExtractResult Extract(const std::string& archive, const std::string& dest_dir) {
+    ExtractResult r;
+    int fd = open(archive.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        r.error = std::string("open archive: ") + strerror(errno);
+        return r;
+    }
+    BoundedReader reader(fd, 0, -1);
+    r = ExtractCore(reader, dest_dir);
+    close(fd);
+    return r;
+}
+
+ExtractResult ExtractFromFd(int fd, int64_t offset, int64_t length,
+                            const std::string& dest_dir) {
+    ExtractResult r;
+    if (fd < 0) { r.error = "invalid fd"; return r; }
+    BoundedReader reader(fd, offset, length);
+    return ExtractCore(reader, dest_dir);
 }
 
 }  // namespace tar

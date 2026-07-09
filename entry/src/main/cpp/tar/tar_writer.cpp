@@ -1,6 +1,8 @@
+// tar/tar_writer.cpp
 #include "tar_writer.h"
 #include "tar_format.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -20,9 +22,8 @@ namespace tar {
 
 namespace {
 
-// 写 octal 到定长字段, 尾部一定是 NUL 或空格
+// 写 octal 到定长字段, 尾部一定是 NUL
 void WriteOctal(char* dst, size_t n, int64_t v) {
-    // 使用 n-1 位数字 + 尾部 NUL
     char buf[32];
     snprintf(buf, sizeof(buf), "%0*llo", (int)(n - 1), (unsigned long long)v);
     memcpy(dst, buf, n - 1);
@@ -49,8 +50,7 @@ bool SplitPathForUstar(const std::string& path,
         prefix_out->clear();
         return true;
     }
-    if (path.size() > 100 + 1 + 155) return false;  // 太长
-    // 在 <=155 前找到最后一个 '/', 后面部分长度必须 <=100
+    if (path.size() > 100 + 1 + 155) return false;
     for (size_t split = std::min<size_t>(155, path.size() - 1);
          split > 0; --split) {
         if (path[split] != '/') continue;
@@ -144,7 +144,7 @@ bool WriteRegular(Writer& w, const std::string& full_path,
         }
         if (!w.WriteAll(buf, (size_t)n)) { close(fd); return false; }
         total += n;
-        if (total >= st.st_size) break;   // 文件可能在过程中变短
+        if (total >= st.st_size) break;
     }
     close(fd);
     if (!w.WritePadding((size_t)st.st_size)) return false;
@@ -165,7 +165,6 @@ bool WriteSymlink(Writer& w, const std::string& full_path,
     if (n < 0) return false;
     lbuf[n] = 0;
     if ((size_t)n > 100) {
-        // TODO: 用 GNU LongLink; 目前跳过
         OH_LOG_WARN(LOG_APP, "tar: skip too-long symlink '%{public}s'",
                     entry_path.c_str());
         return false;
@@ -181,7 +180,6 @@ bool WalkAndPack(Writer& w, const std::string& src_root,
     struct stat st;
     if (lstat(full.c_str(), &st) != 0) return false;
 
-    // 目录:先写目录条目, 再遍历子项
     if (S_ISDIR(st.st_mode)) {
         if (!rel_path.empty()) {
             if (WriteDirectory(w, rel_path, st)) r.included++;
@@ -200,55 +198,69 @@ bool WalkAndPack(Writer& w, const std::string& src_root,
         std::sort(names.begin(), names.end());
         for (const auto& n : names) {
             std::string sub = rel_path.empty() ? n : (rel_path + "/" + n);
-            WalkAndPack(w, src_root, sub, r);  // 单项失败不整体退出
+            WalkAndPack(w, src_root, sub, r);
         }
         return true;
     }
 
-    // 文件
     if (S_ISREG(st.st_mode)) {
         if (WriteRegular(w, full, rel_path, st)) r.included++;
         else r.skipped++;
         return true;
     }
 
-    // 软链
     if (S_ISLNK(st.st_mode)) {
         if (WriteSymlink(w, full, rel_path, st)) r.included++;
         else r.skipped++;
         return true;
     }
 
-    // 其他类型跳过
     OH_LOG_WARN(LOG_APP, "tar: skip unsupported type: %{public}s", full.c_str());
     r.skipped++;
     return true;
 }
 
-}  // anonymous namespace
-
-CreateResult Create(const std::string& archive, const std::string& src_dir) {
+CreateResult CreateCore(int fd, const std::string& src_dir) {
     CreateResult r;
     struct stat st;
     if (stat(src_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
         r.error = "src_dir not a directory: " + src_dir;
         return r;
     }
-    int fd = open(archive.c_str(),
-                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-    if (fd < 0) {
-        r.error = std::string("open archive: ") + strerror(errno);
-        return r;
-    }
     Writer w(fd);
-    // src_dir 本身不作为条目, 从其内容开始 (类似 tar -C src -cf out .)
     WalkAndPack(w, src_dir, "", r);
     // 双零块结束标记
     char zeros[kBlockSize * 2] = {0};
     w.WriteAll(zeros, sizeof(zeros));
-    close(fd);
     r.ok = true;
     return r;
+}
+
+}  // anonymous namespace
+
+// ==============================================================
+// public
+// ==============================================================
+CreateResult Create(const std::string& archive, const std::string& src_dir) {
+    int fd = open(archive.c_str(),
+                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        CreateResult r;
+        r.error = std::string("open archive: ") + strerror(errno);
+        return r;
+    }
+    CreateResult r = CreateCore(fd, src_dir);
+    close(fd);
+    return r;
+}
+
+CreateResult CreateToFd(int fd, const std::string& src_dir) {
+    if (fd < 0) {
+        CreateResult r;
+        r.error = "invalid fd";
+        return r;
+    }
+    return CreateCore(fd, src_dir);
 }
 
 }  // namespace tar

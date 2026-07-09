@@ -2,6 +2,7 @@
 #define HBOX_TAR_WRITER_H
 
 #include <string>
+#include <cstdint>
 
 namespace tar {
 
@@ -12,9 +13,8 @@ struct CreateResult {
     std::string error;
 };
 
-// 递归打包 src_dir 里的内容到 archive 文件。
-// tar 里的路径不含 src_dir 前缀 (类似 `tar -C src_dir -cf archive .`)。
 CreateResult Create(const std::string& archive, const std::string& src_dir);
+CreateResult CreateToFd(int fd, const std::string& src_dir);
 
 }  // namespace tar
 

@@ -7,6 +7,8 @@ namespace tar {
 
 napi_value TarExtractNapi(napi_env env, napi_callback_info info);
 napi_value TarCreateNapi (napi_env env, napi_callback_info info);
+napi_value TarExtractFdNapi(napi_env env, napi_callback_info info);
+napi_value TarCreateFdNapi (napi_env env, napi_callback_info info);
 
 }  // namespace tar
 

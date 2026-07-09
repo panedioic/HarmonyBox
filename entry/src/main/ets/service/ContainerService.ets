@@ -1,10 +1,9 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import wl, { TarResult } from 'libentry.so';
-import {
-  ContainerInfo, ContainerConfig, ContainerType, defaultContainerConfig
-} from '../model/ContainerInfo';
+import { ContainerInfo, ContainerConfig, ContainerType, defaultContainerConfig } from '../model/ContainerInfo';
 import { InstallService } from './InstallService';
+import { resourceManager } from '@kit.LocalizationKit';
 
 const CONFIG_FILE: string = 'container.json';
 
@@ -171,18 +170,34 @@ export class ContainerService {
     dest: string): Promise<InstallResult> {
     if (!opts.archiveUri) return { ok: false, error: '未选择 tar 文件' };
 
-    // 解压到 dest
     fs.mkdirSync(dest, true);
-    let tarResult: TarResult;
+
+    let file: fs.File | null = null;
     try {
-      tarResult = await wl.tarExtract(opts.archiveUri, dest);
+      // 用 fs.openSync 打开 URI, 拿到内部 fd
+      file = fs.openSync(opts.archiveUri, fs.OpenMode.READ_ONLY);
     } catch (e) {
       ContainerService.rmDirSafe(dest);
-      return { ok: false, error: 'tar 解压失败: ' + (e as Error).message };
+      return {
+        ok: false,
+        error: `打开 tar 文件失败: ${(e as Error).message}`
+      };
     }
-    if (!tarResult.ok) {
+
+    try {
+      const r: TarResult = await wl.tarExtractFd(file.fd, 0, -1, dest);
+      if (!r.ok) {
+        ContainerService.rmDirSafe(dest);
+        return { ok: false, error: 'tar 解压失败: ' + r.error };
+      }
+    } catch (e) {
       ContainerService.rmDirSafe(dest);
-      return { ok: false, error: 'tar 解压失败: ' + tarResult.error };
+      return {
+        ok: false,
+        error: 'tar 解压异常: ' + (e as Error).message
+      };
+    } finally {
+      try { fs.closeSync(file); } catch (_e) { /* ignore */ }
     }
 
     return ContainerService.finalizeInstall(dest, id, opts);
@@ -355,15 +370,58 @@ export class ContainerService {
     dest: string): Promise<InstallResult> {
     const entry: BuiltinEntry | undefined =
       ContainerService.builtins.find((b): boolean => b.id === opts.builtinId);
-    if (!entry) {
-      return { ok: false, error: '未知的内置容器 ID' };
+    if (!entry) return { ok: false, error: '未知的内置容器 ID' };
+
+    let rawfd: resourceManager.RawFileDescriptor | null = null;
+    try {
+      rawfd = ctx.resourceManager.getRawFdSync(entry.rawfileName);
+    } catch (e) {
+      ContainerService.rmDirSafe(dest);
+      return {
+        ok: false,
+        error: `读取内置容器资源失败: ${(e as Error).message}`
+      };
     }
-    // TODO: 从 resourceManager.getRawFileContent 读出 tar 字节流,
-    //   写入临时文件 (cacheDir/builtin_<id>.tar), 再走 tarExtract
-    //   之后 finalizeInstall
-    return {
-      ok: false,
-      error: `内置容器 "${entry.name}" 安装流程未实现`
-    };
+    if (!rawfd) {
+      ContainerService.rmDirSafe(dest);
+      return { ok: false, error: '内置容器资源不存在' };
+    }
+    try {
+      const r: TarResult = await wl.tarExtractFd(
+        rawfd.fd, rawfd.offset, rawfd.length, dest);
+      if (!r.ok) {
+        ContainerService.rmDirSafe(dest);
+        return { ok: false, error: '解压失败: ' + r.error };
+      }
+    } finally {
+      try {
+        ctx.resourceManager.closeRawFdSync(entry.rawfileName);
+      } catch (_e) { /* ignore */ }
+    }
+
+    return ContainerService.finalizeInstall(dest, id, opts);
+  }
+
+  static async exportContainer(ctx: common.Context,
+    info: ContainerInfo,
+    saveUri: string): Promise<InstallResult> {
+    let file: fs.File | null = null;
+    try {
+      file = fs.openSync(saveUri,
+        fs.OpenMode.WRITE_ONLY
+          | fs.OpenMode.CREATE
+          | fs.OpenMode.TRUNC);
+      const r: TarResult = await wl.tarCreateFd(file.fd, info.path);
+      if (!r.ok) {
+        return { ok: false, error: 'tar 打包失败: ' + r.error };
+      }
+      return { ok: true, error: '', info: info };
+    } catch (e) {
+      return { ok: false, error: '导出失败: ' + (e as Error).message };
+    } finally {
+      if (file) {
+        try { fs.closeSync(file); } catch (_) { /* ignore */ }
+      }
+    }
   }
 }

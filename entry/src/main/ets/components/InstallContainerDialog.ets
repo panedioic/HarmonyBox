@@ -291,8 +291,8 @@ export struct InstallContainerDialog {
     }
     .width('100%')
 
-    Text('目前内置容器的解压逻辑尚未实现, 选择后会返回未实现错误')
-      .fontSize(11).fontColor('#E67C22')
+    Text('选择后可在下方填入容器名称，之后开始安装')
+      .fontSize(11).fontColor(Theme.TEXT_HINT)
       .margin({ top: 12 })
   }
 

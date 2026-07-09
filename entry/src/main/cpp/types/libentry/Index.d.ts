@@ -256,3 +256,5 @@ export interface TarResult {
 
 export const tarExtract: (archive: string, destDir: string) => Promise<TarResult>;
 export const tarCreate:  (archive: string, srcDir: string)  => Promise<TarResult>;
+export const tarExtractFd: (fd: number, offset: number, length: number, destDir: string) => Promise<TarResult>;
+export const tarCreateFd:  (fd: number, srcDir: string) => Promise<TarResult>;
