@@ -11,56 +11,55 @@ export struct Sidebar {
   @Link currentPage: string;
 
   private navItems: NavItem[] = [
-    { id: PageType.LIBRARY, label: '应用库', icon: '🏠' },
-    { id: PageType.INSTALL, label: '安装应用', icon: '➕' },
-    { id: PageType.SETTINGS, label: '环境设置', icon: '⚙️' },
-    { id: PageType.FILES, label: '沙箱文件', icon: '📂' },
-    { id: PageType.PROC_MANAGER, label: '进程管理', icon: '🛡️' },
-    { id: PageType.DEBUG_SHELL, label: '调试终端', icon: '🐚' },
-    { id: PageType.DEBUG, label: '调试页面（旧）', icon: '🧪' }
+    { id: PageType.LIBRARY,      label: '应用库',       icon: '🏠' },
+    { id: PageType.INSTALL,      label: '安装应用',     icon: '➕' },
+    { id: PageType.SETTINGS,     label: '环境设置',     icon: '⚙️' },
+    { id: PageType.FILES,        label: '沙箱文件',     icon: '📂' },
+    { id: PageType.PROC_MANAGER, label: '进程管理',     icon: '🛡️' },
+    { id: PageType.DEBUG_SHELL,  label: '调试终端',     icon: '🐚' },
+    { id: PageType.DEBUG,        label: '调试页面(旧)', icon: '🧪' }
   ];
 
   build() {
     Column() {
-      // Logo
-      Row() {
-        Text('🍷').fontSize(20).margin({ right: 8 })
-        Text('HarmonyBox')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.HM_BLUE)
+      // ── Logo 区 ──
+      Row({ space: 10 }) {
+        Text('🍷').fontSize(22)
+        Column() {
+          Text('HarmonyBox')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TEXT_MAIN)
+          Text('v1.0.0')
+            .fontSize(11)
+            .fontColor(Theme.TEXT_HINT)
+        }
+        .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .padding({ left: 20, right: 20 })
-      .justifyContent(FlexAlign.Start)
-      .margin({ bottom: 24 })
+      .padding({ left: 20, right: 20, top: 4, bottom: 4 })
+      .margin({ bottom: 20 })
 
-      // 导航列表（顶部对齐，向下排列）
-      Column() {
-        ForEach(this.navItems, (item: NavItem) => {
+      // ── 导航列表 ──
+      Column({ space: 4 }) {
+        ForEach(this.navItems, (item: NavItem): void => {
           NavItemView({
             item: item,
             currentPage: $currentPage
           })
-        }, (item: NavItem) => item.id)
+        }, (item: NavItem): string => item.id)
       }
       .layoutWeight(1)
-      .width('80%')
+      .width('100%')
+      .padding({ left: 12, right: 12 })
       .alignItems(HorizontalAlign.Start)
-
-      // // 底部版本号
-      // Text('Wine 9.0 (HarmonyOS Edition)')
-      //   .fontSize(11)
-      //   .fontColor(Theme.TEXT_HINT)
-      //   .width('100%')
-      //   .textAlign(TextAlign.Center)
-      //   .padding({ top: 12, bottom: 12 })
     }
-    .width(220)
+    .width(208)
     .height('100%')
-    .backgroundColor('#FAFAFA')
+    .backgroundColor(Theme.HM_CARD)
     .border({ width: { right: 1 }, color: Theme.BORDER_LIGHT })
-    .padding({ top: 20, bottom: 8 })
+    .padding({ top: 24, bottom: 12 })
+    .alignItems(HorizontalAlign.Start)
   }
 }
 
@@ -70,29 +69,40 @@ struct NavItemView {
   @Link currentPage: string;
   @State isHovered: boolean = false;
 
+  private isSelected(): boolean {
+    return this.currentPage === this.item.id;
+  }
+
+  private bgColor(): ResourceColor {
+    if (this.isSelected()) return Theme.HM_BLUE_SOFT;
+    if (this.isHovered)   return '#F5F7FA';
+    return Color.Transparent;
+  }
+
+  private fgColor(): ResourceColor {
+    return this.isSelected() ? Theme.HM_BLUE : Theme.TEXT_SEC;
+  }
+
   build() {
-    Row() {
-      Text(this.item.icon).fontSize(15).margin({ right: 10 })
+    Row({ space: 10 }) {
+      Text(this.item.icon).fontSize(16)
       Text(this.item.label)
         .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.currentPage === this.item.id ? Color.White : '#666666')
+        .fontColor(this.fgColor())
         .layoutWeight(1)
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-    .margin({ left: 10, right: 10, top: 3, bottom: 3 })
+    .height(40)
+    .padding({ left: 14, right: 14 })
     .borderRadius(10)
-    .backgroundColor(
-      this.currentPage === this.item.id
-        ? Theme.HM_BLUE
-        : (this.isHovered ? '#1A007DFF' : '#00000000')
-    )
-    .animation({ duration: 200, curve: Curve.EaseOut })
-    .onHover((isHover: boolean) => {
-      this.isHovered = isHover;
+    .backgroundColor(this.bgColor())
+    .hoverEffect(HoverEffect.None)           // 关掉系统默认 hover 波纹
+    .onHover((isHover: boolean): void => {
+      if (this.isHovered !== isHover) {      // 去重, 避免重复 render
+        this.isHovered = isHover;
+      }
     })
-    .onClick(() => {
+    .onClick((): void => {
       this.currentPage = this.item.id;
     })
   }

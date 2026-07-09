@@ -1,6 +1,7 @@
 import { Theme } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
 import { EditAppDialog } from './EditAppDialog';
+import { InstallAppDialog } from './InstallAppDialog';
 
 // LibraryPage 顶层增加 onEdit / onExport / onUpdate 三个回调透传
 @Component
@@ -13,14 +14,50 @@ export struct LibraryPage {
   onEdit: (app: AppInfo) => void = () => {};
   onExport: (app: AppInfo) => void = () => {};
   onUpdate: (app: AppInfo) => void = () => {};
+  onInstalled: (app: AppInfo) => void = () => {};
+  private installDialog: CustomDialogController = new CustomDialogController({
+    builder: InstallAppDialog({
+      onInstalled: (app: AppInfo): void => {
+        this.onInstalled(app);
+      }
+    }),
+    autoCancel: true,
+    customStyle: true,
+    alignment: DialogAlignment.Center
+  });
 
   build() {
     Column() {
-      Text('已安装的应用')
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold)
-        .margin({ bottom: 20 })
+      // ── Header: 标题 + 描述 + 安装按钮 ──
+      Row() {
+        Column() {
+          Text('应用库')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TEXT_MAIN)
+          Text('管理和启动你安装的应用程序')
+            .fontSize(12)
+            .fontColor(Theme.TEXT_HINT)
+            .margin({ top: 4 })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Button() {
+          Row({ space: 6 }) {
+            Text('+').fontSize(16).fontColor(Color.White)
+            Text('安装应用').fontSize(13).fontColor(Color.White)
+          }
+        }
+        .height(36)
+        .padding({ left: 14, right: 14 })
+        .backgroundColor(Theme.HM_BLUE)
+        .borderRadius(8)
+        .onClick((): void => { this.installDialog.open(); })
+      }
+      .width('100%')
+      .margin({ bottom: 20 })
 
+      // ── 应用网格 (原有 Column 不变) ──
       Column() {
         if (this.apps.length === 0) {
           Column({ space: 12 }) {
@@ -54,7 +91,8 @@ export struct LibraryPage {
                 onExport: this.onExport,
                 onUpdate: this.onUpdate
               })
-            }, (app: AppInfo, index: number): string => app.id || `${app.name}_${index}`)
+            }, (app: AppInfo, index: number): string =>
+            app.id || `${app.name}_${index}`)
           }
           .width('100%')
         }

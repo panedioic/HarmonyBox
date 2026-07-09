@@ -22,6 +22,8 @@ struct Index {
   @State currentPage: string = PageType.LIBRARY;
   @State installedApps: AppInfo[] = [];
   @State runningAppIds: string[] = [];
+  windowClass: window.Window | undefined = AppStorage.get('windowClass');
+  private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -103,7 +105,8 @@ struct Index {
         onDelete: this.deleteApp,
         onEdit: this.editApp,
         onExport: this.exportApp,
-        onUpdate: this.updateApp
+        onUpdate: this.updateApp,
+        onInstalled: this.addApp
       })
     } else if (this.currentPage === PageType.INSTALL) {
       InstallPage({ onInstalled: this.addApp })
@@ -120,10 +123,19 @@ struct Index {
     }
   }
 
+  @Builder
+  CustomDecor() {
+    Column() {
+      Row() { }
+      .height(24)
+    }
+  }
+
   build() {
     Row() {
       Sidebar({ currentPage: $currentPage })
       Column() {
+        this.CustomDecor()
         this.PageContent()
       }
       .layoutWeight(1)
