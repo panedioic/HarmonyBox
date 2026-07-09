@@ -112,6 +112,9 @@ add_library(entry SHARED
     shell/builtins/cmd_history.cpp
     shell/builtins/cmd_wine_setup.cpp
     shell/builtins/cmd_app.cpp
+    tar/tar_reader.cpp
+    tar/tar_writer.cpp
+    tar/tar_napi.cpp
 )
 
 target_link_libraries(entry PUBLIC

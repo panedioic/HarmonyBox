@@ -246,3 +246,13 @@ export const shellRegister:    (name: string, meta: ShellCmdMeta, handler: Shell
 export const shellUnregister:  (name: string) => boolean;
 export const shellCommandDone: (code: number) => void;
 export const shellStreamWrite: (data: string) => void;
+
+export interface TarResult {
+  ok: boolean;
+  count: number;    // extract 时=已解压项数, create 时=已打包项数
+  skipped: number;
+  error: string;
+}
+
+export const tarExtract: (archive: string, destDir: string) => Promise<TarResult>;
+export const tarCreate:  (archive: string, srcDir: string)  => Promise<TarResult>;

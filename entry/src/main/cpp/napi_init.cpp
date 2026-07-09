@@ -6,6 +6,7 @@
 #include "fs_utils.h"
 #include "process_manager.h"
 #include "wineprefix_setup.h"
+#include "tar/tar_napi.h"
 #include "shell/shell_napi.h"
 
 EXTERN_C_START
@@ -73,6 +74,10 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"shellUnregister",   nullptr, shell::ShellUnregisterNapi,  nullptr,nullptr,nullptr, napi_default,nullptr},
         {"shellCommandDone",  nullptr, shell::ShellCommandDoneNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
         {"shellStreamWrite",  nullptr, shell::ShellStreamWriteNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
+        
+        // ...
+        {"tarExtract", nullptr, tar::TarExtractNapi, nullptr,nullptr,nullptr, napi_default,nullptr},
+        {"tarCreate",  nullptr, tar::TarCreateNapi,  nullptr,nullptr,nullptr, napi_default,nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc)/sizeof(desc[0]), desc);
     PluginManager::GetInstance()->Export(env, exports);
