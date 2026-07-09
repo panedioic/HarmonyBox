@@ -169,7 +169,13 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
             auto* self = WaylandServer::GetInstance();
             if (self->mainSurface_ == r) {
                 self->mainSurface_ = nullptr;
+                self->firstCommit_ = false;
+                self->lastNotifiedW_ = -1;
+                self->lastNotifiedH_ = -1;
+                OH_LOG_INFO(LOG_APP, "★MAIN_SURFACE_DESTROYED, reset state");
             }
+            if (self->kbFocus_ == r) self->kbFocus_ = nullptr;
+            if (self->ptrFocus_ == r) self->ptrFocus_ = nullptr;
             auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(r));
             delete s;
         });
@@ -213,7 +219,11 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     // ─── 2. main surface 排他选举 ───
     if (self->mainSurface_ == nullptr) {
         self->mainSurface_ = surfRes;
-        OH_LOG_INFO(LOG_APP, "★MAIN_SET surf=%{public}p", surfRes);
+        // 新 client / 新 main surface: 重置一次性状态, 保证再次触发 active
+        self->firstCommit_ = false;
+        self->lastNotifiedW_ = -1;
+        self->lastNotifiedH_ = -1;
+        OH_LOG_INFO(LOG_APP, "MAIN_SET surf=%{public}p (reset firstCommit)", surfRes);
     }
 
     // ─── 3. 非主 surface (光标/装饰): 释放 buffer + 消耗 callback 后返回 ───
