@@ -1,16 +1,30 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
+import { window, display } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 export interface WlBufferSize {
   w: number;
   h: number;
 }
 
+export interface AutoHostWindowConfig {
+  appIdPrefix: string;
+  fallbackTitle: string;
+  loadPage: string;            // 通常 'pages/AppRunner'
+  onWindowCreated?: (win: window.Window, appId: string) => void;
+  onWindowDestroyed?: (appId: string) => void;
+}
+
 const ACTIVE_TIMEOUT_MS: number = 15000;
 
 export class WaylandService {
   private static instance: WaylandService | null = null;
+  private ctx: common.UIAbilityContext | null = null;
+  private autoWindowConfig: AutoHostWindowConfig | null = null;
+  private autoWindowSeq: number = 0;
+  private autoWindows: Map<string, window.Window> = new Map();
 
   static getInstance(): WaylandService {
     if (!WaylandService.instance) {
@@ -41,12 +55,16 @@ export class WaylandService {
   private hostResizeDragListener:
   ((edges: number, dxPx: number, dyPx: number) => void) | null = null;
   private hostResizeEndListener: (() => void) | null = null;
+  private autoActiveListener: (() => void) | null = null;
 
   // =========================================================
   // lifecycle
   // =========================================================
-  init(ctx: common.UIAbilityContext): boolean {
+  init(ctx: common.UIAbilityContext, autoWindow?: AutoHostWindowConfig): boolean {
     if (this.serverReady) return true;
+
+    this.ctx = ctx;
+    if (autoWindow) this.autoWindowConfig = autoWindow;
 
     this.sockPath = `${ctx.filesDir}/wl-sock`;
 
@@ -56,10 +74,14 @@ export class WaylandService {
 
     wl.setStateCallback((s: string): void => {
       console.info(`[WL] state=${s}`);
-      if (s === 'active' && this.activeWaiter) {
-        const w = this.activeWaiter;
-        this.activeWaiter = null;
-        w(true);
+      if (s === 'active') {
+        if (this.activeWaiter) {
+          const w = this.activeWaiter;
+          this.activeWaiter = null;
+          w(true);
+        } else if (this.autoActiveListener) {
+          this.autoActiveListener();
+        }
       }
       if (s === 'exited' && this.exitListener) {
         this.exitListener();
@@ -201,6 +223,10 @@ export class WaylandService {
     this.hostResizeEndListener = cb;
   }
 
+  setAutoActiveListener(cb: (() => void) | null): void {
+    this.autoActiveListener = cb;
+  }
+
   fireHostResizeBegin(edges: number): void {
     if (this.hostResizeBeginListener) this.hostResizeBeginListener(edges);
   }
@@ -226,5 +252,90 @@ export class WaylandService {
     try {
       wl.requestClientResize(bufW, bufH, maximized);
     } catch (e) { /* ignore */ }
+  }
+
+  //
+  enableAutoHostWindow(config: AutoHostWindowConfig): void {
+    this.autoWindowConfig = config;
+  }
+
+  disableAutoHostWindow(): void {
+    this.autoWindowConfig = null;
+  }
+
+  isAutoHostWindowEnabled(): boolean {
+    return this.autoWindowConfig !== null;
+  }
+
+  private async autoCreateHostWindow(): Promise<void> {
+    const config: AutoHostWindowConfig | null = this.autoWindowConfig;
+    if (!config || !this.ctx) return;
+
+    const appId: string = `${config.appIdPrefix}-${++this.autoWindowSeq}`;
+    if (!this.claimSlot(appId)) {
+      console.warn('HBOX_WL_AUTO_WIN_SKIP slot taken');
+      return;
+    }
+
+    const stashedName: string | undefined = AppStorage.get<string>('currentAppName');
+    const title: string = (stashedName && stashedName.length > 0)
+      ? stashedName : config.fallbackTitle;
+
+    try {
+      const windowStage: window.WindowStage | undefined =
+        AppStorage.get<window.WindowStage>('windowStage');
+      if (!windowStage) {
+        console.error('HBOX_WL_AUTO_WIN_NO_STAGE');
+        this.releaseSlot(appId);
+        return;
+      }
+      const main: window.Window = windowStage.getMainWindowSync();
+
+      AppStorage.setOrCreate<string>('currentAppName', title);
+
+      const useNative: boolean = this.useNativeDecor;
+      const subWin: window.Window = await main.createSubWindowWithOptions(
+        `auto_${appId}_${Date.now()}`,
+        { title, decorEnabled: useNative, isModal: false, maximizeSupported: true }
+      );
+      await subWin.loadContent(config.loadPage);
+
+      const sz: WlBufferSize = this.getLatestBufferSize();
+      const bufW: number = sz.w > 0 ? sz.w : 800;
+      const bufH: number = sz.h > 0 ? sz.h : 600;
+      const scale: number = this.uiScale;
+      const totalW: number = Math.max(1, Math.round(bufW * scale));
+      const totalH: number = Math.max(1, Math.round(bufH * scale));
+
+      await subWin.resize(totalW, totalH);
+      const prop = main.getWindowProperties();
+      const di = display.getDisplayByIdSync(prop.displayId);
+      await subWin.moveWindowToGlobal(
+        Math.round((di.availableWidth - totalW) / 2),
+        Math.round((di.availableHeight - totalH) / 2),
+        { displayId: prop.displayId }
+      );
+
+      await subWin.setWindowCornerRadius?.(useNative ? 8 : 0);
+      await subWin.setWindowBackgroundColor('#FF000000');
+
+      subWin.on('windowEvent', (event: window.WindowEventType): void => {
+        if (event === window.WindowEventType.WINDOW_DESTROYED) {
+          this.autoWindows.delete(appId);
+          this.releaseSlot(appId);
+          if (config.onWindowDestroyed) config.onWindowDestroyed(appId);
+          console.info(`HBOX_WL_AUTO_WIN_DESTROYED app=${appId}`);
+        }
+      });
+
+      this.autoWindows.set(appId, subWin);
+      await subWin.showWindow();
+      console.info(`HBOX_WL_AUTO_WIN_SHOWN app=${appId} ${totalW}x${totalH}`);
+      if (config.onWindowCreated) config.onWindowCreated(subWin, appId);
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`HBOX_WL_AUTO_WIN_FAIL code=${err.code} msg=${err.message}`);
+      this.releaseSlot(appId);
+    }
   }
 }

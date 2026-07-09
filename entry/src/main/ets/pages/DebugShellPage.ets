@@ -5,6 +5,7 @@ import { WineService } from '../service/WineService';
 import { LibStore } from '../service/LibStore';
 import { ShellRegistry, ShellIO } from '../shell/ShellRegistry';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { WaylandService } from '../service/WaylandService';
 
 @Component
 export struct DebugShellPage {
@@ -91,6 +92,11 @@ export struct DebugShellPage {
     for (const kv of WineService.buildLaunchEnv(ctx)) {
       out.push(kv);
     }
+
+    // 新增: wayland env (让 shell 里跑的 wine 客户端能连上)
+    const wlEnv: string[] = WaylandService.getInstance().getWaylandEnv();
+    for (const e of wlEnv) out.push(e);
+
     return out;
   }
 
