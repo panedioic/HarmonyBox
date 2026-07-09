@@ -20,4 +20,5 @@ export class PageType {
   static readonly PROC_MANAGER:  string = 'proc_manager';
   static readonly DEBUG_SHELL:   string = 'debug_shell';
   static readonly DEBUG:         string = 'debug';
+  static readonly CONTAINER:     string = 'container';
 }

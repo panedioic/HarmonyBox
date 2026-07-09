@@ -15,6 +15,7 @@ import { FilesPage } from '../components/FilesPage';
 import { ProcManagerPage } from '../components/ProcManagerPage';
 import { DebugPage } from '../pages/DebugPage';
 import { DebugShellPage } from './DebugShellPage';
+import { ContainerManagerPage } from '../pages/ContainerManagerPage';
 
 @Entry
 @Component
@@ -120,6 +121,8 @@ struct Index {
       DebugShellPage()
     } else if (this.currentPage === PageType.DEBUG) {
       DebugPage()
+    } else if (this.currentPage === PageType.CONTAINER) {
+      ContainerManagerPage()
     }
   }
 
