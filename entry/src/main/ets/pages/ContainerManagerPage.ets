@@ -296,13 +296,31 @@ export struct ContainerManagerPage {
 
       // 底部操作
       Row({ space: 10 }) {
+        if (ContainerService.hasFonts(c.path)) {
+          Button('重生字体配置')
+            .fontSize(12).height(32)
+            .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
+            .onClick((): void => {
+              const ok: boolean = ContainerService.regenerateFontConfig(c);
+              this.reload();
+              AlertDialog.show({
+                title: ok ? '重生成功' : '重生失败',
+                message: ok
+                  ? '字体配置已重新生成, 环境变量已更新'
+                  : '容器目录中未检测到字体文件',
+                confirm: { value: '好的', action: (): void => {} },
+                alignment: DialogAlignment.Center
+              });
+            })
+        }
         Blank()
         Button(this.exporting === c.id ? '导出中...' : '导出为 tar')
           .fontSize(12).height(32)
           .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
           .enabled(this.exporting !== c.id)
           .onClick((): void => { this.doExport(c); })
-        Button('删除容器').fontSize(12).height(32)
+        Button('删除容器')
+          .fontSize(12).height(32)
           .backgroundColor('#FEE4E4').fontColor('#E64545')
           .onClick((): void => { this.confirmDelete(c); })
       }.width('100%')

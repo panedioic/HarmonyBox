@@ -7,6 +7,11 @@ import { resourceManager } from '@kit.LocalizationKit';
 
 const CONFIG_FILE: string = 'container.json';
 
+const FONTS_DIR_NAME:  string = 'fonts';
+const FC_DIR_NAME:     string = 'fontconfig';
+const FC_CONF_NAME:    string = 'fonts.conf';
+const FC_CACHE_NAME:   string = 'cache';
+
 export interface InstallOptions {
   source: 'tar' | 'folder' | 'network' | 'builtin';
   archiveUri?: string;         // tar 路径
@@ -259,6 +264,22 @@ export class ContainerService {
     if (!cfg.createdAt) cfg.createdAt = Date.now();
     if (!cfg.envVars) cfg.envVars = {} as Record<string, string>;
 
+    // 字体自动配置
+    if (ContainerService.hasFonts(dest)) {
+      console.info(`[Container] 发现 fonts 目录, 生成 fontconfig`);
+      ContainerService.setupFontConfig(dest);
+      const fontEnv: Record<string, string> =
+        ContainerService.buildFontEnvVars(dest);
+      const keys: string[] = Object.keys(fontEnv);
+      const existing: string[] = Object.keys(cfg.envVars);
+      for (const k of keys) {
+        // 用户 tar 里已经写了这个 key 就不覆盖
+        if (existing.indexOf(k) < 0) {
+          cfg.envVars[k] = fontEnv[k];
+        }
+      }
+    }
+
     if (!ContainerService.writeConfig(dest, cfg)) {
       ContainerService.rmDirSafe(dest);
       return { ok: false, error: '写入 container.json 失败' };
@@ -423,5 +444,128 @@ export class ContainerService {
         try { fs.closeSync(file); } catch (_) { /* ignore */ }
       }
     }
+  }
+
+  /** 检测容器目录里是否存在非空 fonts 目录 */
+  static hasFonts(containerDir: string): boolean {
+    const fontsDir: string = `${containerDir}/${FONTS_DIR_NAME}`;
+    try {
+      if (!fs.accessSync(fontsDir)) return false;
+      const entries: string[] = fs.listFileSync(fontsDir);
+      return entries.length > 0;
+    } catch (_e) { return false; }
+  }
+
+  /** 为容器生成 fontconfig/fonts.conf 和 cache 目录 */
+  static setupFontConfig(containerDir: string): void {
+    const fontsDir: string = `${containerDir}/${FONTS_DIR_NAME}`;
+    const fcDir:    string = `${containerDir}/${FC_DIR_NAME}`;
+    const cacheDir: string = `${fcDir}/${FC_CACHE_NAME}`;
+    const confPath: string = `${fcDir}/${FC_CONF_NAME}`;
+
+    try {
+      if (!fs.accessSync(fcDir))    fs.mkdirSync(fcDir, true);
+      if (!fs.accessSync(cacheDir)) fs.mkdirSync(cacheDir, true);
+    } catch (_e) { /* ignore */ }
+
+    // 清缓存: 目录名或路径变化后旧的 .cache-N 就无效了
+    try {
+      const entries: string[] = fs.listFileSync(cacheDir);
+      for (const n of entries) {
+        try { fs.unlinkSync(`${cacheDir}/${n}`); } catch (_e) { /* ignore */ }
+      }
+    } catch (_e) { /* ignore */ }
+
+    const xml: string = ContainerService.buildFontConfigXml(fontsDir, cacheDir);
+    try {
+      const f = fs.openSync(confPath,
+        fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      fs.writeSync(f.fd, xml);
+      fs.closeSync(f);
+    } catch (_e) { /* ignore */ }
+    console.info(`[Container] fontconfig 已生成: ${confPath}`);
+  }
+
+  /** 字体相关环境变量 (绝对路径) */
+  static buildFontEnvVars(containerDir: string): Record<string, string> {
+    const fcDir:    string = `${containerDir}/${FC_DIR_NAME}`;
+    const cacheDir: string = `${fcDir}/${FC_CACHE_NAME}`;
+    const confPath: string = `${fcDir}/${FC_CONF_NAME}`;
+    const env: Record<string, string> = {};
+    env['FONTCONFIG_FILE'] = confPath;
+    env['FONTCONFIG_PATH'] = fcDir;
+    env['FC_CACHEDIR']     = cacheDir;
+    return env;
+  }
+
+  /** 重生 fontconfig 并更新 container.json (导入路径变了后修复用) */
+  static regenerateFontConfig(info: ContainerInfo): boolean {
+    if (!ContainerService.hasFonts(info.path)) return false;
+    ContainerService.setupFontConfig(info.path);
+    const fontEnv: Record<string, string> =
+      ContainerService.buildFontEnvVars(info.path);
+    const keys: string[] = Object.keys(fontEnv);
+    for (const k of keys) {
+      info.config.envVars[k] = fontEnv[k];
+    }
+    return ContainerService.writeConfig(info.path, info.config);
+  }
+
+  private static buildFontConfigXml(fontDir: string, cacheDir: string): string {
+    return `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <dir>${fontDir}</dir>
+  <cachedir>${cacheDir}</cachedir>
+
+  <include ignore_missing="yes">/etc/fonts/conf.d</include>
+  <include ignore_missing="yes">/usr/share/fontconfig/conf.avail</include>
+
+  <match target="pattern">
+    <test name="family"><string>mono</string></test>
+    <edit name="family" mode="assign" binding="strong"><string>monospace</string></edit>
+  </match>
+  <match target="pattern">
+    <test name="family"><string>sans</string></test>
+    <edit name="family" mode="assign" binding="strong"><string>sans-serif</string></edit>
+  </match>
+
+  <alias>
+    <family>monospace</family>
+    <prefer>
+      <family>DejaVu Sans Mono</family>
+      <family>Liberation Mono</family>
+      <family>Noto Sans Mono CJK SC</family>
+      <family>Noto Sans Mono</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>sans-serif</family>
+    <prefer>
+      <family>DejaVu Sans</family>
+      <family>Liberation Sans</family>
+      <family>Noto Sans CJK SC</family>
+      <family>Noto Sans</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>serif</family>
+    <prefer>
+      <family>DejaVu Serif</family>
+      <family>Liberation Serif</family>
+      <family>Noto Serif CJK SC</family>
+      <family>Noto Serif</family>
+    </prefer>
+  </alias>
+
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hinting"   mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
+    <edit name="rgba"      mode="assign"><const>rgb</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
+  </match>
+</fontconfig>
+`;
   }
 }
