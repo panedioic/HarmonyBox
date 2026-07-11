@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
-import { ContainerInfo, containerTypeLabel } from '../model/ContainerInfo';
+import { ContainerInfo, ContainerType, containerTypeLabel } from '../model/ContainerInfo';
 import { ContainerService, InstallResult } from '../service/ContainerService';
 import { InstallContainerDialog } from '../components/InstallContainerDialog';
 import { picker } from '@kit.CoreFileKit';
@@ -11,6 +11,7 @@ export struct ContainerManagerPage {
   @State expandedId: string = '';
   @State busy: string = '';   // 正在启停的容器 id
   @State exporting: string = '';
+  @State resetting: string = '';
 
   private installDialog: CustomDialogController = new CustomDialogController({
     builder: InstallContainerDialog({
@@ -110,6 +111,40 @@ export struct ContainerManagerPage {
       this.exporting = '';
       console.error(`export failed: ${(e as Error).message}`);
     }
+  }
+
+  private confirmResetPrefix(c: ContainerInfo): void {
+    AlertDialog.show({
+      title: '重置 Wine Prefix',
+      message: `即将删除容器「${c.config.name}」的 wineprefix 并重新初始化。\n\n`
+        + `已安装的 Windows 应用注册表、字体安装、winetricks 组件将全部丢失。\n\n`
+        + `重新初始化会跑一次 wineboot, 约需 30~120 秒, 是否继续?`,
+      primaryButton: {
+        value: '取消',
+        action: (): void => {}
+      },
+      secondaryButton: {
+        value: '确认重置',
+        fontColor: '#E64545',
+        action: (): void => { this.doResetPrefix(c); }
+      },
+      alignment: DialogAlignment.Center
+    });
+  }
+
+  private async doResetPrefix(c: ContainerInfo): Promise<void> {
+    this.resetting = c.id;
+    const ok: boolean = await ContainerService.initWineContainer(c);
+    this.resetting = '';
+    this.reload();
+    AlertDialog.show({
+      title: ok ? '重置完成' : '重置失败',
+      message: ok
+        ? 'Wine prefix 已重新初始化, 可以启动 Windows 应用了'
+        : 'wineboot 未成功完成, 请查看 hilog 排查 (WINEDEBUG=+init,+seh)',
+      confirm: { value: '好的', action: (): void => {} },
+      alignment: DialogAlignment.Center
+    });
   }
 
   build() {
@@ -296,6 +331,13 @@ export struct ContainerManagerPage {
 
       // 底部操作
       Row({ space: 10 }) {
+        if (c.config.type === ContainerType.WINE) {
+          Button(this.resetting === c.id ? '重置中...' : '重置 prefix')
+            .fontSize(12).height(32)
+            .backgroundColor('#FFF4E5').fontColor('#B76E00')
+            .enabled(this.resetting !== c.id)
+            .onClick((): void => { this.confirmResetPrefix(c); })
+        }
         if (ContainerService.hasFonts(c.path)) {
           Button('重生字体配置')
             .fontSize(12).height(32)

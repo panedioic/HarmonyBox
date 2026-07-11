@@ -6,6 +6,8 @@ import { runningWindows } from '../model/RunningWindow';
 import { WaylandService, WlBufferSize } from './WaylandService';
 import { CliService, LaunchResult } from './CliService';
 import { LibStore } from './LibStore';
+import { ContainerService } from './ContainerService';
+import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 
 interface MovableWindow { startMoving?: () => Promise<void>; }
 interface RestorableWindow {
@@ -419,34 +421,102 @@ export class WindowManagerService {
   }
 
   private async openAppWindow(app: AppInfo, withLog: boolean): Promise<void> {
-    if (app.type !== AppType.LINUX && app.type !== AppType.WINDOWS) {
-      this.toast(`暂不支持 ${appTypeLabel(app.type)}`, 1500);
-      return;
-    }
     const ctx = this.ctx;
     if (!ctx) return;
-    const cliSvc = CliService.getInstance();
 
+    // ★ 1. 找容器
+    if (!app.containerId) {
+      this.toast('该应用未关联容器, 请编辑应用重新指定', 2500);
+      return;
+    }
+    const container: ContainerInfo | null =
+      ContainerService.getById(ctx, app.containerId);
+    if (!container) {
+      this.toast(`未找到容器 "${app.containerId}", 请检查是否已删除`, 2500);
+      return;
+    }
+
+    // ★ 2. 容器健康检查 (stub)
+    const healthy: boolean = await ContainerService.healthCheck(container);
+    if (!healthy) {
+      this.toast('容器健康检查未通过', 2000);
+      return;
+    }
+
+    const cliSvc = CliService.getInstance();
     const isCliMode: boolean = app.runtimeMode === RuntimeMode.CLI;
     const isGui: boolean = !isCliMode;
     const showLog: boolean = isCliMode || withLog;
 
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
-    const exeAbs: string = `${installRoot}/${app.execPath}`;
+    const userExe: string = `${installRoot}/${app.execPath}`;
     const userArgs: string[] = (app.config.args || '')
       .split(/\s+/).filter((s: string): boolean => s.length > 0);
     const userEnv: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
+
+    // ★ 3. 根据容器类型准备启动参数
+    let exeAbs: string = userExe;
+    let launchArgs: string[] = userArgs;
+    let useWine: boolean = false;
+    const containerEnv: string[] = container.config.envVars;
+
+    if (container.config.type === ContainerType.WINE) {
+      const relBin: string = container.config.wineBin ?? 'wine/bin/wine';
+      const relPrefix: string = container.config.winePrefix ?? 'wineprefix';
+      const dir: string = relBin.substring(0, relBin.lastIndexOf('/'));
+      const wineBinPath: string = `${container.path}/${relBin}`;
+      const wineServerPath: string = `${container.path}/${dir}/wineserver`;
+      const winePrefixPath: string = `${container.path}/${relPrefix}`;
+
+      // 3a. prefix 检测 (只提示, 不自动初始化, 待 wineboot 脚本接入)
+      if (!ContainerService.isReady(container)) {
+        this.toast('Wine prefix 未初始化, 请先在容器管理中初始化 (功能未接入)', 2500);
+        return;
+      }
+      // 3b. 保证 wineserver 运行
+      if (!ContainerService.isWineserverRunning(container)) {
+        console.log(`[HBox_DEBUG] 正在启动 wineserver...`);
+        const ok: boolean = await ContainerService.start(ctx, container);
+        if (!ok) {
+          this.toast('wineserver 启动失败', 2500);
+          console.log(`[HBox_DEBUG] wineserver 启动失败`);
+          return;
+        }
+        console.log(`[HBox_DEBUG] wineserver 启动成功`);
+      }
+      // 3c. 用容器内 wine 拉起 user exe
+      exeAbs = wineBinPath;
+      launchArgs = [userExe, ...userArgs];
+      useWine = false;
+
+      // 3d. wine 专属 env
+      containerEnv.push(`WINEPREFIX=${winePrefixPath}`);
+      containerEnv.push(`WINELOADER=${wineBinPath}`);
+      containerEnv.push(`WINESERVER=${wineServerPath}`);
+      containerEnv.push(`WINEDEBUG=-all`);
+    } else if (container.config.type === ContainerType.LINUX) {
+      // linux 容器: 走原有直接执行路径
+      exeAbs = userExe;
+      launchArgs = userArgs;
+      useWine = false;
+    } else {
+      this.toast(`暂不支持容器类型 ${container.config.type}`, 2000);
+      return;
+    }
+
+    // ★ 4. 合并 env: 内置 <- 容器 <- 应用
+    const finalEnv: string[] = [...containerEnv, ...userEnv];
 
     this.toast(`正在启动 ${app.name}...`, 1200);
 
     const result: LaunchResult = cliSvc.launchBox64({
       appId: app.id,
       exeAbsPath: exeAbs,
-      extraArgs: userArgs,
+      extraArgs: launchArgs,
       cwd: installRoot,
-      extraEnv: userEnv,
+      extraEnv: finalEnv,
       appDir: installRoot,
-      useWine: app.type === AppType.WINDOWS,
+      useWine: useWine,
       gui: isGui,
       streaming: showLog
     });
@@ -456,10 +526,7 @@ export class WindowManagerService {
       return;
     }
 
-    if (showLog) {
-      await this.createCliWindow(app, result.pid, isGui);
-    }
-
+    if (showLog) await this.createCliWindow(app, result.pid, isGui);
     if (isGui) {
       const ok: boolean = await WaylandService.getInstance().waitActive();
       if (!ok) {

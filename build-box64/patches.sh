@@ -5355,6 +5355,8 @@ if anchor1 not in s:
     print("ERROR: anchor1 (socket client header) not found", file=sys.stderr)
     sys.exit(1)
 
+# 注意: 这里引用 ohos_spawn_log_level(). 由 patch 82 注入并在
+# 本文件顶部的 include 之后定义, 位置早于本 helper, 无需 forward decl.
 helpers = r'''
 
 /* ==== OHOS_PATCH_SOCK_FD_INHERIT helpers ====
@@ -5365,9 +5367,9 @@ helpers = r'''
 #define BOX64_FD_REF_MAX 16
 
 typedef struct {
-    int  target_fd;   /* number child must see (same as current proc fd) */
-    int  source_fd;   /* fd in current process, payload of SCM_RIGHTS */
-    char name[64];    /* env var name, for logging */
+    int  target_fd;
+    int  source_fd;
+    char name[64];
 } box64_fd_ref_t;
 
 static const char* const kBox64FdInheritVars[] = {
@@ -5379,6 +5381,7 @@ static int collect_envp_fd_refs(char* const envp[],
                                 box64_fd_ref_t* out, int max) {
     if (!envp || !out || max <= 0) return 0;
     int n = 0;
+    int log_lvl = ohos_spawn_log_level();
     for (int i = 0; envp[i] && n < max; i++) {
         const char* e = envp[i];
         const char* eq = strchr(e, '=');
@@ -5394,6 +5397,7 @@ static int collect_envp_fd_refs(char* const envp[],
             long fd = strtol(val, &end, 10);
             if (end == val || fd < 3 || fd > 65535) break;
             if (fcntl((int)fd, F_GETFD) < 0) {
+                /* real error: keep unconditional */
                 fprintf(stderr,
                     "[spawn-sock] WARN env %s=%ld fd invalid: %s\n",
                     vn, fd, strerror(errno));
@@ -5402,9 +5406,12 @@ static int collect_envp_fd_refs(char* const envp[],
             out[n].target_fd = (int)fd;
             out[n].source_fd = (int)fd;
             snprintf(out[n].name, sizeof(out[n].name), "%s", vn);
-            fprintf(stderr,
-                "[spawn-sock] FDREF %s=%d (will SCM_RIGHTS)\n",
-                vn, (int)fd);
+            /* diagnostic: gated by BOX64_LOG>=1 */
+            if (log_lvl >= 1) {
+                fprintf(stderr,
+                    "[spawn-sock] FDREF %s=%d (will SCM_RIGHTS)\n",
+                    vn, (int)fd);
+            }
             n++;
             break;
         }
@@ -5412,9 +5419,6 @@ static int collect_envp_fd_refs(char* const envp[],
     return n;
 }
 
-/* sendmsg: [4 byte length] + payload, with optional SCM_RIGHTS.
- * Single-shot send; short send treated as fatal (cmsg only attaches
- * to first byte, recovery would lose fds). */
 static int sock_send_with_fds(int sockfd, const char* payload, size_t len,
                               const box64_fd_ref_t* fds, int n_fds) {
     if (n_fds < 0) n_fds = 0;
@@ -5426,7 +5430,7 @@ static int sock_send_with_fds(int sockfd, const char* payload, size_t len,
     };
 
     struct iovec iov[2];
-    iov[0].iov_base = hdr;          iov[0].iov_len = 4;
+    iov[0].iov_base = hdr;            iov[0].iov_len = 4;
     iov[1].iov_base = (void*)payload; iov[1].iov_len = len;
 
     struct msghdr msg;
@@ -5491,7 +5495,6 @@ new_build = r'''static int build_create_req(char* buf, size_t cap,
                             const box64_fd_ref_t* fdrefs, int n_fdrefs) {
     size_t off = 0;
     if (buf_appendf(buf, cap, &off, "CMD CREATE\n")             < 0) return -1;
-    /* OHOS_PATCH_SOCK_FD_INHERIT: opt-in to v2 (FDREF + SCM_RIGHTS) */
     if (buf_appendf(buf, cap, &off, "PROTO_VER 2\n")            < 0) return -1;
     if (buf_appendf(buf, cap, &off, "REQ_ID 1\n")               < 0) return -1;
     if (buf_appendf(buf, cap, &off, "EXE %s\n", exe ? exe : "") < 0) return -1;
@@ -5507,7 +5510,6 @@ new_build = r'''static int build_create_req(char* buf, size_t cap,
             if (buf_appendf(buf, cap, &off, "ENV %s\n", envp[i]) < 0) return -1;
         }
     }
-    /* FDREF order MUST match SCM_RIGHTS fd order. */
     for (int i = 0; i < n_fdrefs; i++) {
         if (buf_appendf(buf, cap, &off, "FDREF %d\n",
                         fdrefs[i].target_fd) < 0) return -1;
@@ -5534,8 +5536,7 @@ old_send = r'''    int rn = build_create_req(req, SOCK_REQ_BUF_CAP,
         free(req); free(rsp); close(fd); return -1;
     }'''
 
-new_send = r'''    /* OHOS_PATCH_SOCK_FD_INHERIT: pick out envp-referenced fds. */
-    box64_fd_ref_t fdrefs[BOX64_FD_REF_MAX];
+new_send = r'''    box64_fd_ref_t fdrefs[BOX64_FD_REF_MAX];
     int n_fdrefs = collect_envp_fd_refs(envp, fdrefs, BOX64_FD_REF_MAX);
 
     int rn = build_create_req(req, SOCK_REQ_BUF_CAP,
@@ -5556,7 +5557,6 @@ if old_send not in s:
     sys.exit(1)
 s = s.replace(old_send, new_send, 1)
 
-# ---- mark at top ----
 if '/* ' + mark + ' */' not in s:
     s = '/* ' + mark + ' */\n' + s
 
@@ -5564,7 +5564,696 @@ open(p, 'w').write(s)
 PY
 }
 
+# ================================================================
+# Patch 86 — sock client 端 payload tail 诊断
+# ================================================================
+# 跑一次 spawn-sock 时把 build_create_req 实际写出的 payload 尾部 300B
+# 打到 stderr, 同时也把 rn/n_fdrefs 写出来. 用来定位 FDREF 行到底
+# 有没有被 build_create_req 写进帧.
+patch_86_sock_send_diag() {
+    local f="$BOX64/src/box64_spawn.c"
+    local mark='OHOS_PATCH_SOCK_SEND_DIAG'
 
+    [ -f "$f" ] || { _patch_header 86 "(skip) box64_spawn.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 86 "src/box64_spawn.c" "sock send diag — already"
+        return 0
+    fi
+    if ! grep -q 'OHOS_PATCH_SOCK_FD_INHERIT' "$f"; then
+        _patch_header 86 "(skip) patch 83 not applied yet" ""
+        return 0
+    fi
+    _patch_header 86 "src/box64_spawn.c" \
+        "dump payload tail before sock_send_with_fds"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+# 锚点: patch 83 之后这段代码长这样
+anchor = (
+'    if (rn < 0) {\n'
+'        fprintf(stderr, "[spawn-sock] request build overflow\\n");\n'
+'        free(req); free(rsp); close(fd); return -1;\n'
+'    }\n'
+'\n'
+'    if (sock_send_with_fds(fd, req, (size_t)rn, fdrefs, n_fdrefs) < 0) {'
+)
+
+if anchor not in s:
+    print("ERROR: anchor not matched", file=sys.stderr)
+    sys.exit(1)
+
+diag = (
+'    /* OHOS_PATCH_SOCK_SEND_DIAG: dump payload tail to stderr */\n'
+'    fprintf(stderr, "[spawn-sock-diag] rn=%d n_fdrefs=%d\\n",\n'
+'            rn, n_fdrefs);\n'
+'    {\n'
+'        int tail_off = (rn > 300) ? (rn - 300) : 0;\n'
+'        fprintf(stderr, "[spawn-sock-diag] payload tail %dB:\\n",\n'
+'                rn - tail_off);\n'
+'        fwrite(req + tail_off, 1,\n'
+'               (size_t)(rn - tail_off), stderr);\n'
+'        fprintf(stderr, "\\n[spawn-sock-diag] END\\n");\n'
+'        fflush(stderr);\n'
+'    }\n'
+'\n'
+)
+
+# 插入位置: anchor 里 "    if (rn < 0) {...}\n\n" 这段之后,
+# sock_send_with_fds 行之前.
+insert_target = (
+'    if (rn < 0) {\n'
+'        fprintf(stderr, "[spawn-sock] request build overflow\\n");\n'
+'        free(req); free(rsp); close(fd); return -1;\n'
+'    }\n'
+'\n'
+)
+
+new_block = insert_target + diag
+s = s.replace(insert_target, new_block, 1)
+
+# mark 标签放顶部
+if '/* ' + mark + ' */' not in s:
+    s = '/* ' + mark + ' */\n' + s
+
+open(p, 'w').write(s)
+PY
+}
+
+# ================================================================
+# Patch 84 — HAP W^X for file-backed mmap: EINVAL -> EACCES
+# ================================================================
+# 现象:
+#   wine map_pe_header @0x140000000 fd=<wineboot.exe>, prot=RWX,
+#   flags=MAP_FIXED|MAP_PRIVATE 返回 EINVAL,
+#   wine 判定 "default: return STATUS_NO_MEMORY" -> 0xc0000017,
+#   wineboot 起不来.
+#
+# 根因:
+#   HAP LSM 对 file-backed mmap 实施 W^X. 允许:
+#     - 匿名 RWX (line 6867 通过)
+#     - 文件 R+X 或 R+W
+#   拒绝:
+#     - 文件 R+W+X                   ← 我们撞上的
+#   拒绝时返回 EINVAL 而不是 EACCES.
+#
+# 修法:
+#   my_mmap64 里, 当 box_mmap 返回 MAP_FAILED + EINVAL,
+#   且这次是 file-backed (fd >= 0) + MAP_FIXED + PROT_WRITE + PROT_EXEC,
+#   把 errno 翻成 EACCES. wine 会走它内部的 "noexec fs fallback",
+#   pread(fd, anon_mem, size, 0) 手动拷贝内容, 后续 PROT_WRITE 变更
+#   在 anon mapping 上做, W^X 不再触发.
+#
+# 与 patch 62/72 关系:
+#   patch 72 处理 MAP_FIXED_NOREPLACE. patch 84 只看 MAP_FIXED 且没有
+#   NOREPLACE. 两条 if 互斥, 不会互相覆盖. patch 84 放在 patch 72 之后.
+# ================================================================
+# Patch 84 改进版 — 文件 W|X mmap 在 box64 层面 fallback
+# ================================================================
+patch_84_map_fixed_wx_fallback_v2() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_MAP_FIXED_WX_FALLBACK_V2'
+
+    [ -f "$f" ] || { _patch_header 84 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 84 "src/wrapped/wrappedlibc.c" "file W|X fallback v2 — already"
+        return 0
+    fi
+    _patch_header 84 "src/wrapped/wrappedlibc.c" \
+        "intercept file-backed W|X mmap, do mmap_anon + pread in box64"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys, re
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+# Find my_mmap64 function, inject before final return
+anchor = re.search(r'(EXPORT void\* my_mmap64\([^)]+\)[^{]*\{)', s)
+if not anchor:
+    print("ERROR: my_mmap64 signature not found", file=sys.stderr)
+    sys.exit(1)
+
+# Find the end of the function (before final 'return ret;')
+# Insert fallback logic after syscall but before return
+
+inject = '''
+/* OHOS_PATCH_MAP_FIXED_WX_FALLBACK_V2 START
+ * HAP kernel rejects file-backed W|X mmap (EINVAL).
+ * Wine expects this for PE executables on noexec filesystems.
+ * Solution: intercept at box64 level, do mmap_anon + pread.
+ * This is transparent to wine — it sees a successful mmap.
+ */
+if (ret == MAP_FAILED && e == EINVAL
+    && (prot & PROT_WRITE) && (prot & PROT_EXEC)
+    && fd >= 0 && !(flags & MAP_ANONYMOUS)) {
+
+    static int s_log = -1;
+    if (s_log < 0) {
+        const char* v = getenv("BOX64_LOG");
+        s_log = (v && *v) ? atoi(v) : 0;
+    }
+
+    if (s_log >= 1) {
+        fprintf(stderr,
+            "[map-wx-fallback] file W+X rejected (EINVAL), "
+            "trying mmap_anon + pread: addr=%p len=0x%lx fd=%d offset=0x%llx\\n",
+            addr, (unsigned long)length, fd, (unsigned long long)offset);
+        fflush(stderr);
+    }
+
+    // Fallback: anonymous mmap + pread
+    int fallback_flags = flags;
+    if (flags & MAP_FIXED) {
+        // Use MAP_FIXED_NOREPLACE first to avoid clobbering existing mappings
+        fallback_flags = (flags & ~MAP_FIXED) | BOX64_OHOS_MAP_FIXED_NOREPLACE;
+    }
+    fallback_flags &= ~MAP_SHARED;  // must be MAP_PRIVATE for anon
+    fallback_flags |= MAP_PRIVATE | MAP_ANONYMOUS;
+
+    void *anon_ret = (void*)syscall(__NR_mmap, addr, length, prot, fallback_flags, -1, 0);
+    if (anon_ret == MAP_FAILED) {
+        // FIXED_NOREPLACE failed, try plain MAP_FIXED
+        if ((flags & MAP_FIXED) && !(flags & BOX64_OHOS_MAP_FIXED_NOREPLACE)) {
+            fallback_flags = (flags & ~MAP_SHARED) | MAP_PRIVATE | MAP_ANONYMOUS;
+            anon_ret = (void*)syscall(__NR_mmap, addr, length, prot, fallback_flags, -1, 0);
+        }
+    }
+
+    if (anon_ret == MAP_FAILED) {
+        if (s_log >= 1) {
+            fprintf(stderr, "[map-wx-fallback] anon mmap failed: %s\\n", strerror(errno));
+            fflush(stderr);
+        }
+        // Keep original error
+        return ret;
+    }
+
+    // Read file content into anonymous mapping
+    ssize_t nread = pread(fd, anon_ret, length, offset);
+    if (nread < 0 || (size_t)nread != length) {
+        int pread_errno = errno;
+        if (s_log >= 1) {
+            fprintf(stderr,
+                "[map-wx-fallback] pread failed: expected 0x%lx bytes, got 0x%lx, errno=%d (%s)\\n",
+                (unsigned long)length, (long)nread, pread_errno, strerror(pread_errno));
+            fflush(stderr);
+        }
+        munmap(anon_ret, length);
+        errno = pread_errno ? pread_errno : EIO;
+        return MAP_FAILED;
+    }
+
+    if (s_log >= 1) {
+        fprintf(stderr,
+            "[map-wx-fallback] success: addr=%p len=0x%lx (anon+pread)\\n",
+            anon_ret, (unsigned long)length);
+        fflush(stderr);
+    }
+
+    // Success - return anonymous mapping with file content
+    ret = anon_ret;
+    e = 0;
+}
+/* OHOS_PATCH_MAP_FIXED_WX_FALLBACK_V2 END */
+'''
+
+# Insert before the final return statement in my_mmap64
+# Find the last 'return ret;' in the function
+pattern = r'(EXPORT void\* my_mmap64\([^)]+\)[^{]*\{(?:(?!EXPORT).)*?)(return ret;)'
+match = re.search(pattern, s, re.DOTALL)
+if not match:
+    print("ERROR: could not find 'return ret;' in my_mmap64", file=sys.stderr)
+    sys.exit(1)
+
+# Insert before the return
+s = s[:match.end(1)] + inject + '\n    ' + s[match.end(1):]
+
+open(p, 'w').write(s)
+print("  patch_84_v2: file W|X fallback (mmap_anon + pread in box64) injected")
+PY
+}
+
+# ================================================================
+# Patch 85 — MAP_FIXED prereserve 冲突自动重试 + 失败诊断
+# ================================================================
+# 现象 (patch 84 之后):
+#   wine map_pe_header 文件 RWX mmap 失败 (EINVAL -> EACCES by patch 84),
+#   走 fallback: mmap(0x140000000, MAP_FIXED|MAP_ANON) + pread(),
+#   但 0x140000000 被 box64 wine prereserve 占用, 直接 syscall 拿 EINVAL,
+#   wine 认为地址冲突, 返回 STATUS_NO_MEMORY, wineboot 崩 SIGSEGV
+#   (访问 0x14000003c, PE header e_lfanew 字段).
+#
+# 根因:
+#   wine 的 fallback mmap_fixed 是直接 syscall, 绕开 box64 wrapper,
+#   看不到 prereserve 状态, 撞到 EINVAL 时 wine 不会重试.
+#
+# 修法:
+#   my_mmap64 里, 当 MAP_FIXED (非 NOREPLACE) + EINVAL/ENOMEM
+#   + addr 在 wine prereserve 范围 (0x140000000–0x200000000),
+#   自动 InternalMunmap(addr, length) 清掉 prereserve,
+#   再 syscall 重试一次. 重试成功后 wine fallback 能拿到干净地址空间.
+#
+#   新增诊断: 如果 retry 后还是失败, 打 FATAL log 暴露根因.
+#
+# 与 patch 84 关系:
+#   patch 84 处理文件 backed W|X -> EACCES, 触发 wine fallback.
+#   patch 85 处理 fallback 时的 MAP_FIXED + ANON 冲突.
+#   两个 patch 顺序执行, 互补.
+#
+# 硬编码范围:
+#   当前用 0x140000000–0x200000000 覆盖常见 wineboot image base.
+#   理想方案是查 box64 的 prereserve list, 但那需要导出内部结构,
+#   MVP 阶段硬编码够用. 后续可以加 BOX64_WINE_PRERESERVE_RANGE env var.
+patch_85_map_fixed_prereserve_conflict() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_MAP_FIXED_PRERESERVE_CONFLICT'
+
+    [ -f "$f" ] || { _patch_header 85 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 85 "src/wrapped/wrappedlibc.c" "prereserve conflict — already"
+        return 0
+    fi
+    if ! grep -q 'OHOS_PATCH_MAP_FIXED_WX_FALLBACK END' "$f"; then
+        _patch_header 85 "(skip) patch 84 not applied yet" ""
+        return 0
+    fi
+    _patch_header 85 "src/wrapped/wrappedlibc.c" \
+        "auto munmap wine prereserve when MAP_FIXED hits EINVAL + retry failure diagnostic"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys, re
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+anchor = '/* OHOS_PATCH_MAP_FIXED_WX_FALLBACK END */'
+if anchor not in s:
+    print("ERROR: patch 84 END anchor not found", file=sys.stderr)
+    sys.exit(1)
+
+inject = '''
+/* OHOS_PATCH_MAP_FIXED_PRERESERVE_CONFLICT START
+ * wine's map_pe_header fallback path:
+ *   1. file-backed RWX mmap fails (EINVAL -> EACCES by patch 84)
+ *   2. wine switches to: mmap(addr, MAP_FIXED|MAP_ANON) + pread()
+ *   3. but 0x140000000 is already reserved by box64 wine prereserve
+ *   4. MAP_FIXED syscall hits EINVAL (address in use)
+ * Fix: auto munmap prereserve region, retry mmap.
+ * Diagnostic: if retry still fails, log FATAL to expose root cause.
+ */
+if (ret == MAP_FAILED && (e == EINVAL || e == ENOMEM)
+    && (flags & MAP_FIXED) && !(flags & BOX64_OHOS_MAP_FIXED_NOREPLACE)
+    && addr) {
+    unsigned long a = (unsigned long)addr;
+    int in_reserve = 0;
+    // Check if addr falls in wine prereserve (hardcoded range from logs)
+    // Covers common wineboot image bases: 0x140000000 and nearby
+    if (a >= 0x140000000UL && a < 0x200000000UL) {
+        in_reserve = 1;
+    }
+    if (in_reserve) {
+        static int s_log = -1;
+        if (s_log < 0) {
+            const char* v = getenv("BOX64_LOG");
+            s_log = (v && *v) ? atoi(v) : 0;
+        }
+        if (s_log >= 1) {
+            fprintf(stderr,
+                "[map-fixed-retry] addr=%p len=0x%lx prot=0x%x flags=0x%x fd=%d "
+                "EINVAL in wine prereserve, munmap then retry\\n",
+                addr, (unsigned long)length, prot, flags, fd);
+            fflush(stderr);
+        }
+        // Clear prereserve
+        InternalMunmap(addr, length);
+        // Retry
+        ret = (void*)syscall(__NR_mmap, addr, length, prot, flags, fd, offset);
+        e = errno;
+        if (s_log >= 1) {
+            fprintf(stderr, "[map-fixed-retry] retry -> %p errno=%d", ret, e);
+            if (ret == MAP_FAILED) {
+                fprintf(stderr, " (%s)", strerror(e));
+            }
+            fprintf(stderr, "\\n");
+            fflush(stderr);
+        }
+        // FATAL diagnostic if retry still fails
+        if (ret == MAP_FAILED) {
+            fprintf(stderr,
+                "[map-fixed-FATAL] addr=%p len=0x%lx prot=0x%x flags=0x%x fd=%d "
+                "STILL FAILED after retry, errno=%d (%s)\\n"
+                "  This indicates HAP kernel rejected MAP_FIXED syscall even after "
+                "munmap. Possible causes:\\n"
+                "  1. Address range not available in process VA space\\n"
+                "  2. Kernel denies MAP_FIXED on this address (security policy)\\n"
+                "  3. flags combination not supported (e.g. MAP_FIXED + MAP_ANON)\\n"
+                "  Wine will likely SIGSEGV when accessing unmapped memory.\\n",
+                addr, (unsigned long)length, prot, flags, fd, e, strerror(e));
+            fflush(stderr);
+        }
+    }
+}
+/* OHOS_PATCH_MAP_FIXED_PRERESERVE_CONFLICT END */
+'''
+
+s = s.replace(anchor, anchor + inject, 1)
+open(p, 'w').write(s)
+print("  patch_85: map-fixed prereserve conflict + FATAL diagnostic injected")
+PY
+}
+
+# ================================================================
+# Patch 86 — PE 区域跳过 mprotect（已经是 RWX）
+# ================================================================
+# 现象:
+#   patch 87 把 PE 区域 (0x140000000-0x180000000) 强制映射为匿名 RWX,
+#   但 wine 后续还会对这些区域调用 mprotect 改权限 (如 .text -> R-X).
+#   虽然 HAP kernel 的 mprotect 会返回 0 (成功), 但实际不生效或
+#   立即销毁映射, 导致 wine 检查 /proc/self/maps 时发现映射丢失.
+#
+# 根因:
+#   HAP 对 mprotect(+EXEC) 有特殊处理: 接受 syscall (返回 0) 但不
+#   真正给 EXEC 权限, 或者给了后立即收回. /proc/self/maps 不会
+#   显示该映射, wine 认为是 noexec filesystem, munmap 所有内容.
+#
+# 修法:
+#   my_mprotect 里, 对 PE 区域 (0x140000000-0x180000000) 的
+#   mprotect 调用直接跳过 (return 0), 只更新 box64 内部的
+#   protection tracking (updateProtection). 这样:
+#   - 映射保持匿名 RWX (patch 87 创建的)
+#   - wine 认为 mprotect 成功
+#   - /proc/self/maps 持续显示 rwxp (匿名映射)
+#   - wine 验证通过, 不 munmap
+#
+# 与 patch 87 关系:
+#   patch 87 在 mmap 阶段把文件映射替换成匿名 RWX.
+#   patch 86 在 mprotect 阶段阻止权限变更 (保持 RWX).
+#   两者配合, 让 wine 全程使用匿名 RWX 内存, 绕过 HAP noexec 限制.
+#
+# 硬编码范围:
+#   0x140000000-0x180000000 覆盖典型的 Windows PE image base.
+#   后续可根据实际 wine 版本调整范围或改用环境变量配置.
+patch_86_pe_region_skip_mprotect() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_PE_REGION_SKIP_MPROTECT'
+
+    [ -f "$f" ] || { _patch_header 86 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 86 "src/wrapped/wrappedlibc.c" "PE region skip mprotect — already"
+        return 0
+    fi
+    _patch_header 86 "src/wrapped/wrappedlibc.c" \
+        "skip mprotect for PE region (already RWX)"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys, re
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+# Find line with "int ret = mprotect(addr, len, prot);"
+# Look for the exact pattern from the grep output
+target = "    int ret = mprotect(addr, len, prot);"
+pos = s.find(target)
+
+if pos == -1:
+    print("ERROR: Could not find 'int ret = mprotect(addr, len, prot);'", file=sys.stderr)
+    sys.exit(1)
+
+inject = '''    /* OHOS_PATCH_PE_REGION_SKIP_MPROTECT START */
+    {
+        static const uintptr_t PE_BASE_LOW = 0x140000000UL;    // 5GB - wineboot/start
+static const uintptr_t PE_END_LOW  = 0x180000000UL;    // 6GB
+static const uintptr_t PE_BASE_HIGH = 0x7ffc000000UL;  // ~128TB - ntdll
+static const uintptr_t PE_END_HIGH  = 0x800100000000UL;// ~128TB + margin (note: 12 digits)
+
+        if (((uintptr_t)addr >= PE_BASE_LOW && (uintptr_t)addr < PE_END_LOW) ||
+            ((uintptr_t)addr >= PE_BASE_HIGH && (uintptr_t)addr < PE_END_HIGH)) {
+            static int s_log = -1;
+            if (s_log < 0) {
+                const char* v = getenv("BOX64_LOG");
+                s_log = (v && *v) ? atoi(v) : 0;
+            }
+
+            if (s_log >= 1) {
+                printf_log(LOG_DEBUG, "[pe-skip-mprotect] skipping mprotect(%p, 0x%lx, 0x%x) - already RWX\\n",
+                    addr, len, prot);
+            }
+
+            int ret = 0;
+            if(!ret && len) {
+                updateProtection((uintptr_t)addr, len, prot);
+            }
+            return ret;
+        }
+    }
+    /* OHOS_PATCH_PE_REGION_SKIP_MPROTECT END */
+'''
+
+# Insert before "int ret = mprotect(addr, len, prot);"
+s = s[:pos] + inject + '\n' + s[pos:]
+
+open(p, 'w').write(s)
+print("  patch_86: PE region skip mprotect injected")
+PY
+}
+
+# ================================================================
+# Patch 87 — PE 区域强制匿名 RWX 映射
+# ================================================================
+# 现象:
+#   wine 映射 PE image (wineboot.exe) 到 0x140000000:
+#   1. mmap(0x140000000, MAP_FIXED|MAP_ANON, RWX) 成功 (log 显示)
+#   2. mmap sections (如 .text) 用文件映射 (fd=wineboot.exe, prot=RW)
+#   3. mprotect(.text, R-X) 返回 0 (成功)
+#   4. wine 读 /proc/self/maps 验证权限
+#   5. 发现 0x140000000 附近完全没有映射 (maps 输出为空)
+#   6. wine 判定 "noexec filesystem", munmap 所有内容, 返回失败
+#
+# 根因:
+#   HAP kernel 的 security policy:
+#   - 允许匿名 RWX mmap (syscall 返回成功)
+#   - 接受文件映射的 mprotect(+EXEC) (syscall 返回 0)
+#   - 但实际不创建/立即销毁这些映射 (silent enforcement)
+#   - /proc/self/maps 不显示被拒绝的映射
+#   这是一种"软拒绝"策略: syscall 不报错但不执行, 避免程序崩溃
+#   同时阻止实际的代码执行.
+#
+# 修法:
+#   my_mmap64 里, 对 PE 区域 (0x140000000-0x180000000):
+#   1. 检测需要 fallback 的情况:
+#      - 文件映射 (fd >= 0)
+#      - 或权限不是 RWX (后续需要 mprotect)
+#   2. 如果需要 fallback:
+#      - munmap 掉原来的 syscall 返回值
+#      - 用 mmap(MAP_ANON|RWX|FIXED) 重新映射
+#      - 如果原来是文件映射, 用 pread 填充内容
+#   3. 结果: wine 看到的全是匿名 RWX, /proc/self/maps 显示:
+#      140000000-140082000 rwxp 00000000 00:00 0
+#
+# 与 patch 86 关系:
+#   patch 87 在 mmap 阶段替换成匿名 RWX.
+#   patch 86 在 mprotect 阶段跳过权限变更.
+#   两者配合, 整个 PE image 生命周期都是匿名 RWX, 绕过 HAP 限制.
+#
+# 硬编码范围:
+#   0x140000000-0x180000000 覆盖 x86_64 Windows PE 默认 image base.
+#   如果 wine 配置使用其他 base (如 0x400000 for x86), 需调整范围.
+patch_87_pe_region_force_anon_rwx() {
+    local f="$BOX64/src/wrapped/wrappedlibc.c"
+    local mark='OHOS_PATCH_PE_REGION_FORCE_ANON_RWX'
+
+    [ -f "$f" ] || { _patch_header 87 "(skip) wrappedlibc.c not found" ""; return 0; }
+    if _already "$f" "$mark"; then
+        _patch_header 87 "src/wrapped/wrappedlibc.c" "PE region force anon RWX — already"
+        return 0
+    fi
+    _patch_header 87 "src/wrapped/wrappedlibc.c" \
+        "PE region noexec bypass with BOX64_LOG-gated logging"
+
+    python3 - "$f" "$mark" << 'PY'
+import sys, re
+p, mark = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if mark in s:
+    sys.exit(0)
+
+pattern = r'(void\* ret = box_mmap\(addr, length, prot, flags, fd, offset\);\s*int e = errno;)'
+match = re.search(pattern, s)
+if not match:
+    print("ERROR: Could not find 'void* ret = box_mmap' and 'int e = errno'", file=sys.stderr)
+    sys.exit(1)
+
+inject = '''
+/* OHOS_PATCH_PE_REGION_FORCE_ANON_RWX START */
+{
+    static const uintptr_t PE_BASE_LOW = 0x140000000UL;    // 5GB - wineboot/start
+    static const uintptr_t PE_END_LOW  = 0x180000000UL;    // 6GB
+    static const uintptr_t PE_BASE_HIGH = 0x7ffc000000UL;  // ~128TB - ntdll
+    static const uintptr_t PE_END_HIGH  = 0x800100000000UL;// ~128TB + margin
+
+    /* patch 82 helper. cached; 0 = silent, >=1 errors, >=2 trace. */
+    int _pe_log = ohos_wrappedlibc_log_level();
+
+    int _in_pe_addr = (addr && (
+        ((uintptr_t)addr >= PE_BASE_LOW  && (uintptr_t)addr < PE_END_LOW) ||
+        ((uintptr_t)addr >= PE_BASE_HIGH && (uintptr_t)addr < PE_END_HIGH)));
+    int _in_pe_ret  = (ret != MAP_FAILED && (
+        ((uintptr_t)ret >= PE_BASE_LOW  && (uintptr_t)ret < PE_END_LOW) ||
+        ((uintptr_t)ret >= PE_BASE_HIGH && (uintptr_t)ret < PE_END_HIGH)));
+
+    /* level>=2: log every PE region mmap attempt */
+    if (_pe_log >= 2 && _in_pe_addr) {
+        fprintf(stderr, "[pe-mmap] addr=%p len=0x%lx prot=0x%x flags=0x%x fd=%d offset=%ld ret=%p errno=%d\\n",
+                addr, (unsigned long)length, prot, flags, fd, (long)offset, ret, ret == MAP_FAILED ? e : 0);
+    }
+
+    /* Intercept failed PE header mmap (prot=RWX, offset=0) */
+    if (ret == MAP_FAILED && _in_pe_addr && fd >= 0 && !(flags & MAP_ANONYMOUS) &&
+        prot == (PROT_READ | PROT_WRITE | PROT_EXEC) && offset == 0) {
+
+        if (_pe_log >= 2) {
+            fprintf(stderr, "[pe-header-intercept] failed RWX PE header at %p, retry with anon\\n", addr);
+        }
+
+        int anon_flags = (flags & MAP_FIXED) ? (MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED)
+                                              : (MAP_PRIVATE | MAP_ANONYMOUS);
+        void *anon_ret = box_mmap(addr, length,
+                                 PROT_READ | PROT_WRITE | PROT_EXEC,
+                                 anon_flags, -1, 0);
+
+        if (anon_ret == MAP_FAILED) {
+            /* error: level>=1 */
+            if (_pe_log >= 1) {
+                fprintf(stderr, "[pe-header-intercept] anon mmap failed: %s\\n", strerror(errno));
+            }
+        } else {
+            ret = anon_ret;
+            e = 0;
+            if (_pe_log >= 2) {
+                fprintf(stderr, "[pe-header-intercept] anon mmap ok: %p\\n", ret);
+            }
+
+            ssize_t nread = pread(fd, ret, length, offset);
+            if (nread < 0) {
+                if (_pe_log >= 1) {
+                    fprintf(stderr, "[pe-header-intercept] pread failed: %s\\n", strerror(errno));
+                }
+                box_munmap(ret, length);
+                ret = MAP_FAILED;
+                e = errno;
+                errno = e;
+            } else if ((size_t)nread != length) {
+                if (_pe_log >= 1) {
+                    fprintf(stderr, "[pe-header-intercept] pread short: got %ld, expected %ld\\n",
+                            (long)nread, (unsigned long)length);
+                }
+                box_munmap(ret, length);
+                ret = MAP_FAILED;
+                e = EIO;
+                errno = e;
+            } else {
+                if (_pe_log >= 2) {
+                    fprintf(stderr, "[pe-header-intercept] pread ok: %ld bytes from fd %d\\n",
+                            (long)nread, fd);
+                }
+                errno = 0;
+            }
+        }
+    }
+
+    /* Intercept successful file-backed PE mappings */
+    if (_in_pe_ret) {
+        int need_fallback = 0;
+        const char *reason = NULL;
+
+        if (fd >= 0 && !(flags & MAP_ANONYMOUS)) {
+            need_fallback = 1;
+            reason = "file-backed-pe";
+        }
+
+        if (need_fallback) {
+            if (_pe_log >= 2) {
+                fprintf(stderr, "[pe-intercept] %s: %p len=0x%lx prot=0x%x fd=%d -> anon\\n",
+                        reason, ret, (unsigned long)length, prot, fd);
+            }
+
+            box_munmap(ret, length);
+
+            int anon_flags = (flags & MAP_FIXED) ? (MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED)
+                                                  : (MAP_PRIVATE | MAP_ANONYMOUS);
+            void *anon_ret = box_mmap(addr ? addr : ret, length,
+                                     PROT_READ | PROT_WRITE | PROT_EXEC,
+                                     anon_flags, -1, 0);
+
+            if (anon_ret == MAP_FAILED) {
+                if (_pe_log >= 1) {
+                    fprintf(stderr, "[pe-intercept] anon mmap failed: %s\\n", strerror(errno));
+                }
+                ret = MAP_FAILED;
+                e = errno;
+            } else {
+                ret = anon_ret;
+                if (_pe_log >= 2) {
+                    fprintf(stderr, "[pe-intercept] anon mmap ok: %p\\n", ret);
+                }
+
+                ssize_t nread = pread(fd, ret, length, offset);
+                if (nread < 0) {
+                    if (_pe_log >= 1) {
+                        fprintf(stderr, "[pe-intercept] pread failed: %s\\n", strerror(errno));
+                    }
+                    box_munmap(ret, length);
+                    ret = MAP_FAILED;
+                    e = errno;
+                    errno = e;
+                } else if ((size_t)nread != length) {
+                    if (_pe_log >= 1) {
+                        fprintf(stderr, "[pe-intercept] pread short: got %ld, expected %ld\\n",
+                                (long)nread, (unsigned long)length);
+                    }
+                    box_munmap(ret, length);
+                    ret = MAP_FAILED;
+                    e = EIO;
+                    errno = e;
+                } else {
+                    if (_pe_log >= 2) {
+                        fprintf(stderr, "[pe-intercept] pread ok: %ld bytes from fd %d\\n",
+                                (long)nread, fd);
+                    }
+                }
+            }
+        } else {
+            if (_pe_log >= 2) {
+                fprintf(stderr, "[pe-passthrough] anon: %p len=0x%lx prot=0x%x\\n",
+                        ret, (unsigned long)length, prot);
+            }
+        }
+    }
+
+    /* Log all failed mmap in PE region (level>=1: this signals a real problem) */
+    if (ret == MAP_FAILED && _in_pe_addr && _pe_log >= 1) {
+        fprintf(stderr, "[pe-failed] addr=%p len=0x%lx prot=0x%x flags=0x%x fd=%d errno=%d (%s)\\n",
+                addr, (unsigned long)length, prot, flags, fd, e, strerror(e));
+    }
+}
+/* OHOS_PATCH_PE_REGION_FORCE_ANON_RWX END */
+'''
+
+s = s[:match.end()] + '\n' + inject + s[match.end():]
+
+open(p, 'w').write(s)
+print("  patch_87: PE region noexec bypass with gated logging injected")
+PY
+}
 
 # ================================================================
 # 调度
@@ -5630,5 +6319,13 @@ patch_81_route_self_exec
 # ---- diagnostic log gating ------------------------------------
 patch_82_log_gate
 patch_83_sock_fd_inherit
+# patch_86_sock_send_diag
+# -----
+# patch_84_map_fixed_wx_fallback
+patch_84_map_fixed_wx_fallback_v2
+patch_85_map_fixed_prereserve_conflict
+# patch_86_mprotect_exec_fallback
+patch_86_pe_region_skip_mprotect
+patch_87_pe_region_force_anon_rwx
 
 echo "    all patches applied."

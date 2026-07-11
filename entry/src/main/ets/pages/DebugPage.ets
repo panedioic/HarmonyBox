@@ -433,9 +433,24 @@ export struct DebugPage {
     }
     this.append('===== START WINESERVER (bg) =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+    // const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+    const rootdir = "/data/storage/el2/base/haps/entry/files/containers/builtin-wine";
+    // const rootdir = "/data/storage/el2/base/haps/entry/files";
+    const wineserver: string = `${rootdir}/wine/bin/wineserver`;
 
-    const env: string[] = this.buildEnv('1');
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${rootdir}/wine/lib/x86_64:${rootdir}/wine/lib/wine/x86_64-unix`,
+      "BOX64_LOG=1",
+      "BOX64_NOBANNER=0",
+      `WINEPREFIX=${rootdir}/wineprefix`,
+      "WINEDEBUG=-all",
+      `WINELOADER=${rootdir}/wine/bin/wine`,
+      `WINESERVER=${rootdir}/wine/bin/wineserver`,
+      "WAYLAND_DISPLAY=wl-sock",
+      "XDG_RUNTIME_DIR=/data/storage/el2/base/haps/entry/files",
+      "HOME=/data/storage/el2/base/haps/entry/files",
+      "WINEDEBUG=+server,+process"
+    ];
     // -f 前台 (不 daemonize), -p 永久 persist
     const args: string[] = ['box64', wineserver, '-f', '-p'];
 
@@ -464,9 +479,23 @@ export struct DebugPage {
     }
     this.append('===== START WINESERVER (silent) =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+    // const wineserver: string = `${WineService.getRootDir(ctx)}/bin/wineserver`;
+    const rootdir = "/data/storage/el2/base/haps/entry/files/containers/builtin-wine";
+    const wineserver: string = `${rootdir}/wine/bin/wineserver`;
 
-    const env: string[] = this.buildEnv('0');
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${rootdir}/wine/lib/x86_64:${rootdir}/wine/lib/wine/x86_64-unix`,
+      "BOX64_LOG=1",
+      "BOX64_NOBANNER=0",
+      `WINEPREFIX=${rootdir}/wineprefix`,
+      "WINEDEBUG=-all",
+      `WINELOADER=${rootdir}/wine/bin/wine`,
+      `WINESERVER=${rootdir}/wine/bin/wineserver`,
+      "WAYLAND_DISPLAY=wl-sock",
+      "XDG_RUNTIME_DIR=/data/storage/el2/base/haps/entry/files",
+      "HOME=/data/storage/el2/base/haps/entry/files",
+      "WINEDEBUG=+server,+process"
+    ];
     const args: string[] = ['box64', wineserver, '-f', '-p'];
 
     // 用一个声明为可选/可空的类型变量, 而不是 any/unknown
@@ -506,12 +535,25 @@ export struct DebugPage {
       return;
     }
     this.append('===== wineboot (复用现有 wineserver) =====');
-    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const wineBin: string = WineService.getBinPath(ctx);
+    // const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    // const wineBin: string = WineService.getBinPath(ctx);
+    const rootdir = "/data/storage/el2/base/haps/entry/files/containers/builtin-wine";
+    // const rootdir = "/data/storage/el2/base/haps/entry/files/";
+    const wineBin: string = `${rootdir}/wine/bin/wine`;
 
-    const env: string[] = this.buildEnv('1')
-      .concat(WaylandService.getInstance().getWaylandEnv())
-      .concat(['WINEDEBUG=+server,+process']);
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${rootdir}/wine/lib/x86_64:${rootdir}/wine/lib/wine/x86_64-unix`,
+      "BOX64_LOG=1",
+      "BOX64_NOBANNER=0",
+      `WINEPREFIX=${rootdir}/wineprefix`,
+      "WINEDEBUG=-all",
+      `WINELOADER=${rootdir}/wine/bin/wine`,
+      `WINESERVER=${rootdir}/wine/bin/wineserver`,
+      "WAYLAND_DISPLAY=wl-sock",
+      "XDG_RUNTIME_DIR=/data/storage/el2/base/haps/entry/files",
+      "HOME=/data/storage/el2/base/haps/entry/files",
+      "WINEDEBUG=+server,+process"
+    ];
 
     const args: string[] = ['box64', wineBin, 'wineboot', '--init'];
 

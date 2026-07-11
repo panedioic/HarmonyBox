@@ -19,12 +19,15 @@ export class AppInfo {
   id: string;
   name: string;
   icon: string;
+  /** @deprecated 应用运行时行为由 containerId 关联的容器决定; 该字段仅供旧数据兼容与显示 */
   type: AppType;
   runtimeMode: RuntimeMode;
   execPath: string;
   installDir: string;
   installedAt: number;
   config: AppConfig;
+  containerId: string;
+
 
   constructor(
     id: string = '', name: string = '', icon: string = '📦',
@@ -32,12 +35,14 @@ export class AppInfo {
     runtimeMode: RuntimeMode = RuntimeMode.GUI,
     execPath: string = '', installDir: string = '',
     installedAt: number = Date.now(),
-    config: AppConfig = { envVars: '', args: '' }
+    config: AppConfig = { envVars: '', args: '' },
+    containerId: string = ''
   ) {
     this.id = id; this.name = name; this.icon = icon;
     this.type = type; this.runtimeMode = runtimeMode;
     this.execPath = execPath; this.installDir = installDir;
     this.installedAt = installedAt; this.config = config;
+    this.containerId = containerId;
   }
 }
 
@@ -54,6 +59,7 @@ export function runtimeModeLabel(mode: RuntimeMode): string {
   return mode === RuntimeMode.GUI ? '图形界面 (GUI)' : '命令行 (CLI)';
 }
 
+/** @deprecated 现由容器决定支持性 */
 export function isTypeSupported(type: AppType): boolean {
   return type === AppType.LINUX || type === AppType.WINDOWS;
 }

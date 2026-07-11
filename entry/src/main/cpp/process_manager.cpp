@@ -286,6 +286,11 @@ void ApplyEnvToEnviron(const std::vector<std::string>& env) {
         setenv(kv.substr(0, eq).c_str(),
                kv.substr(eq + 1).c_str(), 1);
     }
+    
+    // 强制覆盖, 防止 wine guest 代码里 putenv 又加回来
+    setenv("WINEPRELOADRESERVE", "", 1);
+    fprintf(stderr, "[procmgr] force set WINEPRELOADRESERVE=''\n");
+    fflush(stderr);
 }
 
 // ============================================================
@@ -449,6 +454,10 @@ pid_t ForkWithIo(bool need_pipe,
     }
 
     if (pid == 0) {
+        if (GetBox64LogLevel() >= 1) {
+            fprintf(stderr, "[procmgr child] ENTER pid=%d\n", getpid());
+            fflush(stderr);
+        }
         // ---- child ----
         if (need_pipe) {
             close(pipefd[0]);
@@ -495,12 +504,30 @@ pid_t ForkWithIo(bool need_pipe,
             fprintf(stderr, "[procmgr child] inherited fd ready: %d\n",
                     f.target_fd);
         }
+        // ================ 先注释掉这行 ================
         CloseInheritedFdsExceptList(STDOUT_FILENO, STDERR_FILENO, keep_target_fds);
+        // (stderr, "[procmgr child] fd cleanup skipped (debug)\n");
+        // fflush(stderr);
+        // =============================================
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
             fprintf(stderr, "chdir(%s) failed: %s\n",
                     cwd.c_str(), strerror(errno));
         }
+    
+        fprintf(stderr, "[procmgr child] about to reset signals\n");
+        fflush(stderr);
+        for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
+    
+        fprintf(stderr, "[procmgr child] signals reset, cwd='%s'\n", cwd.c_str());
+        fflush(stderr);
+    
+        if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
+            fprintf(stderr, "chdir(%s) failed: %s\n", cwd.c_str(), strerror(errno));
+        }
+    
+        fprintf(stderr, "[procmgr child] about to return 0\n");
+        fflush(stderr);
         return 0;
     }
 

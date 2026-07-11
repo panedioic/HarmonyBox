@@ -4,6 +4,10 @@ import wl, { TarResult } from 'libentry.so';
 import { ContainerInfo, ContainerConfig, ContainerType, defaultContainerConfig } from '../model/ContainerInfo';
 import { InstallService } from './InstallService';
 import { resourceManager } from '@kit.LocalizationKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { util } from '@kit.ArkTS';
+
+const TAG = 'HBox_UI_Svc_Container';
 
 const CONFIG_FILE: string = 'container.json';
 
@@ -11,6 +15,8 @@ const FONTS_DIR_NAME:  string = 'fonts';
 const FC_DIR_NAME:     string = 'fontconfig';
 const FC_CONF_NAME:    string = 'fonts.conf';
 const FC_CACHE_NAME:   string = 'cache';
+
+const LOGS_DIR: string = '/storage/Users/currentUser/Share';
 
 export interface InstallOptions {
   source: 'tar' | 'folder' | 'network' | 'builtin';
@@ -56,6 +62,16 @@ export class ContainerService {
       rawfileName: 'containers/wine.tar'
     }
   ];
+  // wineserver pid 记账 (containerId -> pid)
+  private static wineserverPids: Map<string, number> = new Map();
+
+  /** 根据 id 找容器 (只扫一次, 不缓存, 频次低无所谓) */
+  static getById(ctx: common.Context, id: string): ContainerInfo | null {
+    if (!id) return null;
+    const list: ContainerInfo[] = ContainerService.list(ctx);
+    for (const c of list) { if (c.id === id) return c; }
+    return null;
+  }
 
   // ==============================================================
   // 目录管理
@@ -97,17 +113,17 @@ export class ContainerService {
         if (!st.isDirectory()) continue;
       } catch (_e) { continue; }
 
-      const cfg: ContainerConfig | null =
-        ContainerService.readConfig(dir);
+      const cfg: ContainerConfig | null = ContainerService.readConfig(dir);
       if (!cfg) continue;
       const info: ContainerInfo = {
         id: name,
         path: dir,
         config: cfg,
-        running: ContainerService.isRunning(cfg),
+        running: false,      // ← 先占位
         startTime: 0,
         pid: 0
       };
+      info.running = ContainerService.isRunning(info);   // ← 再赋值
       out.push(info);
     }
     // 按 createdAt 降序
@@ -123,7 +139,7 @@ export class ContainerService {
       const txt: string = fs.readTextSync(p);
       const obj: ContainerConfig = JSON.parse(txt) as ContainerConfig;
       if (!obj || !obj.name || !obj.type) return null;
-      if (!obj.envVars) obj.envVars = {} as Record<string, string>;
+      if (!obj.envVars) obj.envVars = [];
       return obj;
     } catch (_e) { return null; }
   }
@@ -262,7 +278,7 @@ export class ContainerService {
     }
     if (opts.type) cfg.type = opts.type;
     if (!cfg.createdAt) cfg.createdAt = Date.now();
-    if (!cfg.envVars) cfg.envVars = {} as Record<string, string>;
+    if (!cfg.envVars) cfg.envVars = [];
 
     // 字体自动配置
     if (ContainerService.hasFonts(dest)) {
@@ -287,13 +303,17 @@ export class ContainerService {
 
     // 类型特化初始化
     if (cfg.type === ContainerType.WINE) {
-      const initOk: boolean = await ContainerService.initWineContainer(dest, cfg);
+      const info: ContainerInfo = {
+        id: id, path: dest, config: cfg,
+        running: false, startTime: 0, pid: 0
+      };
+      const initOk: boolean = await ContainerService.initWineContainer(info);
       if (!initOk) {
         // 允许初始化失败, 但标记 warning; 用户可后续手动修
         console.warn(`[Container] wine 初始化未完成, 需要手动运行 wine.setup`);
       }
     } else if (cfg.type === ContainerType.LINUX) {
-      // TODO: linux 容器暂时不做额外操作
+      // linux 容器暂时不做额外操作
     }
 
     const info: ContainerInfo = {
@@ -326,7 +346,7 @@ export class ContainerService {
   static async start(ctx: common.Context,
     info: ContainerInfo): Promise<boolean> {
     if (info.config.type === ContainerType.WINE) {
-      return await ContainerService.startWineserver(ctx, info);
+      return await ContainerService.startWineserver(info);
     }
     if (info.config.type === ContainerType.LINUX) {
       // linux 容器暂时无操作
@@ -335,51 +355,359 @@ export class ContainerService {
     return false;
   }
 
-  static async stop(ctx: common.Context,
-    info: ContainerInfo): Promise<boolean> {
+  static async stop(ctx: common.Context, info: ContainerInfo): Promise<boolean> {
     if (info.config.type === ContainerType.WINE) {
-      return await ContainerService.stopWineserver(ctx, info);
+      return await ContainerService.stopWineserver(info);
     }
     return true;
   }
 
-  private static isRunning(cfg: ContainerConfig): boolean {
-    // TODO: 应查询实际 wineserver / 进程状态
-    // 目前简化为 false, 由 page 层根据 pid 追踪
+  static isRunning(info: ContainerInfo): boolean {
+    if (info.config.type === ContainerType.WINE) {
+      return ContainerService.isWineserverRunning(info);
+    }
+    if (info.config.type === ContainerType.LINUX) {
+      // linux 容器暂时无操作
+      return true;
+    }
     return false;
   }
 
+  static isReady(info: ContainerInfo): boolean {
+    if (info.config.type === ContainerType.WINE) {
+      return ContainerService.isWinePrefixReady(info);
+    }
+    if (info.config.type === ContainerType.LINUX) {
+      // linux 容器暂时无操作
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 启动应用前的容器健康检查; 目前是 stub, 未来接容器内脚本
+   * @todo 走容器内 health.sh
+   */
+  static async healthCheck(info: ContainerInfo): Promise<boolean> {
+    console.info(`[ContainerRunner] healthCheck stub for ${info.id}`);
+    return true;
+  }
+
+  /**
+   * 未来的容器脚本执行入口占位
+   * @todo 通过 shell 执行容器内脚本
+   */
+  static async runScript(info: ContainerInfo,
+    scriptRel: string,
+    args: string[]): Promise<number> {
+    console.warn(
+      `[ContainerRunner] runScript not implemented: ${info.id}/${scriptRel} args=${args.join(',')}`
+    );
+    return 0;
+  }
+
   // ── wine specific ─────────────────────────────────────────
-  private static async initWineContainer(dest: string,
-    cfg: ContainerConfig): Promise<boolean> {
-    // 创建 prefix 目录占位
-    const prefixRel: string = cfg.winePrefix ?? 'prefix';
-    const prefixPath: string = `${dest}/${prefixRel}`;
+  static async initWineContainer(info: ContainerInfo): Promise<boolean> {
+    // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
+    const wineRoot:       string = `${info.path}/wine`;
+    const wineBinPath:    string = `${wineRoot}/bin/wine`;
+    const wineServerPath: string = `${wineRoot}/bin/wineserver`;
+    const winePrefixPath: string = `${info.path}/wineprefix`;
+
+    hilog.info(0x0000, TAG, `[Container] === wine init start: ${info.id} ===`);
+    hilog.info(0x0000, TAG, `[Container]   wineRoot   = ${wineRoot}`);
+    hilog.info(0x0000, TAG, `[Container]   wineBin    = ${wineBinPath}`);
+    hilog.info(0x0000, TAG, `[Container]   wineServer = ${wineServerPath}`);
+    hilog.info(0x0000, TAG, `[Container]   winePrefix = ${winePrefixPath}`);
+
+    // 1) 停旧 wineserver, 等 1s 让文件句柄释放
+    if (ContainerService.isWineserverRunning(info)) {
+      hilog.info(0x0000, TAG, `[Container] stop old wineserver`);
+      await ContainerService.stopWineserver(info);
+      await new Promise<void>((r): void => { setTimeout(r, 1000); });
+    }
+
+    // 2) 删除旧 prefix
     try {
-      if (!fs.accessSync(prefixPath)) fs.mkdirSync(prefixPath, true);
+      if (fs.accessSync(winePrefixPath)) {
+        fs.rmdirSync(winePrefixPath);
+        hilog.info(0x0000, TAG, `[Container] old prefix removed`);
+      }
+    } catch (e) {
+      console.warn(`[Container] rm prefix err: ${(e as Error).message}`);
+      hilog.error(0x0000, TAG, `[Container] rm prefix err: ${(e as Error).message}`);
+    }
+
+    // 3) 清 box64-tmp (旧 socket/lock)
+    const box64Tmp: string = '/data/storage/el2/base/cache/box64-tmp';
+    try {
+      if (fs.accessSync(box64Tmp)) {
+        fs.rmdirSync(box64Tmp);
+        hilog.info(0x0000, TAG, `[Container] box64-tmp cleaned`);
+      }
+    } catch (e) {
+      hilog.warn(0x0000, TAG, `[Container] rm box64-tmp err: ${(e as Error).message}`);
+    }
+
+    // 4) 新建 prefix 空目录
+    try {
+      fs.mkdirSync(winePrefixPath, true);
+    } catch (e) {
+      hilog.error(0x0000, TAG, `[Container] mkdir prefix err: ${(e as Error).message}`);
+      return false;
+    }
+    hilog.info(0x0000, TAG, `[Container] wineprefix made succeed.`);
+
+    // 5) native 预布置 (拷贝 x86_64-windows / i386-windows 到 drive_c)
+    try {
+      hilog.info(0x0000, TAG, `[Container] trying to run setupWinePrefix with ${winePrefixPath}, ${wineRoot}`);
+      const ok: boolean = wl.setupWinePrefix(winePrefixPath, wineRoot);
+      hilog.info(0x0000, TAG, `[Container] setupWinePrefix = ${ok ? 'OK' : 'FAIL'}`);
+      if (!ok) return false;
+    } catch (e) {
+      hilog.error(0x0000, TAG, `[Container] setupWinePrefix err: ${(e as Error).message}`);
+      return false;
+    }
+
+    // 6) 起 wineserver (env 写死)
+    const wsOk: boolean = await ContainerService.startWineserver(info);
+    if (!wsOk) {
+      hilog.error(0x0000, TAG, `[Container] wineserver start failed`);
+      return false;
+    }
+
+    // 7) wineboot --init, 等它退出
+    const bootOk: boolean = await ContainerService.runWineboot(info);
+    if (!bootOk) {
+      hilog.error(0x0000, TAG, `[Container] wineboot failed`);
+      return false;
+    }
+
+    hilog.info(0x0000, TAG, `[Container] === wine init done: ${info.id} ===`);
+    return true;
+  }
+
+  private static async runWineboot(info: ContainerInfo,): Promise<boolean> {
+    // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
+    const wineRoot:       string = `${info.path}/wine`;
+    const wineBinPath:    string = `${wineRoot}/bin/wine`;
+    const wineServerPath: string = `${wineRoot}/bin/wineserver`;
+    const winePrefixPath: string = `${info.path}/wineprefix`;
+
+    const ts: number = Date.now();
+    const logFd: number = ContainerService.openLogFile(`wineboot-${info.id}-${ts}.log`);
+
+    // 写死的 env, 后面稳定了再回归 buildEnv
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
+      `BOX64_LOG=2`,
+      `BOX64_NOBANNER=0`,
+      `BOX64_REMAP_TRACE=0`,
+      `WINEPREFIX=${winePrefixPath}`,
+      `WINEDEBUG=+all`,
+      `WINELOADER=${wineBinPath}`,
+      `WINESERVER=${wineServerPath}`,
+      `XDG_RUNTIME_DIR=${info.path}`,
+      `HOME=${info.path}`,
+      `TMPDIR=/data/storage/el2/base/cache`
+    ];
+
+    ContainerService.writeLogLine(logFd, `=== wineboot env ===`);
+    for (const e of env) {
+      ContainerService.writeLogLine(logFd, `ENV: ${e}`);
+    }
+    ContainerService.writeLogLine(logFd, `=== argv ===`);
+    ContainerService.writeLogLine(logFd, `box64 ${wineBinPath} wineboot --init`);
+    ContainerService.writeLogLine(logFd, `=== output ===`);
+
+    const args: string[] = ['box64', wineBinPath, 'wineboot', '--init'];
+
+    const timeoutMs: number = 240 * 1000;
+    const startTs: number = Date.now();
+
+    return new Promise<boolean>((resolve): void => {
+      let settled: boolean = false;
+      let ticker: number = 0;
+      let pid: number = 0;
+
+      const done = (ok: boolean, reason: string): void => {
+        if (settled) return;
+        settled = true;
+        if (ticker !== 0) { clearInterval(ticker); ticker = 0; }
+        ContainerService.writeLogLine(logFd, `=== ${reason}, ok=${ok} ===`);
+        ContainerService.closeLogFile(logFd);
+        hilog.info(0x0000, TAG, `[wineboot] ${reason}, ok=${ok}`);
+        resolve(ok);
+      };
+
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          ContainerService.writeLogLine(logFd, data);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          const cost: number = (Date.now() - startTs) / 1000;
+          done(code === 0, `child exit=${code} (${cost.toFixed(1)}s)`);
+        }
+      };
+
+      try {
+        pid = wl.runBox64('box64', args, env, info.path, cb);
+      } catch (e) {
+        done(false, `launch exception: ${(e as Error).message}`);
+        return;
+      }
+      if (pid <= 0) { done(false, `launch failed pid=${pid}`); return; }
+      ContainerService.writeLogLine(logFd, `[wineboot] pid=${pid}`);
+      hilog.info(0x0000, TAG, `[wineboot] pid=${pid}, log -> logs/wineboot-${info.id}-${ts}.log`);
+
+      // 在 runWinebootInit 方法里，wineboot 启动后加延时读取
+      setTimeout(() => {
+        try {
+          const mapsPath = `/proc/${pid}/maps`;
+          // ArkTS 用 readTextSync 而不是 readFileSync
+          const maps = fs.readTextSync(mapsPath);
+          const lines = maps.split('\n').filter((l: string) => l.includes('140001'));
+          console.log('[HBox_UI_Svc_Container]', '[maps-0x140001000]', lines);
+        } catch (e) {
+          console.log('[HBox_UI_Svc_Container] [maps-0x140001000] read failed:', e);
+        }
+      }, 100);
+
+      setTimeout(() => {
+        try {
+          const mapsPath = `/proc/${pid}/maps`;
+          const file: fs.File = fs.openSync(mapsPath, fs.OpenMode.READ_ONLY);
+          const buf: ArrayBuffer = new ArrayBuffer(131072);
+          const readLen: number = fs.readSync(file.fd, buf);
+          fs.closeSync(file);
+
+          const decoder: util.TextDecoder = new util.TextDecoder('utf-8');
+          const uint8Arr: Uint8Array = new Uint8Array(buf, 0, readLen);
+          const maps: string = decoder.decodeWithStream(uint8Arr);
+          console.log('[HBox_UI_Svc_Container]', '[maps-full]', maps);
+        } catch (e) {
+          const err = e as Error;
+          console.log('[HBox_UI_Svc_Container]', '[maps] read failed:', err.message);
+        }
+      }, 100);
+
+      ticker = setInterval((): void => {
+        if (settled) { clearInterval(ticker); ticker = 0; return; }
+        const dt: number = Date.now() - startTs;
+        if (dt > timeoutMs) {
+          hilog.warn(0x0000, TAG, `[wineboot] timeout, terminating pid=${pid}`);
+          try { wl.terminate(pid); } catch (_e) { /* ignore */ }
+          setTimeout((): void => {
+            if (!settled) done(false, 'forced after timeout');
+          }, 5000);
+        }
+      }, 5000) as number;
+    });
+  }
+
+  /** prefix 是否已初始化 (system.reg 存在即视为已经 wineboot 过) */
+  static isWinePrefixReady(info: ContainerInfo): boolean {
+    const relPrefix: string = info.config.winePrefix ?? 'wineprefix';
+    const winePrefixPath = `${info.path}/${relPrefix}`;
+    try {
+      return fs.accessSync(`${winePrefixPath}/system.reg`);
+    } catch (_e) { return false; }
+  }
+
+  static isWineserverRunning(info: ContainerInfo): boolean {
+    const pid: number | undefined = ContainerService.wineserverPids.get(info.id);
+    return pid !== undefined && pid > 0;
+  }
+
+  private static async startWineserver(info: ContainerInfo): Promise<boolean> {
+    // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
+    const wineRoot:       string = `${info.path}/wine`;
+    const wineBinPath:    string = `${wineRoot}/bin/wine`;
+    const wineServerPath: string = `${wineRoot}/bin/wineserver`;
+    const winePrefixPath: string = `${info.path}/wineprefix`;
+
+    // check if wineserver is already running
+    if (ContainerService.isWineserverRunning(info)) return true;
+
+    try {
+      if (!fs.accessSync(wineServerPath)) {
+        hilog.error(0x0000, TAG, `[Container] wineserver 不存在: ${wineServerPath}`);
+        return false;
+      }
     } catch (_e) { return false; }
 
-    // TODO: 调 wineprefix::SetupWinePrefix(prefix, wineRoot)
-    // 需要 wineRoot = dest + cfg.wineBin 的父目录
-    // 目前只是标记 marker, 真正初始化留给启动时的 wine.setup 命令
-    console.info(`[Container] wine 容器初始化占位完成: ${dest}`);
+    // 日志文件
+    const ts: number = Date.now();
+    const logFd: number = ContainerService.openLogFile(`wineserver-${info.id}-${ts}.log`);
+
+    // 写死的 env, 后面稳定了再回归 buildEnv
+    const env: string[] = [
+      `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
+      `BOX64_LOG=2`,
+      `BOX64_NOBANNER=0`,
+      `BOX64_REMAP_TRACE=1`,
+      `WINEPREFIX=${winePrefixPath}`,
+      `WINEDEBUG=+server,+process,+virtual`,
+      `WINELOADER=${wineBinPath}`,
+      `WINESERVER=${wineServerPath}`,
+      `XDG_RUNTIME_DIR=${info.path}`,
+      `HOME=${info.path}`,
+      `TMPDIR=/data/storage/el2/base/cache`
+    ];
+
+    hilog.info(0x0000, TAG, `[Container] wineserver env:`);
+    for (const e of env) hilog.info(0x0000, TAG, `  ${e}`);
+
+    const args: string[] = ['box64', wineServerPath, '-f', '-p'];
+
+    try {
+      wl.startProcMgr('/data/storage/el2/base/haps/entry/files/.procmgr.sock');
+
+      let earlyExit: boolean = false;
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          ContainerService.writeLogLine(logFd, `[ws] ${data}`);
+        } else if (event === 'exit') {
+          earlyExit = true;
+          ContainerService.writeLogLine(logFd, `[ws] EARLY EXIT code=${data}`);
+          hilog.error(0x0000, TAG, `[Container] wineserver early exit code=${data}`);
+        }
+      };
+
+      const pid: number = wl.runBox64('box64', args, env, info.path, cb);
+      if (pid > 0) {
+        ContainerService.wineserverPids.set(info.id, pid);
+        hilog.info(0x0000, TAG, `[Container] wineserver started id=${info.id} pid=${pid}, waiting 2s...`);
+        await new Promise<void>((res): void => { setTimeout(res, 2000); });
+        if (earlyExit) {
+          ContainerService.wineserverPids.delete(info.id);
+          ContainerService.closeLogFile(logFd);
+          return false;
+        }
+        // wineserver 保持运行, log fd 也不关闭 (由 stopWineserver 时兜底)
+        // 但如果不好管理, 也可以在这里关掉, 后续 wineserver 的输出会丢
+        // 稳妥做法: 关掉, 拿到启动阶段的 log 就够定位早死原因
+        ContainerService.closeLogFile(logFd);
+        return true;
+      }
+    } catch (e) {
+      hilog.error(0x0000, TAG, `[Container] wineserver start err: ${(e as Error).message}`);
+    }
+    ContainerService.closeLogFile(logFd);
+    return false;
+  }
+
+  private static async stopWineserver(info: ContainerInfo): Promise<boolean> {
+    const pid: number | undefined =
+      ContainerService.wineserverPids.get(info.id);
+    if (pid !== undefined && pid > 0) {
+      try { wl.terminate(pid); } catch (_e) { /* ignore */ }
+      ContainerService.wineserverPids.delete(info.id);
+    }
     return true;
   }
 
-  private static async startWineserver(ctx: common.Context,
-    info: ContainerInfo): Promise<boolean> {
-    // TODO: 调用 native wineserver 启动
-    // 需要设置 WINEPREFIX = info.path/info.config.winePrefix
-    // 参考现有 shell 里的 wineserver.start 实现
-    console.info(`[Container] TODO: start wineserver for "${info.id}"`);
-    return true;
-  }
-
-  private static async stopWineserver(ctx: common.Context,
-    info: ContainerInfo): Promise<boolean> {
-    console.info(`[Container] TODO: stop wineserver for "${info.id}"`);
-    return true;
-  }
+  // ----- builtins -----
 
   static getBuiltins(): BuiltinEntry[] {
     return ContainerService.builtins.slice();
@@ -568,4 +896,34 @@ export class ContainerService {
 </fontconfig>
 `;
   }
-}
+
+  /** 打开日志文件, 返回 fd. 失败返回 -1. */
+  private static openLogFile(name: string): number {
+    try {
+      if (!fs.accessSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, true);
+    } catch (_e) { /* ignore */ }
+    const path: string = `${LOGS_DIR}/${name}`;
+    try {
+      const f: fs.File = fs.openSync(path,
+        fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      // 记下路径供事后打印
+      console.info(`[Container] log file: ${path}`);
+      return f.fd;
+    } catch (e) {
+      console.error(`[Container] openLogFile err: ${(e as Error).message}`);
+      return -1;
+    }
+  }
+
+  private static writeLogLine(fd: number, line: string): void {
+    if (fd < 0) return;
+    try {
+      const buf: string = line.endsWith('\n') ? line : line + '\n';
+      fs.writeSync(fd, buf);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private static closeLogFile(fd: number): void {
+    if (fd < 0) return;
+    try { fs.closeSync(fd); } catch (_e) { /* ignore */ }
+  }}

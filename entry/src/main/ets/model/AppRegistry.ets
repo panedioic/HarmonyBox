@@ -27,7 +27,8 @@ export class AppRegistry {
         migrateAppType(a.type as string),
         a.runtimeMode || RuntimeMode.GUI,
         a.execPath, a.installDir, a.installedAt,
-        a.config || { envVars: '', args: '' } as AppConfig
+        a.config || { envVars: '', args: '' } as AppConfig,
+        a.containerId || ''
       ));
     } catch (e) {
       console.error(`AppRegistry.load failed: ${JSON.stringify(e)}`);

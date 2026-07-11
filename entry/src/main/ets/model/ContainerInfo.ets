@@ -16,7 +16,7 @@ export interface ContainerConfig {
   version:     string;        // wine 版本 / linux 发行版
   arch:        string;        // 64-bit / 32-bit
   description: string;
-  envVars:     Record<string, string>;
+  envVars:     Array<string>;
   createdAt:   number;
 
   // wine specific
@@ -43,7 +43,7 @@ export function defaultContainerConfig(): ContainerConfig {
     version: '',
     arch: '64-bit',
     description: '',
-    envVars: {} as Record<string, string>,
+    envVars: [],
     createdAt: 0
   } as ContainerConfig;
 }
