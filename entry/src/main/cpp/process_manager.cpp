@@ -123,18 +123,36 @@ bool EndsWithBox64(const std::string& path) {
     return base == "box64";
 }
 
+bool EndsWithTar(const std::string& path) {
+    // 比较 basename,不是简单 endswith("box64"),避免误判 "winebox64" 这种
+    auto slash = path.find_last_of('/');
+    std::string base = (slash == std::string::npos)
+                        ? path
+                        : path.substr(slash + 1);
+    return base == "tar";
+}
+
 LaunchKind ResolveKind(const SpawnRequest& req) {
     switch (req.kind_hint) {
         case KindHint::kForceNative: return LaunchKind::kNative;
         case KindHint::kForceBox64:  return LaunchKind::kBox64;
+        case KindHint::kForceTar:  return LaunchKind::kTar;
         case KindHint::kAuto:        break;
     }
-    return EndsWithBox64(req.exe_path) ? LaunchKind::kBox64
-                                       : LaunchKind::kNative;
+    if (EndsWithBox64(req.exe_path)) {
+        return LaunchKind::kBox64;
+    } else if (EndsWithTar(req.exe_path)) {
+        return LaunchKind::kTar;
+    }
+    return LaunchKind::kNative;
 }
 
 const char* KindCStr(LaunchKind k) {
-    return k == LaunchKind::kBox64 ? "box64" : "native";
+    switch (k) {
+        case LaunchKind::kBox64:   return "box64";
+        case LaunchKind::kTar:     return "tar";
+        default:                   return "native";
+    }
 }
 
 void CloseInheritedFdsExcept(int keep1, int keep2) {
@@ -552,7 +570,7 @@ void StartReader(int fd, pid_t pid,
 }
 
 // ============================================================
-//  两种 spawn 路径
+//  spawn 路径
 // ============================================================
 
 pid_t SpawnNative(const SpawnRequest& req) {
@@ -684,6 +702,95 @@ pid_t SpawnBox64(const SpawnRequest& req) {
     return pid;
 }
 
+pid_t SpawnTar(const SpawnRequest& req) {
+    bool need_pipe = (req.stream || req.capture);
+    int read_fd = -1;
+    pid_t pid = ForkWithIo(need_pipe, req.cwd,
+        req.proc_name.empty() ? "tar" : req.proc_name.c_str(),
+        req.inherited_fds,
+        &read_fd);
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        // ---- child ----
+        ApplyEnvToEnviron(req.env);
+        // 注意: builtin 不需要 UnmapLowAnonRegions(), 那是 box64 的需求
+
+        std::vector<std::string> argv_storage = req.argv;
+        if (argv_storage.empty()) argv_storage.push_back("tar");
+
+        const int total_argc = (int)argv_storage.size();
+        std::vector<char> blob;
+        std::vector<size_t> offs(total_argc);
+        for (int i = 0; i < total_argc; i++) {
+            offs[i] = blob.size();
+            blob.insert(blob.end(),
+                        argv_storage[i].begin(), argv_storage[i].end());
+            blob.push_back('\0');
+        }
+        blob.resize(blob.size() + 64, 0);
+        // 大多数 C 主入口签名是 (int, char**), 不是 const.
+        std::vector<char*> argv2(total_argc + 1, nullptr);
+        for (int i = 0; i < total_argc; i++) {
+            argv2[i] = blob.data() + offs[i];
+        }
+
+        if (GetBox64LogLevel() >= 1) {
+            fprintf(stderr, "[procmgr] builtin '%s' argv (argc=%d):\n", "tar", total_argc);
+            for (int i = 0; i < total_argc; i++) {
+                fprintf(stderr, "  argv[%d] = %s\n", i, argv2[i]);
+            }
+            fflush(stderr);
+        }
+
+        // 候选路径: 显式路径 -> LD_LIBRARY_PATH -> HAP libs
+        std::vector<std::string> candidates;
+        candidates.emplace_back(std::string("/data/storage/el1/bundle/libs/arm64/libtar.so"));
+
+        void* handle = nullptr;
+        for (const auto& p : candidates) {
+            // RTLD_LOCAL: 避免 tar 里的符号泄到 global 命名空间,
+            // 免得多次 dlopen 不同 builtin so 时符号打架.
+            handle = dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (handle) {
+                BOX64_LOG_INFO("[procmgr] dlopen '%s' ok: %s\n", "tar", p.c_str());
+                break;
+            }
+            fprintf(stderr, "[procmgr] dlopen %s -> %s\n", p.c_str(), dlerror());
+        }
+        if (!handle) {
+            fprintf(stderr, "[procmgr] builtin '%s': cannot dlopen %s\n", "tar", "libtar.so");
+            _exit(125);
+        }
+
+        using EntryFn = int (*)(int, char**);
+        auto fn = (EntryFn)dlsym(handle, "bsdtar_main");
+        if (!fn) {
+            fprintf(stderr, "[procmgr] dlsym(%s) failed: %s\n", "bsdtar_main", dlerror());
+            _exit(126);
+        }
+
+        int rc = fn(total_argc, argv2.data());
+        fprintf(stderr, "[procmgr] builtin '%s' returned %d, _exit\n", "tar", rc);
+        fflush(NULL);
+        _exit(rc & 0xFF);
+    }
+
+    // ---- parent ----
+    if (req.sync_wait) {
+        if (req.stream && read_fd >= 0) {
+            std::thread(StreamReaderNoWaitMain, read_fd, pid, *req.stream).detach();
+        } else if (req.capture && read_fd >= 0) {
+            std::thread(CaptureReaderNoWaitMain, read_fd, pid, *req.capture).detach();
+        } else if (read_fd >= 0) {
+            close(read_fd);
+        }
+    } else {
+        StartReader(read_fd, pid, req.stream, req.capture);
+    }
+    return pid;
+}
+
 } // anonymous namespace
 
 // ============================================================
@@ -731,6 +838,12 @@ SpawnResult Spawn(const SpawnRequest& req_in) {
     // ---- fork+exec ----
     pid_t pid = (res.kind == LaunchKind::kBox64) ? SpawnBox64(req)
                                                  : SpawnNative(req);
+    switch (res.kind) {
+        case LaunchKind::kBox64:   pid = SpawnBox64(req);        break;
+        case LaunchKind::kTar:     pid = SpawnTar(req);          break;
+        default:                   pid = SpawnNative(req);       break;
+    }
+    
     if (pid <= 0) {
         res.pid = -1;
         res.error = "fork/exec failed";

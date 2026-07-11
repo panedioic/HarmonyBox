@@ -18,12 +18,14 @@ namespace procmgr {
 enum class LaunchKind {
     kNative,   // execve 一个原生 ARM 二进制
     kBox64,    // fork 后在子进程内 dlopen(libbox64.so) + box64_run
+    kTar,
 };
 
 enum class KindHint {
     kAuto,         // basename(exe_path) == "box64" 即 Box64,否则 Native
     kForceNative,
     kForceBox64,
+    kForceTar,
 };
 
 // 流式输出: 每行一次 on_line; EOF + waitpid 完成后 on_exit
