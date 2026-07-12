@@ -11,18 +11,12 @@ interface SourceOption {
   enabled: boolean;
 }
 
-interface BuiltinItem {
-  id: string;
-  name: string;
-  desc: string;
-}
-
 @CustomDialog
 export struct InstallContainerDialog {
   controller?: CustomDialogController;
   onInstalled: (info: ContainerInfo) => void = () => {};
 
-  @State currentSource: string = 'tar';
+  @State currentSource: string = 'builtin';   // 默认打开内置
   @State archiveUri:  string = '';
   @State archiveName: string = '';
   @State folderUri:   string = '';
@@ -35,11 +29,14 @@ export struct InstallContainerDialog {
   @State installing: boolean = false;
   @State status:     string = '';
 
+  @State selectedBuiltin: string = '';
+
+  // 内置容器排最上面
   private sources: SourceOption[] = [
-    { id: 'tar',     label: '本地 tar 包',   icon: '📦', enabled: true  },
-    { id: 'folder',  label: '本地文件夹',    icon: '📁', enabled: true  },
-    { id: 'network', label: '从网络安装',    icon: '🌐', enabled: false },
-    { id: 'builtin', label: '内置容器',      icon: '⭐', enabled: true }
+    { id: 'builtin', label: '内置容器',     icon: '⭐', enabled: true  },
+    { id: 'tar',     label: '本地 tar 包',  icon: '📦', enabled: true  },
+    { id: 'folder',  label: '本地文件夹',   icon: '📁', enabled: true  },
+    { id: 'network', label: '从网络安装',   icon: '🌐', enabled: false }
   ];
 
   private types: ContainerType[] = [ContainerType.WINE, ContainerType.LINUX];
@@ -53,7 +50,7 @@ export struct InstallContainerDialog {
       const p = new picker.DocumentViewPicker(ctx);
       const opts = new picker.DocumentSelectOptions();
       opts.selectMode = picker.DocumentSelectMode.FILE;
-      opts.fileSuffixFilters = ['.tar'];
+      opts.fileSuffixFilters = ['.zst', '.tar', 'gz', 'xz'];
       const uris: string[] = await p.select(opts);
       if (uris && uris.length > 0) {
         this.archiveUri = uris[0];
@@ -88,10 +85,13 @@ export struct InstallContainerDialog {
 
   private canInstall(): boolean {
     if (this.installing) return false;
+    if (this.currentSource === 'builtin') {
+      // 只要选了内置项即可, 名称由选中项决定
+      return !!this.selectedBuiltin;
+    }
     if (!this.cName.trim()) return false;
-    if (this.currentSource === 'tar')     return !!this.archiveUri;
-    if (this.currentSource === 'folder')  return !!this.folderUri;
-    if (this.currentSource === 'builtin') return !!this.selectedBuiltin;
+    if (this.currentSource === 'tar')    return !!this.archiveUri;
+    if (this.currentSource === 'folder') return !!this.folderUri;
     return false;
   }
 
@@ -165,15 +165,19 @@ export struct InstallContainerDialog {
   @Builder
   MainContent() {
     Column() {
-      if (this.currentSource === 'tar')     this.PanelTar()
+      if (this.currentSource === 'tar')          this.PanelTar()
       else if (this.currentSource === 'folder')  this.PanelFolder()
       else if (this.currentSource === 'network') this.PanelNetwork()
       else                                       this.PanelBuiltin()
 
-      // 通用字段: 名称/描述/类型
-      if (this.currentSource === 'tar' || this.currentSource === 'folder'  || this.currentSource === 'builtin') {
+      // 只有 tar / folder 需要手动填写名称/类型/描述
+      // builtin 全部用默认值, 展示只读预览
+      if (this.currentSource === 'tar' || this.currentSource === 'folder') {
         Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
         this.FormFields()
+      } else if (this.currentSource === 'builtin' && this.selectedBuiltin) {
+        Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
+        this.BuiltinPreview()
       }
     }
     .layoutWeight(1).height('100%')
@@ -249,14 +253,12 @@ export struct InstallContainerDialog {
     .backgroundColor('#F5F7FA').borderRadius(8)
   }
 
-  @State selectedBuiltin: string = '';
-
   @Builder
   PanelBuiltin() {
     Text('内置容器')
       .fontSize(18).fontWeight(FontWeight.Medium)
       .fontColor(Theme.TEXT_MAIN)
-    Text('随应用打包的预置容器, 一键安装')
+    Text('随应用打包的预置容器, 一键安装, 参数使用默认值')
       .fontSize(12).fontColor(Theme.TEXT_HINT)
       .margin({ top: 4, bottom: 16 })
 
@@ -283,17 +285,49 @@ export struct InstallContainerDialog {
           color: Theme.HM_BLUE
         })
         .onClick((): void => {
+          // 选中时用 builtin 默认值覆盖所有字段, 用户不可再改
           this.selectedBuiltin = b.id;
-          this.cType = b.type;
-          if (!this.cName) this.cName = b.id;
+          this.cName        = b.name;
+          this.cDescription = b.desc;
+          this.cType        = b.type;
         })
       }, (b: BuiltinEntry): string => b.id)
     }
     .width('100%')
+  }
 
-    Text('选择后可在下方填入容器名称，之后开始安装')
-      .fontSize(11).fontColor(Theme.TEXT_HINT)
-      .margin({ top: 12 })
+  /** 内置容器选中后的只读预览 */
+  @Builder
+  BuiltinPreview() {
+    Column({ space: 8 }) {
+      Text('将使用以下默认参数安装').fontSize(12)
+        .fontColor(Theme.TEXT_SEC).fontWeight(FontWeight.Medium)
+
+      Row({ space: 6 }) {
+        Text('名称').fontSize(12).fontColor(Theme.TEXT_HINT).width(56)
+        Text(this.cName).fontSize(13).fontColor(Theme.TEXT_MAIN)
+          .layoutWeight(1).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }.width('100%')
+
+      Row({ space: 6 }) {
+        Text('类型').fontSize(12).fontColor(Theme.TEXT_HINT).width(56)
+        Text(containerTypeLabel(this.cType)).fontSize(13)
+          .fontColor(Theme.TEXT_MAIN)
+      }.width('100%')
+
+      Row({ space: 6 }) {
+        Text('描述').fontSize(12).fontColor(Theme.TEXT_HINT).width(56)
+        Text(this.cDescription || '(无)').fontSize(13)
+          .fontColor(Theme.TEXT_MAIN).layoutWeight(1)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }.width('100%')
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor('#F5F7FA')
+    .borderRadius(8)
   }
 
   @Builder

@@ -30,3 +30,8 @@ Thumbs.db
 
 # lib
 entry/libs/
+
+# 内置容器 rawfile (体积大, 不入库)
+entry/src/main/resources/rawfile/containers/builtin-linux-base.tar
+entry/src/main/resources/rawfile/containers/builtin-wine.tar
+entry/src/main/resources/rawfile/containers/

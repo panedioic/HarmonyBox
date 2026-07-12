@@ -836,8 +836,7 @@ SpawnResult Spawn(const SpawnRequest& req_in) {
     }
 
     // ---- fork+exec ----
-    pid_t pid = (res.kind == LaunchKind::kBox64) ? SpawnBox64(req)
-                                                 : SpawnNative(req);
+    pid_t pid = -1;
     switch (res.kind) {
         case LaunchKind::kBox64:   pid = SpawnBox64(req);        break;
         case LaunchKind::kTar:     pid = SpawnTar(req);          break;

@@ -85,7 +85,7 @@ export struct ContainerManagerPage {
       const ctx = getContext(this) as common.UIAbilityContext;
       const p: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
       const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
-      opts.newFileNames = [`${c.id}.tar`];
+      opts.newFileNames = [`${c.id}.tar.zst`];
       const uris: string[] = await p.save(opts);
       if (!uris || uris.length === 0) return;
       this.exporting = c.id;

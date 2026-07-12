@@ -1,21 +1,26 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import wl, { TarResult } from 'libentry.so';
-import { ContainerInfo, ContainerConfig, ContainerType, defaultContainerConfig } from '../model/ContainerInfo';
+import wl from 'libentry.so';
+import { ContainerInfo, ContainerConfig, ContainerType } from '../model/ContainerInfo';
 import { InstallService } from './InstallService';
-import { resourceManager } from '@kit.LocalizationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { util } from '@kit.ArkTS';
+import { fileUri } from '@kit.CoreFileKit';
+import { resourceManager } from '@kit.LocalizationKit';
 
 const TAG = 'HBox_UI_Svc_Container';
 
-const CONFIG_FILE: string = 'container.json';
+/**
+ * DEBUG_MODE:
+ *   true  -> 日志写文件 (LOGS_DIR), env 用硬编码 (方便排错)
+ *   false -> 日志只走 hilog, env 从 info.config.envVars 读
+ */
+const DEBUG_MODE: boolean = true;
 
-const FONTS_DIR_NAME:  string = 'fonts';
-const FC_DIR_NAME:     string = 'fontconfig';
-const FC_CONF_NAME:    string = 'fonts.conf';
-const FC_CACHE_NAME:   string = 'cache';
-
+const CONFIG_FILE:    string = 'container.json';
+const FONTS_DIR_NAME: string = 'fonts';
+const FC_DIR_NAME:    string = 'fontconfig';
+const FC_CONF_NAME:   string = 'fonts.conf';
+const FC_CACHE_NAME:  string = 'cache';
 const LOGS_DIR: string = '/storage/Users/currentUser/Share';
 
 export interface InstallOptions {
@@ -24,7 +29,6 @@ export interface InstallOptions {
   folderUri?:  string;         // 文件夹 uri
   builtinId?:  string;         // 内置容器 id
   networkUrl?: string;         // 网络 url
-
   // 用户在 UI 里填的
   name:        string;
   description: string;
@@ -45,6 +49,18 @@ export interface BuiltinEntry {
   rawfileName: string;    // rawfile/containers/xxx.tar
 }
 
+// fileIo readSync/writeSync 的 options 类型 (ArkTS 未导出,自定义匹配)
+interface FsReadOpts {
+  offset?:   number;
+  length?:   number;
+  position?: number;
+}
+interface FsWriteOpts {
+  offset?:   number;
+  length?:   number;
+  encoding?: string;
+}
+
 export class ContainerService {
   private static readonly builtins: BuiltinEntry[] = [
     {
@@ -52,20 +68,22 @@ export class ContainerService {
       name: 'Linux 基础环境',
       desc: '基础 Linux 运行环境',
       type: ContainerType.LINUX,
-      rawfileName: 'containers/linux-base.tar'
+      rawfileName: 'containers/builtin-linux-base.tar.zst'
     },
     {
       id: 'builtin-wine',
       name: 'Wine 基础环境',
       desc: '基础 Wine 运行环境',
       type: ContainerType.WINE,
-      rawfileName: 'containers/wine.tar'
+      rawfileName: 'containers/builtin-wine.tar.zst'
     }
   ];
   // wineserver pid 记账 (containerId -> pid)
   private static wineserverPids: Map<string, number> = new Map();
 
-  /** 根据 id 找容器 (只扫一次, 不缓存, 频次低无所谓) */
+  // ==============================================================
+  //  基础
+  // ==============================================================
   static getById(ctx: common.Context, id: string): ContainerInfo | null {
     if (!id) return null;
     const list: ContainerInfo[] = ContainerService.list(ctx);
@@ -73,9 +91,6 @@ export class ContainerService {
     return null;
   }
 
-  // ==============================================================
-  // 目录管理
-  // ==============================================================
   static rootDir(ctx: common.Context): string {
     const dir: string = `${ctx.filesDir}/containers`;
     try {
@@ -95,6 +110,10 @@ export class ContainerService {
     s = s.replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (s.length === 0) s = `container-${Date.now()}`;
     return s;
+  }
+
+  static getBuiltins(): BuiltinEntry[] {
+    return ContainerService.builtins.slice();
   }
 
   // ==============================================================
@@ -157,18 +176,101 @@ export class ContainerService {
   }
 
   // ==============================================================
+  //  env / log 辅助
+  // ==============================================================
+  /** 合并 KEY=VAL 数组, override 中的 key 覆盖 base 中同名 key */
+  private static mergeEnv(base: string[], override: string[]): string[] {
+    if (override.length === 0) return base;
+    const overrideKeys: string[] = [];
+    for (const kv of override) {
+      const eq: number = kv.indexOf('=');
+      overrideKeys.push(eq >= 0 ? kv.substring(0, eq) : kv);
+    }
+    const out: string[] = [];
+    for (const kv of base) {
+      const eq: number = kv.indexOf('=');
+      const k: string = eq >= 0 ? kv.substring(0, eq) : kv;
+      if (overrideKeys.indexOf(k) < 0) out.push(kv);
+    }
+    for (const kv of override) out.push(kv);
+    return out;
+  }
+
+  /**
+   * DEBUG_MODE=true: 硬编码 env + 可选 override 覆盖同名 key
+   * DEBUG_MODE=false: 直接返回 info.config.envVars (忽略 override,
+   *                   生产模式下 env 完全由 config 决定)
+   */
+  private static buildEnv(info: ContainerInfo, debugOverride: string[] = []): string[] {
+    if (DEBUG_MODE) {
+      const wineRoot:       string = `${info.path}/wine`;
+      const wineBinPath:    string = `${wineRoot}/bin/wine`;
+      const wineServerPath: string = `${wineRoot}/bin/wineserver`;
+      const winePrefixPath: string = `${info.path}/wineprefix`;
+      const base: string[] = [
+        `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
+        `BOX64_LOG=2`,
+        `BOX64_NOBANNER=0`,
+        `BOX64_REMAP_TRACE=1`,
+        `WINEPREFIX=${winePrefixPath}`,
+        `WINEDEBUG=+all`,
+        `WINELOADER=${wineBinPath}`,
+        `WINESERVER=${wineServerPath}`,
+        `XDG_RUNTIME_DIR=${info.path}`,
+        `HOME=${info.path}`,
+        `TMPDIR=/data/storage/el2/base/cache`
+      ];
+      return ContainerService.mergeEnv(base, debugOverride);
+    }
+    return info.config.envVars.slice();
+  }
+
+  /** 打开日志文件. DEBUG_MODE=false 时返回 -1, 后续 log 调用会 no-op. */
+  private static openLogFile(name: string): number {
+    if (!DEBUG_MODE) return -1;
+    try {
+      if (!fs.accessSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, true);
+    } catch (_e) { /* ignore */ }
+    const path: string = `${LOGS_DIR}/${name}`;
+    try {
+      const f: fs.File = fs.openSync(path,
+        fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      console.info(`[Container] log file: ${path}`);
+      return f.fd;
+    } catch (e) {
+      console.error(`[Container] openLogFile err: ${(e as Error).message}`);
+      return -1;
+    }
+  }
+
+  private static writeLogLine(fd: number, line: string): void {
+    if (fd < 0) return;
+    try {
+      const buf: string = line.endsWith('\n') ? line : line + '\n';
+      fs.writeSync(fd, buf);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private static closeLogFile(fd: number): void {
+    if (fd < 0) return;
+    try { fs.closeSync(fd); } catch (_e) { /* ignore */ }
+  }
+
+  // ==============================================================
   // 安装入口
   // ==============================================================
-  static async install(ctx: common.Context,
-    opts: InstallOptions): Promise<InstallResult> {
+  static async install(ctx: common.Context, opts: InstallOptions): Promise<InstallResult> {
     if (!opts.name.trim()) {
       return { ok: false, error: '容器名称不能为空' };
     }
     const id: string = ContainerService.slug(opts.name);
     const dest: string = ContainerService.containerDir(ctx, id);
-    if (fs.accessSync(dest)) {
-      return { ok: false, error: `容器 "${id}" 已存在` };
-    }
+
+    try {
+      if (fs.accessSync(dest)) {
+        return { ok: false, error: `容器 "${id}" 已存在` };
+      }
+    } catch (_e) { /* not exists, ok */ }
 
     if (opts.source === 'tar') {
       return await ContainerService.installFromTar(ctx, opts, id, dest);
@@ -185,51 +287,70 @@ export class ContainerService {
     return { ok: false, error: '未知的安装方式' };
   }
 
-  private static async installFromTar(ctx: common.Context,
+  private static async installFromTar(
+    _ctx: common.Context,
     opts: InstallOptions,
     id: string,
-    dest: string): Promise<InstallResult> {
+    dest: string
+  ): Promise<InstallResult> {
     if (!opts.archiveUri) return { ok: false, error: '未选择 tar 文件' };
-
-    fs.mkdirSync(dest, true);
-
-    let file: fs.File | null = null;
+    const tarPath: string = new fileUri.FileUri(opts.archiveUri).path;
+    // tar 的 -C 目标必须存在
     try {
-      // 用 fs.openSync 打开 URI, 拿到内部 fd
-      file = fs.openSync(opts.archiveUri, fs.OpenMode.READ_ONLY);
+      fs.mkdirSync(dest, true);
     } catch (e) {
-      ContainerService.rmDirSafe(dest);
-      return {
-        ok: false,
-        error: `打开 tar 文件失败: ${(e as Error).message}`
-      };
+      return { ok: false, error: `创建目标目录失败: ${(e as Error).message}` };
     }
-
-    try {
-      const r: TarResult = await wl.tarExtractFd(file.fd, 0, -1, dest);
-      if (!r.ok) {
-        ContainerService.rmDirSafe(dest);
-        return { ok: false, error: 'tar 解压失败: ' + r.error };
+    hilog.info(0x0000, TAG, `[import] extract ${tarPath} -> ${dest}`);
+    const tarResult: InstallResult = await new Promise<InstallResult>((resolve): void => {
+      let settled: boolean = false;
+      const startTs: number = Date.now();
+      const finish = (ok: boolean, msg: string): void => {
+        if (settled) return;
+        settled = true;
+        const cost: number = (Date.now() - startTs) / 1000;
+        hilog.info(0x0000, TAG,
+          `[import] done ok=${ok} cost=${cost.toFixed(1)}s msg=${msg}`);
+        resolve({ ok: ok, error: ok ? '' : msg });
+      };
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          hilog.info(0x0000, TAG, `[import] tar: ${data}`);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          if (code === 0) finish(true, 'exit=0');
+          else finish(false, `tar exit=${code}`);
+        }
+      };
+      let pid: number = 0;
+      try {
+        pid = wl.runCommand('tar',
+          ['tar', 'xf', tarPath, '-C', dest], [], '', cb);
+      } catch (e) {
+        finish(false, `spawn exception: ${(e as Error).message}`);
+        return;
       }
-    } catch (e) {
+      if (pid <= 0) {
+        finish(false, `spawn failed pid=${pid}`);
+        return;
+      }
+      hilog.info(0x0000, TAG, `[import] pid=${pid}`);
+    });
+    if (!tarResult.ok) {
       ContainerService.rmDirSafe(dest);
-      return {
-        ok: false,
-        error: 'tar 解压异常: ' + (e as Error).message
-      };
-    } finally {
-      try { fs.closeSync(file); } catch (_e) { /* ignore */ }
+      return { ok: false, error: 'tar 解压失败: ' + tarResult.error };
     }
-
     return ContainerService.finalizeInstall(dest, id, opts);
   }
 
-  private static async installFromFolder(ctx: common.Context,
+  private static async installFromFolder(
+    _ctx: common.Context,
     opts: InstallOptions,
     id: string,
-    dest: string): Promise<InstallResult> {
+    dest: string
+  ): Promise<InstallResult> {
     if (!opts.folderUri) return { ok: false, error: '未选择文件夹' };
-    const srcPath: string = InstallService.uriToPath(opts.folderUri);
+    const srcPath: string = new fileUri.FileUri(opts.folderUri).path;
     if (!srcPath) {
       return { ok: false, error: '无法解析文件夹 URI' };
     }
@@ -258,10 +379,122 @@ export class ContainerService {
     return ContainerService.finalizeInstall(dest, id, opts);
   }
 
-  // 通用后处理: 检测 container.json + 合并用户输入 + 特殊类型初始化
-  private static async finalizeInstall(dest: string,
+  private static async installFromBuiltin(
+    ctx: common.Context,
+    opts: InstallOptions,
     id: string,
-    opts: InstallOptions): Promise<InstallResult> {
+    dest: string
+  ): Promise<InstallResult> {
+    const entry: BuiltinEntry | undefined =
+      ContainerService.builtins.find((b): boolean => b.id === opts.builtinId);
+    if (!entry) return { ok: false, error: '未知的内置容器 ID' };
+
+    try {
+      fs.mkdirSync(dest, true);
+    } catch (e) {
+      return { ok: false, error: `创建目标目录失败: ${(e as Error).message}` };
+    }
+
+    // rawfile 存在 HAP 包里, tar 命令看不到, 先拷到 cacheDir
+    hilog.info(0x0000, TAG, `[builtin] extracting rawfile: ${entry.rawfileName}`);
+    const tmpPath: string = `${ctx.cacheDir}/builtin-${id}-${Date.now()}.tar.zst`;
+    let rawfd: resourceManager.RawFileDescriptor | null = null;
+    let dst: fs.File | null = null;
+    try {
+      rawfd = ctx.resourceManager.getRawFdSync(entry.rawfileName);
+      hilog.info(0x0000, TAG, `[builtin] getRawFdSync succeed!`);
+    } catch (e) {
+      hilog.error(0x0000, TAG, `[builtin] getRawFdSync err: ${(e as Error).message}`);
+      return { ok: false, error: `读取内置容器资源失败: ${(e as Error).message}` };
+    }
+    try {
+      dst = fs.openSync(tmpPath, fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      hilog.info(0x0000, TAG, `[builtin] openSync succeed!`);
+      const bufSize: number = 256 * 1024;
+      const buf: ArrayBuffer = new ArrayBuffer(bufSize);
+      let readPos: number = rawfd.offset;
+      let remaining: number = rawfd.length;
+      while (remaining > 0) {
+        const toRead: number = remaining < bufSize ? remaining : bufSize;
+        const readOpts: FsReadOpts = {
+          offset: readPos,      // ← 从 position 改成 offset
+          length: toRead
+        };
+        const n: number = fs.readSync(rawfd.fd, buf, readOpts);
+        if (n <= 0) break;
+        const writeOpts: FsWriteOpts = { length: n };  // 写用当前位置追加即可
+        fs.writeSync(dst.fd, buf, writeOpts);
+        readPos += n;
+        remaining -= n;
+      }
+    } catch (e) {
+      hilog.error(0x0000, TAG,
+        `[builtin] copy rawfile err: ${(e as Error).message}`);
+      try { fs.unlinkSync(tmpPath); } catch (_e) { /* ignore */ }
+      return { ok: false, error: `内置容器资源复制失败: ${(e as Error).message}` };
+    } finally {
+      if (dst) { try { fs.closeSync(dst); } catch (_e) { /* ignore */ } }
+      try {
+        ctx.resourceManager.closeRawFdSync(entry.rawfileName);
+      } catch (_e) { /* ignore */ }
+    }
+
+    hilog.info(0x0000, TAG, `[builtin] extract ${tmpPath} -> ${dest}`);
+
+    const tarResult: InstallResult = await new Promise<InstallResult>((resolve): void => {
+      let settled: boolean = false;
+      const startTs: number = Date.now();
+
+      const finish = (ok: boolean, msg: string): void => {
+        if (settled) return;
+        settled = true;
+        const cost: number = (Date.now() - startTs) / 1000;
+        hilog.info(0x0000, TAG,
+          `[builtin] tar done ok=${ok} cost=${cost.toFixed(1)}s msg=${msg}`);
+        resolve({ ok: ok, error: ok ? '' : msg });
+      };
+
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          hilog.info(0x0000, TAG, `[builtin] tar: ${data}`);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          if (code === 0) finish(true, 'exit=0');
+          else finish(false, `tar exit=${code}`);
+        }
+      };
+
+      let pid: number = 0;
+      try {
+        pid = wl.runCommand('tar', ['tar', 'xf', tmpPath, '-C', dest], [], '', cb);
+      } catch (e) {
+        finish(false, `spawn exception: ${(e as Error).message}`);
+        return;
+      }
+      if (pid <= 0) {
+        finish(false, `spawn failed pid=${pid}`);
+        return;
+      }
+      hilog.info(0x0000, TAG, `[builtin] pid=${pid}`);
+    });
+
+    // 不管成败清临时文件
+    try { fs.unlinkSync(tmpPath); } catch (_e) { /* ignore */ }
+
+    if (!tarResult.ok) {
+      ContainerService.rmDirSafe(dest);
+      return { ok: false, error: 'tar 解压失败: ' + tarResult.error };
+    }
+
+    return ContainerService.finalizeInstall(dest, id, opts);
+  }
+
+  // 通用后处理: 检测 container.json + 合并用户输入 + 特殊类型初始化
+  private static async finalizeInstall(
+    dest: string,
+    id: string,
+    opts: InstallOptions
+  ): Promise<InstallResult> {
     const cfg: ContainerConfig | null = ContainerService.readConfig(dest);
     if (!cfg) {
       ContainerService.rmDirSafe(dest);
@@ -330,6 +563,81 @@ export class ContainerService {
   }
 
   // ==============================================================
+  //  导出: tar cf tmp -C info.path .   然后 tmp -> URI
+  // ==============================================================
+  static async exportContainer(
+    _ctx: common.Context,
+    info: ContainerInfo,
+    saveUri: string
+  ): Promise<InstallResult> {
+    const tarPath: string = new fileUri.FileUri(saveUri).path;
+
+    let entries: string[] = [];
+    try {
+      entries = fs.listFileSync(info.path);
+    } catch (e) {
+      return { ok: false, error: `无法读取容器目录: ${(e as Error).message}` };
+    }
+
+    // wineprefix 会在 install 时由 initWineContainer 重建, 无需打包.
+    // 如果未来支持"保留已装软件"备份模式, 再加开关.
+    if (info.config.type === ContainerType.WINE) {
+      entries = entries.filter((e): boolean => e !== 'wineprefix');
+    }
+    if (entries.length === 0) {
+      return { ok: false, error: '容器目录为空' };
+    }
+
+    // --zstd: 压缩比 ~40%, 速度接近 gzip. bsdtar 内建, 无需外部程序.
+    const argv: string[] = ['tar', '--zstd', '-cf', tarPath, '-C', info.path];
+    for (const e of entries) argv.push(e);
+
+    hilog.info(0x0000, TAG,
+      `[export] pack ${entries.length} entries -> ${tarPath} (zstd)`);
+
+    return new Promise<InstallResult>((resolve): void => {
+      let settled: boolean = false;
+      const startTs: number = Date.now();
+
+      const finish = (ok: boolean, msg: string): void => {
+        if (settled) return;
+        settled = true;
+        const cost: number = (Date.now() - startTs) / 1000;
+        hilog.info(0x0000, TAG,
+          `[export] done ok=${ok} cost=${cost.toFixed(1)}s msg=${msg}`);
+        resolve({
+          ok: ok,
+          error: ok ? '' : msg,
+          info: ok ? info : undefined
+        });
+      };
+
+      const cb = (event: string, data: string): void => {
+        if (event === 'out') {
+          hilog.info(0x0000, TAG, `[export] tar: ${data}`);
+        } else if (event === 'exit') {
+          const code: number = parseInt(data, 10);
+          if (code === 0) finish(true, 'exit=0');
+          else finish(false, `tar exit=${code}`);
+        }
+      };
+
+      let pid: number = 0;
+      try {
+        pid = wl.runCommand('tar', argv, [], '', cb);
+      } catch (e) {
+        finish(false, `spawn exception: ${(e as Error).message}`);
+        return;
+      }
+      if (pid <= 0) {
+        finish(false, `spawn failed pid=${pid}`);
+        return;
+      }
+      hilog.info(0x0000, TAG, `[export] pid=${pid}`);
+    });
+  }
+
+  // ==============================================================
   // 卸载
   // ==============================================================
   static uninstall(ctx: common.Context, id: string): boolean {
@@ -343,8 +651,7 @@ export class ContainerService {
   // ==============================================================
   // 启停 (stub, 需要接入现有 wineserver 通路)
   // ==============================================================
-  static async start(ctx: common.Context,
-    info: ContainerInfo): Promise<boolean> {
+  static async start(_ctx: common.Context, info: ContainerInfo): Promise<boolean> {
     if (info.config.type === ContainerType.WINE) {
       return await ContainerService.startWineserver(info);
     }
@@ -355,7 +662,7 @@ export class ContainerService {
     return false;
   }
 
-  static async stop(ctx: common.Context, info: ContainerInfo): Promise<boolean> {
+  static async stop(_ctx: common.Context, info: ContainerInfo): Promise<boolean> {
     if (info.config.type === ContainerType.WINE) {
       return await ContainerService.stopWineserver(info);
     }
@@ -397,16 +704,14 @@ export class ContainerService {
    * 未来的容器脚本执行入口占位
    * @todo 通过 shell 执行容器内脚本
    */
-  static async runScript(info: ContainerInfo,
-    scriptRel: string,
-    args: string[]): Promise<number> {
-    console.warn(
-      `[ContainerRunner] runScript not implemented: ${info.id}/${scriptRel} args=${args.join(',')}`
-    );
+  static async runScript(info: ContainerInfo, scriptRel: string, args: string[]): Promise<number> {
+    console.warn(`[ContainerRunner] runScript not implemented: ${info.id}/${scriptRel} args=${args.join(',')}`);
     return 0;
   }
 
-  // ── wine specific ─────────────────────────────────────────
+  // ==============================================================
+  //  wine
+  // ==============================================================
   static async initWineContainer(info: ContainerInfo): Promise<boolean> {
     // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
     const wineRoot:       string = `${info.path}/wine`;
@@ -491,26 +796,13 @@ export class ContainerService {
     // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
     const wineRoot:       string = `${info.path}/wine`;
     const wineBinPath:    string = `${wineRoot}/bin/wine`;
-    const wineServerPath: string = `${wineRoot}/bin/wineserver`;
-    const winePrefixPath: string = `${info.path}/wineprefix`;
 
     const ts: number = Date.now();
     const logFd: number = ContainerService.openLogFile(`wineboot-${info.id}-${ts}.log`);
 
-    // 写死的 env, 后面稳定了再回归 buildEnv
-    const env: string[] = [
-      `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
-      `BOX64_LOG=2`,
-      `BOX64_NOBANNER=0`,
-      `BOX64_REMAP_TRACE=0`,
-      `WINEPREFIX=${winePrefixPath}`,
-      `WINEDEBUG=+all`,
-      `WINELOADER=${wineBinPath}`,
-      `WINESERVER=${wineServerPath}`,
-      `XDG_RUNTIME_DIR=${info.path}`,
-      `HOME=${info.path}`,
-      `TMPDIR=/data/storage/el2/base/cache`
-    ];
+
+    // DEBUG 用硬编码, 生产用 config.envVars
+    const env: string[] = ContainerService.buildEnv(info);
 
     ContainerService.writeLogLine(logFd, `=== wineboot env ===`);
     for (const e of env) {
@@ -560,37 +852,6 @@ export class ContainerService {
       ContainerService.writeLogLine(logFd, `[wineboot] pid=${pid}`);
       hilog.info(0x0000, TAG, `[wineboot] pid=${pid}, log -> logs/wineboot-${info.id}-${ts}.log`);
 
-      // 在 runWinebootInit 方法里，wineboot 启动后加延时读取
-      setTimeout(() => {
-        try {
-          const mapsPath = `/proc/${pid}/maps`;
-          // ArkTS 用 readTextSync 而不是 readFileSync
-          const maps = fs.readTextSync(mapsPath);
-          const lines = maps.split('\n').filter((l: string) => l.includes('140001'));
-          console.log('[HBox_UI_Svc_Container]', '[maps-0x140001000]', lines);
-        } catch (e) {
-          console.log('[HBox_UI_Svc_Container] [maps-0x140001000] read failed:', e);
-        }
-      }, 100);
-
-      setTimeout(() => {
-        try {
-          const mapsPath = `/proc/${pid}/maps`;
-          const file: fs.File = fs.openSync(mapsPath, fs.OpenMode.READ_ONLY);
-          const buf: ArrayBuffer = new ArrayBuffer(131072);
-          const readLen: number = fs.readSync(file.fd, buf);
-          fs.closeSync(file);
-
-          const decoder: util.TextDecoder = new util.TextDecoder('utf-8');
-          const uint8Arr: Uint8Array = new Uint8Array(buf, 0, readLen);
-          const maps: string = decoder.decodeWithStream(uint8Arr);
-          console.log('[HBox_UI_Svc_Container]', '[maps-full]', maps);
-        } catch (e) {
-          const err = e as Error;
-          console.log('[HBox_UI_Svc_Container]', '[maps] read failed:', err.message);
-        }
-      }, 100);
-
       ticker = setInterval((): void => {
         if (settled) { clearInterval(ticker); ticker = 0; return; }
         const dt: number = Date.now() - startTs;
@@ -621,10 +882,7 @@ export class ContainerService {
 
   private static async startWineserver(info: ContainerInfo): Promise<boolean> {
     // 路径全部从容器目录拼, 不再用 config 里的可选字段, 避免调试期变量
-    const wineRoot:       string = `${info.path}/wine`;
-    const wineBinPath:    string = `${wineRoot}/bin/wine`;
-    const wineServerPath: string = `${wineRoot}/bin/wineserver`;
-    const winePrefixPath: string = `${info.path}/wineprefix`;
+    const wineServerPath: string = `${info.path}/wine/bin/wineserver`;
 
     // check if wineserver is already running
     if (ContainerService.isWineserverRunning(info)) return true;
@@ -640,20 +898,8 @@ export class ContainerService {
     const ts: number = Date.now();
     const logFd: number = ContainerService.openLogFile(`wineserver-${info.id}-${ts}.log`);
 
-    // 写死的 env, 后面稳定了再回归 buildEnv
-    const env: string[] = [
-      `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
-      `BOX64_LOG=2`,
-      `BOX64_NOBANNER=0`,
-      `BOX64_REMAP_TRACE=1`,
-      `WINEPREFIX=${winePrefixPath}`,
-      `WINEDEBUG=+server,+process,+virtual`,
-      `WINELOADER=${wineBinPath}`,
-      `WINESERVER=${wineServerPath}`,
-      `XDG_RUNTIME_DIR=${info.path}`,
-      `HOME=${info.path}`,
-      `TMPDIR=/data/storage/el2/base/cache`
-    ];
+    // DEBUG 用硬编码, 生产用 config.envVars
+    const env: string[] = ContainerService.buildEnv(info);
 
     hilog.info(0x0000, TAG, `[Container] wineserver env:`);
     for (const e of env) hilog.info(0x0000, TAG, `  ${e}`);
@@ -707,73 +953,9 @@ export class ContainerService {
     return true;
   }
 
-  // ----- builtins -----
-
-  static getBuiltins(): BuiltinEntry[] {
-    return ContainerService.builtins.slice();
-  }
-
-  private static async installFromBuiltin(ctx: common.Context,
-    opts: InstallOptions,
-    id: string,
-    dest: string): Promise<InstallResult> {
-    const entry: BuiltinEntry | undefined =
-      ContainerService.builtins.find((b): boolean => b.id === opts.builtinId);
-    if (!entry) return { ok: false, error: '未知的内置容器 ID' };
-
-    let rawfd: resourceManager.RawFileDescriptor | null = null;
-    try {
-      rawfd = ctx.resourceManager.getRawFdSync(entry.rawfileName);
-    } catch (e) {
-      ContainerService.rmDirSafe(dest);
-      return {
-        ok: false,
-        error: `读取内置容器资源失败: ${(e as Error).message}`
-      };
-    }
-    if (!rawfd) {
-      ContainerService.rmDirSafe(dest);
-      return { ok: false, error: '内置容器资源不存在' };
-    }
-    try {
-      const r: TarResult = await wl.tarExtractFd(
-        rawfd.fd, rawfd.offset, rawfd.length, dest);
-      if (!r.ok) {
-        ContainerService.rmDirSafe(dest);
-        return { ok: false, error: '解压失败: ' + r.error };
-      }
-    } finally {
-      try {
-        ctx.resourceManager.closeRawFdSync(entry.rawfileName);
-      } catch (_e) { /* ignore */ }
-    }
-
-    return ContainerService.finalizeInstall(dest, id, opts);
-  }
-
-  static async exportContainer(ctx: common.Context,
-    info: ContainerInfo,
-    saveUri: string): Promise<InstallResult> {
-    let file: fs.File | null = null;
-    try {
-      file = fs.openSync(saveUri,
-        fs.OpenMode.WRITE_ONLY
-          | fs.OpenMode.CREATE
-          | fs.OpenMode.TRUNC);
-      const r: TarResult = await wl.tarCreateFd(file.fd, info.path);
-      if (!r.ok) {
-        return { ok: false, error: 'tar 打包失败: ' + r.error };
-      }
-      return { ok: true, error: '', info: info };
-    } catch (e) {
-      return { ok: false, error: '导出失败: ' + (e as Error).message };
-    } finally {
-      if (file) {
-        try { fs.closeSync(file); } catch (_) { /* ignore */ }
-      }
-    }
-  }
-
+  // ==============================================================
+  //  字体
+  // ==============================================================
   /** 检测容器目录里是否存在非空 fonts 目录 */
   static hasFonts(containerDir: string): boolean {
     const fontsDir: string = `${containerDir}/${FONTS_DIR_NAME}`;
@@ -896,34 +1078,4 @@ export class ContainerService {
 </fontconfig>
 `;
   }
-
-  /** 打开日志文件, 返回 fd. 失败返回 -1. */
-  private static openLogFile(name: string): number {
-    try {
-      if (!fs.accessSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, true);
-    } catch (_e) { /* ignore */ }
-    const path: string = `${LOGS_DIR}/${name}`;
-    try {
-      const f: fs.File = fs.openSync(path,
-        fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      // 记下路径供事后打印
-      console.info(`[Container] log file: ${path}`);
-      return f.fd;
-    } catch (e) {
-      console.error(`[Container] openLogFile err: ${(e as Error).message}`);
-      return -1;
-    }
-  }
-
-  private static writeLogLine(fd: number, line: string): void {
-    if (fd < 0) return;
-    try {
-      const buf: string = line.endsWith('\n') ? line : line + '\n';
-      fs.writeSync(fd, buf);
-    } catch (_e) { /* ignore */ }
-  }
-
-  private static closeLogFile(fd: number): void {
-    if (fd < 0) return;
-    try { fs.closeSync(fd); } catch (_e) { /* ignore */ }
-  }}
+}

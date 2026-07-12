@@ -470,7 +470,7 @@ export class WindowManagerService {
 
       // 3a. prefix 检测 (只提示, 不自动初始化, 待 wineboot 脚本接入)
       if (!ContainerService.isReady(container)) {
-        this.toast('Wine prefix 未初始化, 请先在容器管理中初始化 (功能未接入)', 2500);
+        this.toast('Wine prefix 未初始化, 请先在容器管理中初始化 (如果您刚刚安装容器，可能需要等待大约 2 分钟初始化)', 5000);
         return;
       }
       // 3b. 保证 wineserver 运行
