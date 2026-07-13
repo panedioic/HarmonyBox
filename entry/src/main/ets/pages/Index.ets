@@ -5,7 +5,6 @@ import { Theme, PageType } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { InstallService } from '../service/InstallService';
-import { WaylandService } from '../service/WaylandService';
 import { WindowManagerService } from '../service/WindowManagerService';
 import { Sidebar } from '../components/Sidebar';
 import { LibraryPage } from '../components/LibraryPage';
@@ -16,6 +15,8 @@ import { ProcManagerPage } from '../components/ProcManagerPage';
 import { DebugPage } from '../pages/DebugPage';
 import { DebugShellPage } from './DebugShellPage';
 import { ContainerManagerPage } from '../pages/ContainerManagerPage';
+import { PackageService, PackageResult } from '../service/PackageService';
+import { picker } from '@kit.CoreFileKit';
 
 @Entry
 @Component
@@ -79,10 +80,31 @@ struct Index {
   }
 
   exportApp = (app: AppInfo): void => {
-    this.toast('导出应用功能尚未实现', 1500);
+    // 弹出保存对话框, 选目标 URI 后调 PackageService
+    const doExport = async (): Promise<void> => {
+      try {
+        const ctx = getContext(this) as common.UIAbilityContext;
+        const p = new picker.DocumentViewPicker(ctx);
+        const opts = new picker.DocumentSaveOptions();
+        opts.newFileNames = [`${app.name}.tar.zst`];
+        const uris: string[] = await p.save(opts);
+        if (!uris || uris.length === 0) return;
+
+        const r: PackageResult = await PackageService.exportToTar(
+          ctx, `${ctx.filesDir}/${app.installDir}`, uris[0]);
+        if (r.ok) {
+          this.toast('导出完成', 1500);
+        } else {
+          this.toast('导出失败: ' + r.error, 2500);
+        }
+      } catch (e) {
+        this.toast('导出异常: ' + (e as Error).message, 2500);
+      }
+    };
+    doExport();
   }
 
-  updateApp = (app: AppInfo): void => {
+  updateApp = (_app: AppInfo): void => {
     this.toast('更新应用功能尚未实现', 1500);
   }
 

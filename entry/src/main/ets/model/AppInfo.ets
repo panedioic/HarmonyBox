@@ -1,9 +1,13 @@
+import { ContainerType } from "./ContainerInfo";
+
+/** @deprecated 由容器类型推导, 不再使用 */
 export enum AppType {
   WINDOWS = 'windows',
   LINUX = 'linux',
   HARMONY = 'harmony'
 }
 
+/** @deprecated 未来移除, 当前仍用于启动判断 */
 export enum RuntimeMode {
   GUI = 'gui',
   CLI = 'cli'
@@ -19,7 +23,6 @@ export class AppInfo {
   id: string;
   name: string;
   icon: string;
-  /** @deprecated 应用运行时行为由 containerId 关联的容器决定; 该字段仅供旧数据兼容与显示 */
   type: AppType;
   runtimeMode: RuntimeMode;
   execPath: string;
@@ -77,3 +80,45 @@ export function migrateAppType(t: string): AppType {
     default: return AppType.LINUX;
   }
 }
+
+export interface BuiltinAppEntry {
+  id: string;
+  name: string;
+  icon: string;
+  desc: string;
+  /** 要求的容器类型, 安装时会自动筛选匹配的容器 */
+  containerType: ContainerType;
+  /** rawfile/apps/ 下的文件名 */
+  rawfileName: string;
+  /** 主可执行文件相对路径 */
+  execRelPath: string;
+  /** 运行模式 */
+  runtimeMode: RuntimeMode;
+  /** 预设的启动配置 */
+  config: AppConfig;
+}
+
+export const BUILTIN_APPS: BuiltinAppEntry[] = [
+  {
+    id: 'weston-terminal',
+    name: '终端',
+    icon: '📝',
+    desc: '基于 Weston 的终端模拟器，不过由于鸿蒙权限限制，只有窗口，并不能真的操作终端。',
+    containerType: ContainerType.LINUX,
+    rawfileName: 'apps/weston-terminl.tar.zst',
+    execRelPath: 'weston-terminl',
+    runtimeMode: RuntimeMode.GUI,
+    config: { envVars: 'LD_PRELOAD=libforkpty_shim.so', args: '' }
+  },
+  {
+    id: 'hello-wine',
+    name: 'Hello Wine',
+    icon: '🍷',
+    desc: '一个简单的 Win32 Hello World 程序。',
+    containerType: ContainerType.WINE,
+    rawfileName: 'apps/hello-wine.tar.zst',
+    execRelPath: 'hello.exe',
+    runtimeMode: RuntimeMode.CLI,
+    config: { envVars: '', args: '' }
+  }
+];
