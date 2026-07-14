@@ -17,6 +17,7 @@ import { DebugShellPage } from './DebugShellPage';
 import { ContainerManagerPage } from '../pages/ContainerManagerPage';
 import { PackageService, PackageResult } from '../service/PackageService';
 import { picker } from '@kit.CoreFileKit';
+import { ProcessManagerService, LaunchResult } from '../service/ProcessManagerService';
 
 @Entry
 @Component
@@ -33,15 +34,17 @@ struct Index {
 
     const wm = WindowManagerService.getInstance();
     wm.init(ctx);
-    wm.setToastFn((msg: string, dur: number): void => this.toast(msg, dur));
     wm.setRunningIdsListener((ids: string[]): void => {
       this.runningAppIds = ids;
     });
+
+    const pm = ProcessManagerService.getInstance();
+    pm.init(ctx);
+    pm.setToastFn((msg: string, dur: number): void => this.toast(msg, dur));
   }
 
   aboutToDisappear(): void {
     WindowManagerService.getInstance().setRunningIdsListener(null);
-    WindowManagerService.getInstance().setToastFn(null);
     WindowManagerService.getInstance().shutdown();
   }
 
@@ -49,14 +52,25 @@ struct Index {
   // app actions
   // =========================================================
   launchApp = (app: AppInfo): void => {
-    WindowManagerService.getInstance().launchApp(app, false).catch((e: BusinessError): void => {
-      console.error(`launchApp failed: ${e.code} ${e.message}`);
+    // 先尝试恢复已有窗口
+    WindowManagerService.getInstance().bringToFront(app.id).then((restored: boolean): void => {
+      if (!restored) {
+        ProcessManagerService.getInstance().launchApp(app, { showLog: false })
+          .catch((e: BusinessError): void => {
+            console.error(`launchApp failed: ${e.code} ${e.message}`);
+          });
+      }
     });
   }
 
   launchAppWithLog = (app: AppInfo): void => {
-    WindowManagerService.getInstance().launchApp(app, true).catch((e: BusinessError): void => {
-      console.error(`launchAppWithLog failed: ${e.code} ${e.message}`);
+    WindowManagerService.getInstance().bringToFront(app.id).then((restored: boolean): void => {
+      if (!restored) {
+        ProcessManagerService.getInstance().launchApp(app, { showLog: true })
+          .catch((e: BusinessError): void => {
+            console.error(`launchAppWithLog failed: ${e.code} ${e.message}`);
+          });
+      }
     });
   }
 
@@ -68,7 +82,7 @@ struct Index {
 
   deleteApp = (app: AppInfo): void => {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    WindowManagerService.getInstance().closeApp(app.id);
+    ProcessManagerService.getInstance().closeAllOfApp(app.id);
     try { InstallService.uninstall(ctx, app.installDir); } catch (e) { /* ignore */ }
     this.installedApps = AppRegistry.remove(ctx, app.id);
   }

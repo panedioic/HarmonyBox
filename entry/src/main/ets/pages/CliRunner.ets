@@ -1,4 +1,4 @@
-import { CliService, CliSubscriber } from '../service/CliService';
+import { ProcessManagerService, ProcessSubscriber } from '../service/ProcessManagerService';
 import { pasteboard } from '@kit.BasicServicesKit';
 
 @Entry
@@ -25,7 +25,7 @@ struct CliRunner {
     }
     this.pid = pid;
 
-    const sub: CliSubscriber = {
+    const sub: ProcessSubscriber = {
       onLine: (line: string): void => {
         this.lines = [...this.lines, line];
         setTimeout((): void => {
@@ -39,15 +39,15 @@ struct CliRunner {
         this.lines = [...this.lines, '', `[进程已退出, 退出码 ${code}]`];
       }
     };
-    const initial: string[] = CliService.getInstance().subscribe(this.pid, sub);
+    const initial: string[] = ProcessManagerService.getInstance().subscribe(this.pid, sub);
     this.lines = initial;
   }
 
   aboutToDisappear(): void {
     if (this.pid > 0) {
-      const svc = CliService.getInstance();
+      const svc = ProcessManagerService.getInstance();
       svc.unsubscribe(this.pid);
-      if (!this.exited) svc.stop(this.pid);
+      if (!this.exited) svc.terminate(this.pid);
       svc.clear(this.pid);
     }
   }

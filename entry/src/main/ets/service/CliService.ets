@@ -105,9 +105,9 @@ export class CliService {
       if (!opts.appId) {
         return { pid: -1, code: -3, errorMsg: 'gui 模式需要 appId' };
       }
-      if (!wlSvc.claimSlot(opts.appId)) {
-        return { pid: -1, code: -2, errorMsg: '已有 GUI 应用在运行' };
-      }
+      // if (!wlSvc.claimSlot(opts.appId)) {
+      //   return { pid: -1, code: -2, errorMsg: '已有 GUI 应用在运行' };
+      // }
     }
 
     // 2. 拼 argv / env
@@ -129,7 +129,7 @@ export class CliService {
           onExit: (): void => {
             this.unsubscribe(pid);
             this.clear(pid);
-            WaylandService.getInstance().fireGuiExit(appId);
+            // WaylandService.getInstance().fireGuiExit(appId);
           }
         });
       }
@@ -138,7 +138,7 @@ export class CliService {
     }
 
     if (pid <= 0) {
-      if (opts.gui && opts.appId) wlSvc.releaseSlot(opts.appId);
+      // if (opts.gui && opts.appId) wlSvc.releaseSlot(opts.appId);
       return { pid: -1, code: -4, errorMsg: '启动失败' };
     }
 

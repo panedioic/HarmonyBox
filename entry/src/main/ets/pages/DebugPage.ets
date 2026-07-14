@@ -151,7 +151,7 @@ export struct DebugPage {
     const wlSvc = WaylandService.getInstance();
     this.append(`server ready   = ${wlSvc.isServerReady()}`);
     this.append(`sock path      = ${wlSvc.getSockPath()}`);
-    this.append(`current appId  = ${wlSvc.getCurrentAppId() ?? '(none)'}`);
+    // this.append(`current appId  = ${wlSvc.getCurrentAppId() ?? '(none)'}`);
     const sz = wlSvc.getLatestBufferSize();
     this.append(`latest buffer  = ${sz.w}x${sz.h}`);
     const env = wlSvc.getWaylandEnv();
@@ -901,6 +901,9 @@ export struct DebugPage {
     this.append('===== 打开 notepad =====');
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
+    this.append(`[fail] 方法已废弃，待修改...`);
+    return;
+/*
     const wlSvc = WaylandService.getInstance();
     if (!wlSvc.isServerReady()) {
       this.append('[err] Wayland server 未就绪');
@@ -984,9 +987,10 @@ export struct DebugPage {
       // return;
     }
     this.append(ok ? '[ok] wayland active' : '[warn] active 信号未收到, 强制创建窗口');
-    await this.createNotepadHostWindow(pid);
+    await this.createNotepadHostWindow(pid);*/
   }
 
+  /*
   private async createNotepadHostWindow(cliPid: number): Promise<void> {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
@@ -1048,7 +1052,7 @@ export struct DebugPage {
       this.append(`[err] createNotepadHostWindow code=${err.code} msg=${err.message}`);
       WaylandService.getInstance().releaseSlot('notepad-debug');
     }
-  }
+  }*/
 
   private async runOne(fn: () => Promise<void>): Promise<void> {
     if (this.running) return;
