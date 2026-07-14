@@ -109,6 +109,8 @@ int GetBox64LogLevel() {
     if (cached < 0) cached = 0;
     return cached;
 }
+#define BOX64_LOG_ERROR(...) \
+    do { if (GetBox64LogLevel() >= 0) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
 #define BOX64_LOG_INFO(...)  \
     do { if (GetBox64LogLevel() >= 1) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
 #define BOX64_LOG_DEBUG(...) \
@@ -210,7 +212,7 @@ pid_t GetPPid(pid_t pid) {
 void UnmapLowAnonRegions() {
     FILE* f = fopen("/proc/self/maps", "r");
     if (!f) {
-        fprintf(stderr, "[procmgr] open /proc/self/maps failed\n");
+        BOX64_LOG_ERROR("[procmgr] open /proc/self/maps failed\n");
         return;
     }
 
@@ -243,8 +245,7 @@ void UnmapLowAnonRegions() {
             fail++;
         }
     }
-    BOX64_LOG_DEBUG("[procmgr] freed %d regions, total=%lu MB, failures=%d\n",
-                ok, total / 1024 / 1024, fail);
+    BOX64_LOG_DEBUG("[procmgr] freed %d regions, total=%lu MB, failures=%d\n", ok, total / 1024 / 1024, fail);
     fflush(stderr);
 }
 
@@ -275,18 +276,15 @@ Box64RunFn LoadBox64RunInChild(void** out_handle) {
             BOX64_LOG_INFO("[procmgr] dlopen ok: %s\n", path.c_str());
             break;
         }
-        fprintf(stderr, "[procmgr] dlopen %s -> %s\n",
-                path.c_str(), dlerror());
     }
     if (!h) {
-        fprintf(stderr, "[procmgr] FATAL: child cannot dlopen libbox64.so\n");
+        BOX64_LOG_ERROR("[procmgr] FATAL: child cannot dlopen libbox64.so\n");
         return nullptr;
     }
 
     auto fn = (Box64RunFn)dlsym(h, "box64_run");
     if (!fn) {
-        fprintf(stderr, "[procmgr] FATAL: dlsym(box64_run) failed: %s\n",
-                dlerror());
+        BOX64_LOG_ERROR("[procmgr] FATAL: dlsym(box64_run) failed: %s\n", dlerror());
         dlclose(h);
         return nullptr;
     }
@@ -307,7 +305,7 @@ void ApplyEnvToEnviron(const std::vector<std::string>& env) {
     
     // 强制覆盖, 防止 wine guest 代码里 putenv 又加回来
     setenv("WINEPRELOADRESERVE", "", 1);
-    fprintf(stderr, "[procmgr] force set WINEPRELOADRESERVE=''\n");
+    BOX64_LOG_DEBUG("[procmgr] force set WINEPRELOADRESERVE=''\n");
     fflush(stderr);
 }
 
@@ -473,7 +471,7 @@ pid_t ForkWithIo(bool need_pipe,
 
     if (pid == 0) {
         if (GetBox64LogLevel() >= 1) {
-            fprintf(stderr, "[procmgr child] ENTER pid=%d\n", getpid());
+            BOX64_LOG_INFO("[procmgr child] ENTER pid=%d\n", getpid());
             fflush(stderr);
         }
         // ---- child ----
@@ -509,9 +507,7 @@ pid_t ForkWithIo(bool need_pipe,
                 if (fl >= 0) fcntl(f.target_fd, F_SETFD, fl & ~FD_CLOEXEC);
             } else {
                 if (dup2(f.source_fd, f.target_fd) < 0) {
-                    fprintf(stderr,
-                        "[procmgr child] dup2(%d -> %d) failed: %s\n",
-                        f.source_fd, f.target_fd, strerror(errno));
+                    BOX64_LOG_ERROR("[procmgr child] dup2(%d -> %d) failed: %s\n", f.source_fd, f.target_fd, strerror(errno));
                     _exit(124);
                 }
                 close(f.source_fd);
@@ -519,8 +515,7 @@ pid_t ForkWithIo(bool need_pipe,
                 if (fl >= 0) fcntl(f.target_fd, F_SETFD, fl & ~FD_CLOEXEC);
             }
             keep_target_fds.push_back(f.target_fd);
-            fprintf(stderr, "[procmgr child] inherited fd ready: %d\n",
-                    f.target_fd);
+            BOX64_LOG_DEBUG("[procmgr child] inherited fd ready: %d\n", f.target_fd);
         }
         // ================ 先注释掉这行 ================
         CloseInheritedFdsExceptList(STDOUT_FILENO, STDERR_FILENO, keep_target_fds);
@@ -529,22 +524,21 @@ pid_t ForkWithIo(bool need_pipe,
         // =============================================
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
-            fprintf(stderr, "chdir(%s) failed: %s\n",
-                    cwd.c_str(), strerror(errno));
+            BOX64_LOG_DEBUG("chdir(%s) failed: %s\n", cwd.c_str(), strerror(errno));
         }
     
-        fprintf(stderr, "[procmgr child] about to reset signals\n");
+        BOX64_LOG_DEBUG("[procmgr child] about to reset signals\n");
         fflush(stderr);
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
     
-        fprintf(stderr, "[procmgr child] signals reset, cwd='%s'\n", cwd.c_str());
+        BOX64_LOG_DEBUG("[procmgr child] signals reset, cwd='%s'\n", cwd.c_str());
         fflush(stderr);
     
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
-            fprintf(stderr, "chdir(%s) failed: %s\n", cwd.c_str(), strerror(errno));
+            BOX64_LOG_ERROR("chdir(%s) failed: %s\n", cwd.c_str(), strerror(errno));
         }
     
-        fprintf(stderr, "[procmgr child] about to return 0\n");
+        BOX64_LOG_DEBUG("[procmgr child] about to return 0\n");
         fflush(stderr);
         return 0;
     }
@@ -603,8 +597,7 @@ pid_t SpawnNative(const SpawnRequest& req) {
         cargv.push_back(nullptr);
 
         execve(req.exe_path.c_str(), cargv.data(), envp.data());
-        fprintf(stderr, "execve(%s) failed: %s\n",
-                req.exe_path.c_str(), strerror(errno));
+        BOX64_LOG_ERROR("execve(%s) failed: %s\n", req.exe_path.c_str(), strerror(errno));
         fflush(NULL);
         _exit(127);
     }
@@ -664,9 +657,9 @@ pid_t SpawnBox64(const SpawnRequest& req) {
 
         // SpawnBox64 child 分支里的 argv dump:
         if (GetBox64LogLevel() >= 1) {
-            fprintf(stderr, "[procmgr] box64 argv (argc=%d):\n", total_argc);
+            BOX64_LOG_INFO("[procmgr] box64 argv (argc=%d):\n", total_argc);
             for (int i = 0; i < total_argc; i++) {
-                fprintf(stderr, "  argv[%d] = %s\n", i, argv2[i]);
+                BOX64_LOG_INFO("  argv[%d] = %s\n", i, argv2[i]);
             }
             fflush(stderr);
         }
@@ -674,15 +667,13 @@ pid_t SpawnBox64(const SpawnRequest& req) {
         void* handle = nullptr;
         Box64RunFn fn = LoadBox64RunInChild(&handle);
         if (!fn) {
-            fprintf(stderr, "[procmgr] cannot resolve box64_run, exit 125\n");
+            BOX64_LOG_ERROR("[procmgr] cannot resolve box64_run, exit 125\n");
             fflush(stderr);
             _exit(125);
         }
 
         int rc = fn(total_argc, argv2.data(), (const char**)environ);
-        fprintf(stderr,
-            "[procmgr] box64_run returned %d (0x%x), exit with %d\n",
-            rc, rc, rc & 0xFF);
+        BOX64_LOG_INFO("[procmgr] box64_run returned %d (0x%x), exit with %d\n", rc, rc, rc & 0xFF);
         fflush(NULL);
         _exit(rc & 0xFF);
     }
@@ -736,9 +727,9 @@ pid_t SpawnTar(const SpawnRequest& req) {
         }
 
         if (GetBox64LogLevel() >= 1) {
-            fprintf(stderr, "[procmgr] builtin '%s' argv (argc=%d):\n", "tar", total_argc);
+            BOX64_LOG_INFO("[procmgr] builtin '%s' argv (argc=%d):\n", "tar", total_argc);
             for (int i = 0; i < total_argc; i++) {
-                fprintf(stderr, "  argv[%d] = %s\n", i, argv2[i]);
+                BOX64_LOG_INFO("  argv[%d] = %s\n", i, argv2[i]);
             }
             fflush(stderr);
         }
@@ -756,22 +747,22 @@ pid_t SpawnTar(const SpawnRequest& req) {
                 BOX64_LOG_INFO("[procmgr] dlopen '%s' ok: %s\n", "tar", p.c_str());
                 break;
             }
-            fprintf(stderr, "[procmgr] dlopen %s -> %s\n", p.c_str(), dlerror());
+            BOX64_LOG_ERROR("[procmgr] dlopen %s -> %s\n", p.c_str(), dlerror());
         }
         if (!handle) {
-            fprintf(stderr, "[procmgr] builtin '%s': cannot dlopen %s\n", "tar", "libtar.so");
+            BOX64_LOG_ERROR("[procmgr] builtin '%s': cannot dlopen %s\n", "tar", "libtar.so");
             _exit(125);
         }
 
         using EntryFn = int (*)(int, char**);
         auto fn = (EntryFn)dlsym(handle, "bsdtar_main");
         if (!fn) {
-            fprintf(stderr, "[procmgr] dlsym(%s) failed: %s\n", "bsdtar_main", dlerror());
+            BOX64_LOG_ERROR("[procmgr] dlsym(%s) failed: %s\n", "bsdtar_main", dlerror());
             _exit(126);
         }
 
         int rc = fn(total_argc, argv2.data());
-        fprintf(stderr, "[procmgr] builtin '%s' returned %d, _exit\n", "tar", rc);
+        BOX64_LOG_INFO("[procmgr] builtin '%s' returned %d, _exit\n", "tar", rc);
         fflush(NULL);
         _exit(rc & 0xFF);
     }
