@@ -146,18 +146,18 @@ export struct DebugPage {
     }
   }
 
-  private async secWayland(): Promise<void> {
-    this.append('===== WAYLAND =====');
-    const wlSvc = WaylandService.getInstance();
-    this.append(`server ready   = ${wlSvc.isServerReady()}`);
-    this.append(`sock path      = ${wlSvc.getSockPath()}`);
-    // this.append(`current appId  = ${wlSvc.getCurrentAppId() ?? '(none)'}`);
-    const sz = wlSvc.getLatestBufferSize();
-    this.append(`latest buffer  = ${sz.w}x${sz.h}`);
-    const env = wlSvc.getWaylandEnv();
-    this.append('wayland env:');
-    for (const e of env) this.append(`  ${e}`);
-  }
+  // private async secWayland(): Promise<void> {
+  //   this.append('===== WAYLAND =====');
+  //   const wlSvc = WaylandService.getInstance();
+  //   this.append(`server ready   = ${wlSvc.isServerReady()}`);
+  //   this.append(`sock path      = ${wlSvc.getSockPath()}`);
+  //   // this.append(`current appId  = ${wlSvc.getCurrentAppId() ?? '(none)'}`);
+  //   const sz = wlSvc.getLatestBufferSize();
+  //   this.append(`latest buffer  = ${sz.w}x${sz.h}`);
+  //   const env = wlSvc.getWaylandEnv();
+  //   this.append('wayland env:');
+  //   for (const e of env) this.append(`  ${e}`);
+  // }
 
   private async secResources(): Promise<void> {
     this.append('===== RESOURCES =====');
@@ -1069,7 +1069,7 @@ export struct DebugPage {
     try {
       await this.secEnv();          this.append('');
       await this.secWineFiles();    this.append('');
-      await this.secWayland();      this.append('');
+      // await this.secWayland();      this.append('');
       await this.secResources();    this.append('');
       await this.secBox64();        this.append('');
       await this.secWineVersion();  this.append('');
@@ -1112,10 +1112,10 @@ export struct DebugPage {
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
           .onClick((): void => { this.runOne((): Promise<void> => this.secWineFiles()); })
-        Button('Wayland').fontSize(12).height(30)
-          .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
-          .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
-          .onClick((): void => { this.runOne((): Promise<void> => this.secWayland()); })
+        // Button('Wayland').fontSize(12).height(30)
+        //   .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
+        //   .backgroundColor(Theme.HM_BLUE).enabled(!this.running)
+        //   .onClick((): void => { this.runOne((): Promise<void> => this.secWayland()); })
         Button('资源').fontSize(12).height(30)
           .padding({ left: 14, right: 14 }).margin({ right: 8, bottom: 8 })
           .backgroundColor(Theme.HM_BLUE).enabled(!this.running)

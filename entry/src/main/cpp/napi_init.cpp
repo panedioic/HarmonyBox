@@ -20,6 +20,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setStateCallback",    nullptr, clientnapi::SetStateCallback,   nullptr,nullptr,nullptr, napi_default,nullptr},
         { "setClientConnectCallback",    nullptr, clientnapi::SetClientConnectCallback,    nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setClientDisconnectCallback", nullptr, clientnapi::SetClientDisconnectCallback, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "bindXComponentClient", nullptr, BindXComponentClient, nullptr, nullptr, nullptr, napi_default, nullptr },
 
         // ---- exec / cli ----
         {"execCapture",         nullptr, clientnapi::ExecCapture,        nullptr,nullptr,nullptr, napi_default,nullptr},

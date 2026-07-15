@@ -344,7 +344,7 @@ void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
         int32_t bufH = wl_shm_buffer_get_height(shm);
         int32_t stride = wl_shm_buffer_get_stride(shm);
 
-        WindowGeom g = self->GetWindowGeometry(surfRes);
+       WindowGeom g = self->GetWindowGeometry(surfRes);
         int32_t srcX = 0, srcY = 0;
         int32_t outW = bufW, outH = bufH;
         if (g.valid) {
@@ -359,29 +359,28 @@ void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
 
         wl_shm_buffer_begin_access(shm);
         const uint8_t* src = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm));
+
         {
-            // 注意: latestPixels_/latestW_/latestH_ 在 7-B 才会移到 ctx.
-            // 现在先保持全局, 因为 XComponent 侧还只认单 client.
-            std::lock_guard<std::mutex> lk(self->frameMutex_);
+            // ★ 写到 ctx 的 mutex/latestPixels
+            std::lock_guard<std::mutex> lk(ctx->frameMutex);
             const int dstStride = outW * 4;
-            self->latestPixels_.resize(dstStride * outH);
+            ctx->latestPixels.resize(dstStride * outH);
             if (srcX == 0 && srcY == 0 && outW == bufW && outH == bufH
                 && stride == bufW * 4) {
-                std::memcpy(self->latestPixels_.data(), src, stride * outH);
+                std::memcpy(ctx->latestPixels.data(), src, stride * outH);
             } else {
                 for (int row = 0; row < outH; ++row) {
                     const uint8_t* srcRow = src + (srcY + row) * stride + srcX * 4;
-                    std::memcpy(self->latestPixels_.data() + row * dstStride,
+                    std::memcpy(ctx->latestPixels.data() + row * dstStride,
                                 srcRow, dstStride);
                 }
             }
-            self->latestW_ = outW;
-            self->latestH_ = outH;
-            self->dirty_ = true;
+            ctx->latestW = outW;
+            ctx->latestH = outH;
+                ctx->dirty.store(true);
         }
         wl_shm_buffer_end_access(shm);
 
-        // ★ 尺寸变化去抖: 用 ctx 的 lastNotified
         if (ctx->lastNotifiedW != outW || ctx->lastNotifiedH != outH) {
             ctx->lastNotifiedW = outW;
             ctx->lastNotifiedH = outH;
@@ -434,12 +433,17 @@ void WaylandServer::surface_frame(wl_client* client, wl_resource* surfRes, uint3
 void WaylandServer::surface_destroy(wl_client*, wl_resource* surfRes) { wl_resource_destroy(surfRes); }
 void WaylandServer::surface_damage(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
 
-bool WaylandServer::TakeLatestFrame(std::vector<uint8_t>& out, int& w, int& h) {
-    std::lock_guard<std::mutex> lk(frameMutex_);
-    if (!dirty_) return false;
-    out = latestPixels_;
-    w = latestW_; h = latestH_;
-    dirty_ = false;
+bool WaylandServer::TakeLatestFrame(const std::string& clientId,
+                                     std::vector<uint8_t>& out,
+                                     int& w, int& h) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx) return false;
+    std::lock_guard<std::mutex> lk(ctx->frameMutex);
+    bool expected = true;
+    if (!ctx->dirty.compare_exchange_strong(expected, false)) return false;
+    out = ctx->latestPixels;
+    w = ctx->latestW;
+    h = ctx->latestH;
     return true;
 }
 
@@ -698,10 +702,13 @@ void WaylandServer::ResetFirstCommit() {
     }
 }
 
-void WaylandServer::GetLatestSize(int& w, int& h) {
-    std::lock_guard<std::mutex> lk(frameMutex_);
-    w = latestW_;
-    h = latestH_;
+void WaylandServer::GetLatestSize(const std::string& clientId,
+                                   int& w, int& h) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx) { w = 0; h = 0; return; }
+    std::lock_guard<std::mutex> lk(ctx->frameMutex);
+    w = ctx->latestW;
+    h = ctx->latestH;
 }
 
 // for remove csd border

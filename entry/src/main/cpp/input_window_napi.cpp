@@ -151,9 +151,15 @@ napi_value SetSizeCallback(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-napi_value GetLatestSize(napi_env env, napi_callback_info /*info*/) {
+napi_value GetLatestSize(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
     int w = 0, h = 0;
-    WaylandServer::GetInstance()->GetLatestSize(w, h);
+    WaylandServer::GetInstance()->GetLatestSize(cid, w, h);
+
     napi_value result, vw, vh;
     napi_create_object(env, &result);
     napi_create_int32(env, w, &vw);

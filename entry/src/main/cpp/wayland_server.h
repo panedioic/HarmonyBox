@@ -24,7 +24,7 @@ public:
     static WaylandServer* GetInstance();
     bool Start(const std::string& socketPath);
     void Stop();
-    bool TakeLatestFrame(std::vector<uint8_t>& outPixels, int& w, int& h);
+    bool TakeLatestFrame(const std::string& clientId, std::vector<uint8_t>& outPixels, int& w, int& h);
     void ResetFirstCommit();
     
     void SetStateCallback(StateCb cb) { stateCb_ = std::move(cb); }
@@ -75,7 +75,7 @@ public:
     void SetSizeCallback(std::function<void(const std::string&, int, int)> cb) {
         sizeCallback_ = std::move(cb);
     }
-    void GetLatestSize(int& w, int& h);
+    void GetLatestSize(const std::string& clientId, int& w, int& h);
     
     // remove csd border
     struct WindowGeom {
@@ -176,12 +176,6 @@ private:
     wl_display* display_ = nullptr;
     std::thread loopThread_;
     std::atomic<bool> running_{false};
-
-    std::mutex frameMutex_;
-    std::vector<uint8_t> latestPixels_;
-    int latestW_ = 0;
-    int latestH_ = 0;
-    std::atomic<bool> dirty_{false};
     
     StateCb stateCb_;
 

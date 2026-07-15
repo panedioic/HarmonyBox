@@ -62,6 +62,8 @@ export const stopAll: () => void;
 /** 注册 GUI 客户端状态变化回调,目前会收到 "active" / "exited"。 */
 export const setStateCallback: (cb: (state: string) => void) => void;
 
+export const bindXComponentClient: (xcId: string, clientId: string) => void;
+
 // ============ 旧 CLI / exec API ============
 
 /**
@@ -173,7 +175,7 @@ export const sendMouseHover: (inside: boolean) => void;
 // ============ 窗口事件 ============
 
 export const setSizeCallback: (cb: (clientId: string, w: number, h: number) => void) => void;
-export const getLatestSize: () => WlSize;
+export const getLatestSize: (clientId: string) => { w: number; h: number };
 
 export const setMoveCallback: (cb: () => void) => void;
 export const setMaximizeCallback: (cb: () => void) => void;

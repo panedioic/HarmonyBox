@@ -56,35 +56,50 @@ static void linkCheck(GLuint p) {
 }
 
 bool EglRenderer::Init(OHNativeWindow* w, int width, int height) {
-    window_ = w; width_ = width; height_ = height;
-    
-//    eglDisp_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-//    eglInitialize(eglDisp_, nullptr, nullptr);
-    eglDisp_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (eglDisp_ == EGL_NO_DISPLAY) { OH_LOG_ERROR(LOG_APP, "no egl display"); return false; }
-    EGLint major = 0, minor = 0;
-    if (!eglInitialize(eglDisp_, &major, &minor)) {
-        OH_LOG_ERROR(LOG_APP, "eglInitialize failed 0x%{public}x", eglGetError()); return false;
+    // ★ 幂等: 已经在跑就先关掉
+    if (running_.load()) {
+        OH_LOG_WARN(LOG_APP, "EglRenderer::Init re-entered, shutting down previous");
+        Shutdown();
     }
-    OH_LOG_INFO(LOG_APP, "egl %{public}d.%{public}d", major, minor);
-    
-    EGLConfig cfg; EGLint nCfg;
-    EGLint attrs[] = { EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-                       EGL_RED_SIZE,8, EGL_GREEN_SIZE,8, EGL_BLUE_SIZE,8, EGL_ALPHA_SIZE,8,
-                       EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE };
-    eglChooseConfig(eglDisp_, attrs, &cfg, 1, &nCfg);
-    EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    eglCtx_ = eglCreateContext(eglDisp_, cfg, EGL_NO_CONTEXT, ctxAttrs);
-    // ↓↓↓ 关键：OHOS 上 EGLNativeWindowType 是 unsigned long
-    eglSurf_ = eglCreateWindowSurface(eglDisp_, cfg,
-                                      reinterpret_cast<EGLNativeWindowType>(window_),
-                                      nullptr);
-    
-    if (eglSurf_ == EGL_NO_SURFACE) {
-        OH_LOG_ERROR(LOG_APP, "eglCreateWindowSurface failed 0x%{public}x", eglGetError());
+
+    window_ = w;
+    width_ = width;
+    height_ = height;
+
+    eglDisp_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (eglDisp_ == EGL_NO_DISPLAY) {
+        OH_LOG_ERROR(LOG_APP, "no egl display");
         return false;
     }
-    
+    EGLint major = 0, minor = 0;
+    if (!eglInitialize(eglDisp_, &major, &minor)) {
+        OH_LOG_ERROR(LOG_APP, "eglInitialize failed 0x%{public}x", eglGetError());
+        return false;
+    }
+    OH_LOG_INFO(LOG_APP, "egl %{public}d.%{public}d cid=%{public}s",
+                major, minor, clientId_.c_str());
+
+    EGLConfig cfg;
+    EGLint nCfg;
+    EGLint attrs[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_NONE
+    };
+    eglChooseConfig(eglDisp_, attrs, &cfg, 1, &nCfg);
+
+    EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+    eglCtx_ = eglCreateContext(eglDisp_, cfg, EGL_NO_CONTEXT, ctxAttrs);
+    eglSurf_ = eglCreateWindowSurface(eglDisp_, cfg,
+        reinterpret_cast<EGLNativeWindowType>(window_), nullptr);
+
+    if (eglSurf_ == EGL_NO_SURFACE) {
+        OH_LOG_ERROR(LOG_APP, "eglCreateWindowSurface failed 0x%{public}x",
+                     eglGetError());
+        return false;
+    }
+
     running_ = true;
     th_ = std::thread(&EglRenderer::RenderLoop, this);
     return true;
@@ -96,17 +111,16 @@ void EglRenderer::RenderLoop() {
         return;
     }
 
-    // 着色器
     GLuint vs = compile(GL_VERTEX_SHADER, kVS);
     GLuint fs = compile(GL_FRAGMENT_SHADER, kFS);
     prog_ = glCreateProgram();
     glAttachShader(prog_, vs); glAttachShader(prog_, fs);
     glLinkProgram(prog_);
+    linkCheck(prog_);
 
-    // 全屏 quad
     float quad[] = {
-        -1,-1, 0,1,   1,-1, 1,1,   -1,1, 0,0,
-         1,-1, 1,1,   1, 1, 1,0,   -1,1, 0,0,
+        -1,-1, 0,1,   1,-1, 1,1,   -1, 1, 0,0,
+         1,-1, 1,1,   1, 1, 1,0,   -1, 1, 0,0,
     };
     glGenBuffers(1, &vbo_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
@@ -116,31 +130,34 @@ void EglRenderer::RenderLoop() {
     glBindTexture(GL_TEXTURE_2D, tex_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    
+
     FpsCounter fps("render");
 
     std::vector<uint8_t> px;
     int fw = 0, fh = 0;
 
-    while (running_) {
-        if (WaylandServer::GetInstance()->TakeLatestFrame(px, fw, fh) && fw>0 && fh>0) {
+    while (running_.load()) {
+        // ★ 按 clientId 拉自己的帧
+        if (!clientId_.empty() &&
+            WaylandServer::GetInstance()->TakeLatestFrame(clientId_, px, fw, fh)
+            && fw > 0 && fh > 0) {
             glBindTexture(GL_TEXTURE_2D, tex_);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fw, fh, 0,
                          GL_RGBA, GL_UNSIGNED_BYTE, px.data());
         }
 
-        // glViewport(0, 0, width_, height_);
         const int vpW = width_.load();
         const int vpH = height_.load();
         glViewport(0, 0, vpW, vpH);
-        glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(prog_);
         glBindBuffer(GL_ARRAY_BUFFER, vbo_);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,16,(void*)0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, (void*)0);
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,16,(void*)8);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, (void*)8);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tex_);
         glUniform1i(glGetUniformLocation(prog_, "uTex"), 0);
@@ -152,8 +169,13 @@ void EglRenderer::RenderLoop() {
     }
 }
 
+void EglRenderer::OnResize(int w, int h) {
+    width_ = w;
+    height_ = h;
+}
+
 void EglRenderer::Shutdown() {
-    running_ = false;
+    if (!running_.exchange(false)) return;   // 幂等
     if (th_.joinable()) th_.join();
     if (eglDisp_ != EGL_NO_DISPLAY) {
         eglMakeCurrent(eglDisp_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -164,4 +186,8 @@ void EglRenderer::Shutdown() {
         eglCtx_  = EGL_NO_CONTEXT;
         eglSurf_ = EGL_NO_SURFACE;
     }
+    window_ = nullptr;
+    prog_ = 0;
+    vbo_ = 0;
+    tex_ = 0;
 }

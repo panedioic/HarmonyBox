@@ -73,7 +73,11 @@ struct AppRunner {
       })
         .width('100%').height('100%')
         .onLoad((): void => {
-          // TODO(multi-client): wl.sendMouseHover(clientId, true)
+          // ★ 关键: 告知 native 层这个 XComponent 属于哪个 wayland client
+          const xcId = `wl_xc_${this.instanceId}`;
+          wl.bindXComponentClient(xcId, this.clientId);
+          console.info(`HBOX_XC_BIND xcId=${xcId} cid=${this.clientId}`);
+
           wl.sendMouseHover(true);
         })
     }

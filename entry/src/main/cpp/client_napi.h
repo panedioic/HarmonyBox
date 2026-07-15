@@ -1,5 +1,6 @@
 #pragma once
 #include "napi/native_api.h"
+#include "plugin_manager.h"
 
 namespace clientnapi {
 
@@ -19,3 +20,5 @@ napi_value SetClientConnectCallback(napi_env env, napi_callback_info info);
 napi_value SetClientDisconnectCallback(napi_env env, napi_callback_info info);
 
 } // namespace clientnapi
+
+napi_value BindXComponentClient(napi_env env, napi_callback_info info);

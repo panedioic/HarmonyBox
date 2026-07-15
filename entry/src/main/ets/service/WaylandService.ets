@@ -176,9 +176,10 @@ export class WaylandService {
   // =========================================================
   // buffer / configure  (clientId 预留)
   // =========================================================
-  getLatestBufferSize(_clientId?: string): WlBufferSize {
+  getLatestBufferSize(clientId: string): WlBufferSize {
+    if (!clientId) return { w: 0, h: 0 };
     try {
-      return wl.getLatestSize() as WlBufferSize;
+      return wl.getLatestSize(clientId) as WlBufferSize;
     } catch (e) {
       return { w: 0, h: 0 };
     }

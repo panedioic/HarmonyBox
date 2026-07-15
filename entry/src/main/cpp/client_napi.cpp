@@ -422,3 +422,13 @@ napi_value SetClientDisconnectCallback(napi_env env, napi_callback_info info) {
 }
 
 } // namespace clientnapi
+
+napi_value BindXComponentClient(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string xcId = napiutil::GetStringArg(env, args[0]);
+    std::string cid  = napiutil::GetStringArg(env, args[1]);
+    PluginManager::GetInstance()->BindXComponentClient(xcId, cid);
+    return nullptr;
+}

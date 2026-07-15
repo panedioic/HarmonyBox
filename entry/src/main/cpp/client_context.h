@@ -2,8 +2,10 @@
 #include <wayland-server-core.h>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <sys/types.h>
+#include <vector>
 
 struct ClientContext {
     std::string   id;             // "c1", "c2", ... 上抛给 ArkTS
@@ -17,6 +19,13 @@ struct ClientContext {
     // 尺寸通知去抖
     int lastNotifiedW = -1;
     int lastNotifiedH = -1;
+
+    // ★ 新增: per-client 帧缓冲
+    std::mutex           frameMutex;
+    std::vector<uint8_t> latestPixels;
+    int  latestW = 0;
+    int  latestH = 0;
+    std::atomic<bool> dirty{false};
 
     // wl_listener trampoline: destroy 事件. 通过 wl_container_of 反查 ctx
     wl_listener destroyListener{};
