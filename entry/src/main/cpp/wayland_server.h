@@ -72,7 +72,9 @@ public:
     
 
     // fix window size
-    void SetSizeCallback(std::function<void(int,int)> cb) { sizeCallback_ = std::move(cb); }
+    void SetSizeCallback(std::function<void(const std::string&, int, int)> cb) {
+        sizeCallback_ = std::move(cb);
+    }
     void GetLatestSize(int& w, int& h);
     
     // remove csd border
@@ -194,7 +196,7 @@ private:
     uint32_t NowMs();
     
     // fix window size
-    std::function<void(int,int)> sizeCallback_;
+    std::function<void(const std::string&, int, int)> sizeCallback_;
     
     // for remove csd border
     std::mutex geomMutex_;

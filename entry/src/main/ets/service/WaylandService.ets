@@ -24,8 +24,7 @@ export class WaylandService {
     return WaylandService.instance;
   }
 
-  // unused
-  // private ctx: common.UIAbilityContext | null = null;
+  private ctx: common.UIAbilityContext | null = null;
 
   // ===== state =====
   private serverReady: boolean = false;
@@ -55,25 +54,29 @@ export class WaylandService {
   // =========================================================
   init(ctx: common.UIAbilityContext): boolean {
     if (this.serverReady) return true;
-    // this.ctx = ctx;
+    this.ctx = ctx;
     this.sockPath = `${ctx.filesDir}/wl-sock`;
 
     const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = prefs.scale;
     this.useNativeDecor = prefs.useNativeDecor;
 
-    // 'active' = 客户端连上; 'exited' = 客户端退出
-    wl.setStateCallback((s: string): void => {
-      console.info(`[WL] state=${s}`);
-      if (s === 'active') {
-        if (this.connectListener) this.connectListener(DEFAULT_CLIENT_ID);
-      } else if (s === 'exited') {
-        if (this.disconnectListener) this.disconnectListener(DEFAULT_CLIENT_ID);
-      }
+    // ★ 新: 显式带 clientId
+    wl.setClientConnectCallback((cid: string): void => {
+      console.info(`[WL] connect cid=${cid}`);
+      if (this.connectListener) this.connectListener(cid);
     });
-    wl.setSizeCallback((w: number, h: number): void => {
-      if (this.commitListener) this.commitListener(DEFAULT_CLIENT_ID, w, h);
+    wl.setClientDisconnectCallback((cid: string): void => {
+      console.info(`[WL] disconnect cid=${cid}`);
+      if (this.disconnectListener) this.disconnectListener(cid);
     });
+
+    // sizeCallback 现在带 cid
+    wl.setSizeCallback((cid: string, w: number, h: number): void => {
+      if (this.commitListener) this.commitListener(cid, w, h);
+    });
+
+    // 其余回调暂时保持原样, 7-D 再改
     wl.setMoveCallback((): void => {
       if (this.moveListener) this.moveListener(DEFAULT_CLIENT_ID);
     });
@@ -89,6 +92,12 @@ export class WaylandService {
     wl.setMinimizeCallback((): void => {
       if (this.minimizeListener) this.minimizeListener(DEFAULT_CLIENT_ID);
     });
+
+    // ★ setStateCallback 桥接删除
+    // wl.setStateCallback((s: string): void => {
+    //     if (s === 'active')      this.connectListener?.(DEFAULT_CLIENT_ID);
+    //     else if (s === 'exited') this.disconnectListener?.(DEFAULT_CLIENT_ID);
+    // });
 
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;

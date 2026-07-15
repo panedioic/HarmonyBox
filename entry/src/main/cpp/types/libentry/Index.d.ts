@@ -172,7 +172,7 @@ export const sendMouseHover: (inside: boolean) => void;
 
 // ============ 窗口事件 ============
 
-export const setSizeCallback: (cb: (w: number, h: number) => void) => void;
+export const setSizeCallback: (cb: (clientId: string, w: number, h: number) => void) => void;
 export const getLatestSize: () => WlSize;
 
 export const setMoveCallback: (cb: () => void) => void;
@@ -258,3 +258,6 @@ export const tarExtract: (archive: string, destDir: string) => Promise<TarResult
 export const tarCreate:  (archive: string, srcDir: string)  => Promise<TarResult>;
 export const tarExtractFd: (fd: number, offset: number, length: number, destDir: string) => Promise<TarResult>;
 export const tarCreateFd:  (fd: number, srcDir: string) => Promise<TarResult>;
+
+export const setClientConnectCallback: (cb: (clientId: string) => void) => void;
+export const setClientDisconnectCallback: (cb: (clientId: string) => void) => void;

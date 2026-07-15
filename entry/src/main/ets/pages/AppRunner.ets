@@ -3,7 +3,7 @@ import { OH2EVDEV, modMaskOf } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { WaylandService, WlBufferSize } from '../service/WaylandService';
 
-@Entry
+@Entry({ storage: LocalStorage.getShared() })
 @Component
 struct AppRunner {
   // 从 loadContent 传入的 LocalStorage 读取

@@ -387,7 +387,7 @@ void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
             ctx->lastNotifiedH = outH;
             OH_LOG_INFO(LOG_APP, "★BUF_NEW ctx=%{public}s %{public}dx%{public}d",
                         ctx->id.c_str(), outW, outH);
-            if (self->sizeCallback_) self->sizeCallback_(outW, outH);
+            if (self->sizeCallback_) self->sizeCallback_(ctx->id, outW, outH);
         }
     } else {
         OH_LOG_INFO(LOG_APP, "★COMMIT_NON_SHM buffer=%{public}p", s->pendingBuffer);

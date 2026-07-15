@@ -11,16 +11,22 @@ napi_threadsafe_function g_unmaximizeTsfn = nullptr;
 napi_threadsafe_function g_resizeTsfn     = nullptr;
 napi_threadsafe_function g_minimizeTsfn   = nullptr;
 
-struct SizeEvent { int w; int h; };
+// 事件结构加个 id
+struct SizeEvent {
+    std::string id;
+    int w;
+    int h;
+};
 
 void SizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
     SizeEvent* ev = static_cast<SizeEvent*>(data);
     if (env && jsCb && ev) {
-        napi_value undef, args[2];
+        napi_value undef, args[3];
         napi_get_undefined(env, &undef);
-        napi_create_int32(env, ev->w, &args[0]);
-        napi_create_int32(env, ev->h, &args[1]);
-        napi_call_function(env, undef, jsCb, 2, args, nullptr);
+        napi_create_string_utf8(env, ev->id.c_str(), NAPI_AUTO_LENGTH, &args[0]);
+        napi_create_int32(env, ev->w, &args[1]);
+        napi_create_int32(env, ev->h, &args[2]);
+        napi_call_function(env, undef, jsCb, 3, args, nullptr);
     }
     delete ev;
 }
@@ -134,13 +140,14 @@ napi_value SetSizeCallback(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, "WLSize", NAPI_AUTO_LENGTH, &resName);
     napi_create_threadsafe_function(env, args[0], nullptr, resName,
         0, 1, nullptr, nullptr, nullptr, SizeTsfnCallJs, &g_sizeTsfn);
-
-    WaylandServer::GetInstance()->SetSizeCallback([](int w, int h) {
-        if (g_sizeTsfn) {
-            auto* ev = new SizeEvent{w, h};
-            napi_call_threadsafe_function(g_sizeTsfn, ev, napi_tsfn_blocking);
-        }
-    });
+    
+    WaylandServer::GetInstance()->SetSizeCallback(
+        [](const std::string& id, int w, int h) {
+            if (g_sizeTsfn) {
+                auto* ev = new SizeEvent{id, w, h};
+                napi_call_threadsafe_function(g_sizeTsfn, ev, napi_tsfn_blocking);
+            }
+        });
     return nullptr;
 }
 
