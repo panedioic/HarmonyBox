@@ -186,8 +186,6 @@ export class WindowManagerService {
 
   /** 创建日志窗口 (streaming stdout/exit) */
   async createLogWindow(instanceId: string, appName: string, pid: number): Promise<void> {
-    AppStorage.setOrCreate<string>('currentAppName', appName);
-    AppStorage.setOrCreate<number>('currentCliPid', pid);
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
       if (!windowStage) {
@@ -207,7 +205,14 @@ export class WindowManagerService {
         `log_${instanceId}_${Date.now()}`,
         { title, decorEnabled: true, isModal: false }
       );
-      await subWin.loadContent('pages/CliRunner');
+
+      // per-window LocalStorage
+      const storage: LocalStorage = new LocalStorage();
+      storage.setOrCreate<string>('instanceId', instanceId);
+      storage.setOrCreate<string>('appName',    appName);
+      storage.setOrCreate<number>('cliPid',     pid);
+
+      await subWin.loadContent('pages/CliRunner', storage);
 
       const w: number = 1440;
       const h: number = 960;
@@ -440,7 +445,7 @@ export class WindowManagerService {
         startW: r.width, startH: r.height
       };
       this.resizingInstanceId = inst.instanceId;
-      WaylandService.getInstance().fireHostResizeBegin(edges);
+      WaylandService.getInstance().fireHostResizeBegin(clientId, edges);   // ← 加 clientId
     } catch (e) {
       console.warn(`HBOX_WIN_RESIZE_INIT_FAIL ${JSON.stringify(e)}`);
     }
@@ -532,7 +537,6 @@ export class WindowManagerService {
         return;
       }
       const main = windowStage.getMainWindowSync();
-      AppStorage.setOrCreate<string>('currentAppName', inst.appName);
 
       const wlSvc = WaylandService.getInstance();
       const useNative: boolean = wlSvc.getUseNativeDecor();
@@ -546,9 +550,17 @@ export class WindowManagerService {
           maximizeSupported: true
         }
       );
-      await subWin.loadContent('pages/AppRunner');
 
-      // 初始尺寸: 优先用 client 已 commit 的 buffer, 否则用 fallback
+      // 每窗口独立 LocalStorage
+      const storage: LocalStorage = new LocalStorage();
+      storage.setOrCreate<string>('instanceId', inst.instanceId);
+      storage.setOrCreate<string>('appName',    inst.appName);
+      storage.setOrCreate<string>('appId',      inst.appId);
+      storage.setOrCreate<string>('clientId',   inst.clientId ?? '');
+
+      await subWin.loadContent('pages/AppRunner', storage);
+
+      // 剩下的尺寸/位置/事件挂载保持不变
       const sz: WlBufferSize = wlSvc.getLatestBufferSize(inst.clientId ?? '');
       const scale: number = wlSvc.getUiScale();
       const bufW: number = sz.w > 0 ? sz.w : 800;
@@ -581,7 +593,6 @@ export class WindowManagerService {
       this.notifyChanged();
       await subWin.showWindow();
 
-      // 兜底: 首帧已 commit 但事件早于窗口创建时, 主动调整一次
       if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
         this.firstCommitDone.add(instanceId);
         this.applyWindowSize(subWin, sz.w, sz.h);

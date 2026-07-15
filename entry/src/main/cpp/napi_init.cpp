@@ -18,6 +18,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopClient",          nullptr, clientnapi::StopClient,         nullptr,nullptr,nullptr, napi_default,nullptr},
         {"stopAll",             nullptr, clientnapi::StopAll,            nullptr,nullptr,nullptr, napi_default,nullptr},
         {"setStateCallback",    nullptr, clientnapi::SetStateCallback,   nullptr,nullptr,nullptr, napi_default,nullptr},
+        { "setClientConnectCallback",    nullptr, clientnapi::SetClientConnectCallback,    nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "setClientDisconnectCallback", nullptr, clientnapi::SetClientDisconnectCallback, nullptr, nullptr, nullptr, napi_default, nullptr },
 
         // ---- exec / cli ----
         {"execCapture",         nullptr, clientnapi::ExecCapture,        nullptr,nullptr,nullptr, napi_default,nullptr},

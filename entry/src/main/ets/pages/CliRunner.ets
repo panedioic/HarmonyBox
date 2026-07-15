@@ -4,7 +4,10 @@ import { pasteboard } from '@kit.BasicServicesKit';
 @Entry
 @Component
 struct CliRunner {
-  @State appName: string = '应用';
+  @LocalStorageProp('appName')    appName:      string = '应用';
+  @LocalStorageProp('instanceId') instanceId:   string = '';
+  @LocalStorageProp('cliPid')     cliPidStored: number = -1;
+
   @State lines: string[] = [];
   @State exited: boolean = false;
   @State exitCode: number = 0;
@@ -14,16 +17,12 @@ struct CliRunner {
   private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
-    const name = AppStorage.get<string>('currentAppName');
-    if (name) this.appName = name;
-
-    const pid = AppStorage.get<number>('currentCliPid');
-    if (typeof pid !== 'number' || pid <= 0) {
+    if (this.cliPidStored <= 0) {
       this.lines = ['[错误] 未获取到运行进程'];
       this.exited = true;
       return;
     }
-    this.pid = pid;
+    this.pid = this.cliPidStored;
 
     const sub: ProcessSubscriber = {
       onLine: (line: string): void => {
@@ -65,7 +64,6 @@ struct CliRunner {
 
   build() {
     Column() {
-      // 顶部状态条
       Row() {
         Text('▣')
           .fontSize(13)
@@ -103,7 +101,6 @@ struct CliRunner {
       .padding({ left: 12, right: 12 })
       .backgroundColor('#1F1F1F')
 
-      // 终端输出
       Scroll(this.scroller) {
         Column() {
           ForEach(this.lines, (line: string, i: number): void => {

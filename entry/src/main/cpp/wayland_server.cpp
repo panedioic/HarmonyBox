@@ -77,6 +77,80 @@ static const struct wl_output_interface k_output_impl = {
     .release = WaylandServer::wl_output_release,
 };
 
+// wl_display client_created listener trampoline
+static void OnWlClientCreated(wl_listener* /*l*/, void* data) {
+    auto* client = static_cast<wl_client*>(data);
+    auto ctx = WaylandServer::GetInstance()->GetOrCreateClientCtx(client);
+    if (ctx) {
+        OH_LOG_INFO(LOG_APP,
+            "★CLIENT_CREATED id=%{public}s pid=%{public}d",
+            ctx->id.c_str(), (int)ctx->pid);
+    }
+}
+
+// wl_client destroy listener trampoline
+static void OnWlClientDestroyed(wl_listener* listener, void* /*data*/) {
+    ClientContext* ctx = nullptr;
+    ctx = wl_container_of(listener, ctx, destroyListener);
+    if (!ctx) return;
+    std::string id = ctx->id;
+    OH_LOG_INFO(LOG_APP, "★CLIENT_DESTROYED id=%{public}s", id.c_str());
+
+    WaylandServer::GetInstance()->FireClientDisconnect(id);
+    WaylandServer::GetInstance()->EraseClientCtx(ctx->client);
+}
+
+std::shared_ptr<ClientContext>
+WaylandServer::GetOrCreateClientCtx(wl_client* c) {
+    if (!c) return nullptr;
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    auto it = clients_.find(c);
+    if (it != clients_.end()) return it->second;
+
+    auto ctx = std::make_shared<ClientContext>();
+    ctx->client = c;
+    ctx->id     = "c" + std::to_string(++clientSeq_);
+
+    // 取 pid
+    pid_t pid = -1; uid_t uid = 0; gid_t gid = 0;
+    wl_client_get_credentials(c, &pid, &uid, &gid);
+    ctx->pid = pid;
+
+    // 挂 destroy 监听
+    ctx->destroyListener.notify = OnWlClientDestroyed;
+    wl_client_add_destroy_listener(c, &ctx->destroyListener);
+
+    clients_[c] = ctx;
+    idIndex_[ctx->id] = c;
+    return ctx;
+}
+
+std::shared_ptr<ClientContext>
+WaylandServer::FindClientCtx(wl_client* c) {
+    if (!c) return nullptr;
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    auto it = clients_.find(c);
+    return (it == clients_.end()) ? nullptr : it->second;
+}
+
+std::shared_ptr<ClientContext>
+WaylandServer::FindClientCtxById(const std::string& id) {
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    auto it = idIndex_.find(id);
+    if (it == idIndex_.end()) return nullptr;
+    auto cit = clients_.find(it->second);
+    return (cit == clients_.end()) ? nullptr : cit->second;
+}
+
+void WaylandServer::EraseClientCtx(wl_client* c) {
+    if (!c) return;
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    auto it = clients_.find(c);
+    if (it == clients_.end()) return;
+    idIndex_.erase(it->second->id);
+    clients_.erase(it);
+}
+
 WaylandServer* WaylandServer::GetInstance() {
     static WaylandServer s;
     return &s;
@@ -93,6 +167,10 @@ bool WaylandServer::Start(const std::string& socketPath) {
         OH_LOG_ERROR(LOG_APP, "wl_display_create failed");
         return false;
     }
+    
+    // 注册 client 创建监听
+    clientCreatedListener_.notify = OnWlClientCreated;
+    wl_display_add_client_created_listener(display_, &clientCreatedListener_);
 
     // 用绝对路径 socket
     int fd = wl_display_add_socket_auto(display_) ?
@@ -127,7 +205,6 @@ bool WaylandServer::Start(const std::string& socketPath) {
     running_ = true;
     loopThread_ = std::thread(&WaylandServer::Loop, this);
     OH_LOG_INFO(LOG_APP, "wayland server started at %s", socketPath.c_str());
-    firstCommit_ = false;
     return true;
 }
 
@@ -142,7 +219,6 @@ void WaylandServer::Stop() {
         wl_display_destroy(display_);
         display_ = nullptr;
     }
-    firstCommit_ = false;
 }
 
 void WaylandServer::Loop() {
@@ -165,20 +241,31 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
                                               wl_resource_get_version(compositorRes), id);
     state->surface = surfRes;
     wl_resource_set_implementation(surfRes, &k_surface_impl, state,
-        [](wl_resource* r) {
-            auto* self = WaylandServer::GetInstance();
-            if (self->mainSurface_ == r) {
-                self->mainSurface_ = nullptr;
-                self->firstCommit_ = false;
-                self->lastNotifiedW_ = -1;
-                self->lastNotifiedH_ = -1;
-                OH_LOG_INFO(LOG_APP, "★MAIN_SURFACE_DESTROYED, reset state");
+    [](wl_resource* r) {
+        auto* self = WaylandServer::GetInstance();
+
+        // 谁的 mainSurface? 找到并清掉
+        {
+            std::lock_guard<std::mutex> lk(self->clientsMutex_);
+            for (auto& kv : self->clients_) {
+                auto& ctx = kv.second;
+                if (ctx->mainSurface == r) {
+                    ctx->mainSurface = nullptr;
+                    ctx->firstCommit = false;
+                    ctx->lastNotifiedW = -1;
+                    ctx->lastNotifiedH = -1;
+                    OH_LOG_INFO(LOG_APP,
+                        "★MAIN_SURFACE_DESTROYED ctx=%{public}s",
+                        ctx->id.c_str());
+                    break;
+                }
             }
-            if (self->kbFocus_ == r) self->kbFocus_ = nullptr;
-            if (self->ptrFocus_ == r) self->ptrFocus_ = nullptr;
-            auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(r));
-            delete s;
-        });
+        }
+        if (self->kbFocus_ == r) self->kbFocus_ = nullptr;
+        if (self->ptrFocus_ == r) self->ptrFocus_ = nullptr;
+        auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(r));
+        delete s;
+    });
 }
 
 void WaylandServer::compositor_create_region(wl_client* client, wl_resource* compositorRes, uint32_t id) {
@@ -193,10 +280,10 @@ void WaylandServer::surface_attach(wl_client*, wl_resource* surfRes, wl_resource
     s->pendingBuffer = buffer;
 }
 
-void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
+void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
     auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(surfRes));
 
-    // ─── 1. NULL buffer commit ───
+    // ─── 1. NULL buffer commit ─── (不变)
     if (!s->pendingBuffer) {
         static int null_count = 0;
         if (++null_count % 20 == 1) {
@@ -216,22 +303,26 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
 
     auto* self = WaylandServer::GetInstance();
 
-    // ─── 2. main surface 排他选举 ───
-    if (self->mainSurface_ == nullptr) {
-        self->mainSurface_ = surfRes;
-        // 新 client / 新 main surface: 重置一次性状态, 保证再次触发 active
-        self->firstCommit_ = false;
-        self->lastNotifiedW_ = -1;
-        self->lastNotifiedH_ = -1;
-        OH_LOG_INFO(LOG_APP, "MAIN_SET surf=%{public}p (reset firstCommit)", surfRes);
+    // ★ 拿到本次 commit 所属的 client ctx
+    auto ctx = self->GetOrCreateClientCtx(client);
+    if (!ctx) return;
+
+    // ─── 2. main surface 排他选举 (per-ctx) ───
+    if (ctx->mainSurface == nullptr) {
+        ctx->mainSurface = surfRes;
+        ctx->firstCommit = false;
+        ctx->lastNotifiedW = -1;
+        ctx->lastNotifiedH = -1;
+        OH_LOG_INFO(LOG_APP, "MAIN_SET ctx=%{public}s surf=%{public}p",
+                    ctx->id.c_str(), surfRes);
     }
 
-    // ─── 3. 非主 surface (光标/装饰): 释放 buffer + 消耗 callback 后返回 ───
-    if (self->mainSurface_ != surfRes) {
+    // ─── 3. 非主 surface 处理 (不变) ───
+    if (ctx->mainSurface != surfRes) {
         static int nonmain_count = 0;
         if (++nonmain_count % 20 == 1) {
-            OH_LOG_INFO(LOG_APP, "★COMMIT_NONMAIN surf=%{public}p main=%{public}p count=%{public}d",
-                        surfRes, self->mainSurface_, nonmain_count);
+            OH_LOG_INFO(LOG_APP, "★COMMIT_NONMAIN ctx=%{public}s surf=%{public}p main=%{public}p",
+                        ctx->id.c_str(), surfRes, ctx->mainSurface);
         }
         wl_buffer_send_release(s->pendingBuffer);
         s->currentBuffer = s->pendingBuffer;
@@ -245,14 +336,14 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         return;
     }
 
-    // ─── 4. 主窗口的正常搬运 ───
+    // ─── 4. 主窗口正常搬运 ───
+    // (SHM 拷贝逻辑不变, 但尺寸通知去抖用 ctx 的字段)
     wl_shm_buffer* shm = wl_shm_buffer_get(s->pendingBuffer);
     if (shm) {
         int32_t bufW = wl_shm_buffer_get_width(shm);
         int32_t bufH = wl_shm_buffer_get_height(shm);
         int32_t stride = wl_shm_buffer_get_stride(shm);
 
-        // ★ 按 xdg_surface.set_window_geometry 裁剪掉 CSD 阴影边距
         WindowGeom g = self->GetWindowGeometry(surfRes);
         int32_t srcX = 0, srcY = 0;
         int32_t outW = bufW, outH = bufH;
@@ -268,8 +359,9 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
 
         wl_shm_buffer_begin_access(shm);
         const uint8_t* src = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm));
-
         {
+            // 注意: latestPixels_/latestW_/latestH_ 在 7-B 才会移到 ctx.
+            // 现在先保持全局, 因为 XComponent 侧还只认单 client.
             std::lock_guard<std::mutex> lk(self->frameMutex_);
             const int dstStride = outW * 4;
             self->latestPixels_.resize(dstStride * outH);
@@ -289,23 +381,22 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         }
         wl_shm_buffer_end_access(shm);
 
-        // 把 buffer 尺寸通知到 ArkTS
-        if (self->lastNotifiedW_ != outW || self->lastNotifiedH_ != outH) {
-            self->lastNotifiedW_ = outW;
-            self->lastNotifiedH_ = outH;
-            OH_LOG_INFO(LOG_APP, "★BUF_NEW %{public}dx%{public}d", outW, outH);
+        // ★ 尺寸变化去抖: 用 ctx 的 lastNotified
+        if (ctx->lastNotifiedW != outW || ctx->lastNotifiedH != outH) {
+            ctx->lastNotifiedW = outW;
+            ctx->lastNotifiedH = outH;
+            OH_LOG_INFO(LOG_APP, "★BUF_NEW ctx=%{public}s %{public}dx%{public}d",
+                        ctx->id.c_str(), outW, outH);
             if (self->sizeCallback_) self->sizeCallback_(outW, outH);
         }
     } else {
-        OH_LOG_INFO(LOG_APP, "★COMMIT_NON_SHM buffer=%{public}p (DMA-BUF?)",
-                    s->pendingBuffer);
+        OH_LOG_INFO(LOG_APP, "★COMMIT_NON_SHM buffer=%{public}p", s->pendingBuffer);
     }
 
     wl_buffer_send_release(s->pendingBuffer);
     s->currentBuffer = s->pendingBuffer;
     s->pendingBuffer = nullptr;
 
-    // 帧回调
     uint32_t now = (uint32_t)(time(nullptr) * 1000);
     for (auto* cb : s->frameCallbacks) {
         wl_callback_send_done(cb, now);
@@ -316,14 +407,21 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     static FpsCounter commitFps("commit");
     commitFps.Tick();
 
-    // 首帧到达 → 通知 UI
-    if (self->MarkFirstCommit()) {
-        OH_LOG_INFO(LOG_APP, "★FIRST_COMMIT_REACHED surf=%{public}p, firing active",
-                    surfRes);
+    // ─── 5. 首帧: 触发 client connect ───
+    if (ctx->MarkFirstCommit()) {
+        OH_LOG_INFO(LOG_APP, "★FIRST_COMMIT ctx=%{public}s surf=%{public}p",
+                    ctx->id.c_str(), surfRes);
         self->SetKeyboardFocus(surfRes);
         self->SetPointerFocus(surfRes);
+
+        // ★ 新事件: onClientConnect(id)
+        self->FireClientConnect(ctx->id);
+
+        // ★ 老事件: FireState("active") 保持兼容
+        // 目前 ArkTS WaylandService 里 setStateCallback 收到 "active" 转成
+        // onClientConnect(DEFAULT_CLIENT_ID). 7-B 移除这段桥接后就不再需要
+        // 触发 "active". 现在保留.
         self->FireState("active");
-        OH_LOG_INFO(LOG_APP, "★FIRE_STATE returned");
     }
 }
 
@@ -588,12 +686,16 @@ void WaylandServer::DispatchMouseLeave() {
 // 修改或追加 ResetFirstCommit 的实现：
 // 确保带上 WaylandServer:: 作用域
 void WaylandServer::ResetFirstCommit() {
-    firstCommit_ = false;
-    mainSurface_ = nullptr;
     kbFocus_ = nullptr;
     ptrFocus_ = nullptr;
-    lastNotifiedW_ = -1;   // ★
-    lastNotifiedH_ = -1;   // ★
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    for (auto& kv : clients_) {
+        auto& ctx = kv.second;
+        ctx->mainSurface = nullptr;
+        ctx->firstCommit = false;
+        ctx->lastNotifiedW = -1;
+        ctx->lastNotifiedH = -1;
+    }
 }
 
 void WaylandServer::GetLatestSize(int& w, int& h) {

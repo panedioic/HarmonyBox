@@ -46,7 +46,7 @@ export class WaylandService {
   private minimizeListener:   ClientIdListener | null = null;
 
   // ===== host-side resize drag =====
-  private hostResizeBeginListener: ((edges: number) => void) | null = null;
+  private hostResizeBeginListeners: Map<string, (edges: number) => void> = new Map();
   private hostResizeDragListener:  HostResizeDragListener | null = null;
   private hostResizeEndListener:   (() => void) | null = null;
 
@@ -142,8 +142,9 @@ export class WaylandService {
   // =========================================================
   // host-side resize drag
   // =========================================================
-  setHostResizeBeginListener(cb: ((edges: number) => void) | null): void {
-    this.hostResizeBeginListener = cb;
+  setHostResizeBeginListener(clientId: string, cb: ((edges: number) => void) | null): void {
+    if (cb) this.hostResizeBeginListeners.set(clientId, cb);
+    else this.hostResizeBeginListeners.delete(clientId);
   }
   setHostResizeDragListener(cb: HostResizeDragListener | null): void {
     this.hostResizeDragListener = cb;
@@ -152,8 +153,9 @@ export class WaylandService {
     this.hostResizeEndListener = cb;
   }
 
-  fireHostResizeBegin(edges: number): void {
-    if (this.hostResizeBeginListener) this.hostResizeBeginListener(edges);
+  fireHostResizeBegin(clientId: string, edges: number): void {
+    const cb = this.hostResizeBeginListeners.get(clientId);
+    if (cb) cb(edges);
   }
   notifyHostResizeDrag(edges: number, dxPx: number, dyPx: number): void {
     if (this.hostResizeDragListener) this.hostResizeDragListener(edges, dxPx, dyPx);

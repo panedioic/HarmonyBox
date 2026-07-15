@@ -358,3 +358,67 @@ napi_value SetCliCallback(napi_env env, napi_callback_info info) {
 }
 
 } // namespace clientnapi
+
+namespace {
+napi_threadsafe_function g_clientConnectTsfn    = nullptr;
+napi_threadsafe_function g_clientDisconnectTsfn = nullptr;
+
+void StringTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    std::string* s = static_cast<std::string*>(data);
+    if (env && jsCb && s) {
+        napi_value undef, arg;
+        napi_get_undefined(env, &undef);
+        napi_create_string_utf8(env, s->c_str(), NAPI_AUTO_LENGTH, &arg);
+        napi_call_function(env, undef, jsCb, 1, &arg, nullptr);
+    }
+    delete s;
+}
+} // anonymous
+
+namespace clientnapi {
+
+napi_value SetClientConnectCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_clientConnectTsfn) {
+        napi_release_threadsafe_function(g_clientConnectTsfn, napi_tsfn_release);
+        g_clientConnectTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLClientConnect", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, StringTsfnCallJs, &g_clientConnectTsfn);
+
+    WaylandServer::GetInstance()->SetClientConnectCallback(
+        [](const std::string& id) {
+            if (g_clientConnectTsfn) {
+                napi_call_threadsafe_function(g_clientConnectTsfn,
+                    new std::string(id), napi_tsfn_blocking);
+            }
+        });
+    return nullptr;
+}
+
+napi_value SetClientDisconnectCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1; napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_clientDisconnectTsfn) {
+        napi_release_threadsafe_function(g_clientDisconnectTsfn, napi_tsfn_release);
+        g_clientDisconnectTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLClientDisconnect", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, StringTsfnCallJs, &g_clientDisconnectTsfn);
+
+    WaylandServer::GetInstance()->SetClientDisconnectCallback(
+        [](const std::string& id) {
+            if (g_clientDisconnectTsfn) {
+                napi_call_threadsafe_function(g_clientDisconnectTsfn,
+                    new std::string(id), napi_tsfn_blocking);
+            }
+        });
+    return nullptr;
+}
+
+} // namespace clientnapi

@@ -15,4 +15,7 @@ napi_value LaunchCli    (napi_env env, napi_callback_info info);
 napi_value StopCli      (napi_env env, napi_callback_info info);
 napi_value SetCliCallback(napi_env env, napi_callback_info info);
 
+napi_value SetClientConnectCallback(napi_env env, napi_callback_info info);
+napi_value SetClientDisconnectCallback(napi_env env, napi_callback_info info);
+
 } // namespace clientnapi

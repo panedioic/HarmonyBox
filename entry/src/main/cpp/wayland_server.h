@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <map>
 
+#include "client_context.h"
+
 struct SeatState {
     wl_resource* seatRes = nullptr;
     std::vector<wl_resource*> keyboards;
@@ -27,10 +29,6 @@ public:
     
     void SetStateCallback(StateCb cb) { stateCb_ = std::move(cb); }
     void FireState(const char* s) { if (stateCb_) stateCb_(s); }
-    bool MarkFirstCommit() {
-        bool expected = false;
-        return firstCommit_.compare_exchange_strong(expected, true);
-    }
 
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
     static void compositor_create_surface(wl_client*, wl_resource*, uint32_t);
@@ -151,6 +149,24 @@ public:
                                uint32_t version, uint32_t id);
     static void wl_output_release(wl_client*, wl_resource* r);
 
+    // multi instance support
+    std::shared_ptr<ClientContext> FindClientCtx(wl_client* c);
+    std::shared_ptr<ClientContext> FindClientCtxById(const std::string& id);
+    std::shared_ptr<ClientContext> GetOrCreateClientCtx(wl_client* c);
+    void EraseClientCtx(wl_client* c);
+    void SetClientConnectCallback(std::function<void(const std::string&)> cb) {
+        clientConnectCb_ = std::move(cb);
+    }
+    void SetClientDisconnectCallback(std::function<void(const std::string&)> cb) {
+        clientDisconnectCb_ = std::move(cb);
+    }
+    void FireClientConnect(const std::string& id) {
+        if (clientConnectCb_) clientConnectCb_(id);
+    }
+    void FireClientDisconnect(const std::string& id) {
+        if (clientDisconnectCb_) clientDisconnectCb_(id);
+    }
+
 private:
     WaylandServer() = default;
     void Loop();
@@ -166,7 +182,6 @@ private:
     std::atomic<bool> dirty_{false};
     
     StateCb stateCb_;
-    std::atomic<bool> firstCommit_{false};
 
     // I/O
     SeatState seat_;
@@ -177,13 +192,9 @@ private:
     bool BuildKeymapFd();
     uint32_t NextSerial();
     uint32_t NowMs();
-
-    wl_resource* mainSurface_ = nullptr; // 追踪主渲染窗口
     
     // fix window size
     std::function<void(int,int)> sizeCallback_;
-    int lastNotifiedW_ = -1;
-    int lastNotifiedH_ = -1;
     
     // for remove csd border
     std::mutex geomMutex_;
@@ -202,6 +213,19 @@ private:
     
     // for minimize window
     std::function<void()> minimizeCallback_;
+
+    // per-client 表
+    std::mutex                                                    clientsMutex_;
+    std::unordered_map<wl_client*, std::shared_ptr<ClientContext>> clients_;
+    std::unordered_map<std::string, wl_client*>                    idIndex_;
+    std::atomic<int>                                               clientSeq_{0};
+
+    // 新事件回调
+    std::function<void(const std::string&)> clientConnectCb_;
+    std::function<void(const std::string&)> clientDisconnectCb_;
+
+    // wl_display 全局 listener
+    wl_listener clientCreatedListener_{};
 };
 
 struct SurfaceState {
