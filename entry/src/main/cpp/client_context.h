@@ -27,6 +27,10 @@ struct ClientContext {
     int  latestH = 0;
     std::atomic<bool> dirty{false};
 
+    // ★ 新: per-client 焦点
+    wl_resource* kbFocus  = nullptr;
+    wl_resource* ptrFocus = nullptr;
+    
     // wl_listener trampoline: destroy 事件. 通过 wl_container_of 反查 ctx
     wl_listener destroyListener{};
 

@@ -156,21 +156,17 @@ export function stopProcMgr(): void;
 
 // ============ 输入注入 ============
 
-export const sendKey: (evdevCode: number, pressed: boolean) => void;
+export const sendKey: (clientId: string, code: number, pressed: boolean) => void;
 
 /** 4 个修饰键状态位,顺序: depressed / latched / locked / group。 */
-export const sendModifiers: (
-  depressed: number,
-  latched: number,
-  locked: number,
-  group: number,
-  callback?: (event: string,) => number
-) => void;
+export const sendModifiers: (clientId: string,
+  depressed: number, latched: number,
+  locked: number, group: number) => void;
 
-export const sendMouseMove: (x: number, y: number) => void;
-export const sendMouseButton: (button: number, pressed: boolean) => void;
-export const sendMouseAxis: (dx: number, dy: number) => void;
-export const sendMouseHover: (inside: boolean) => void;
+export const sendMouseMove: (clientId: string, x: number, y: number) => void;
+export const sendMouseButton: (clientId: string, btn: number, pressed: boolean) => void;
+export const sendMouseAxis: (clientId: string, dx: number, dy: number) => void;
+export const sendMouseHover: (clientId: string, inside: boolean) => void;
 
 // ============ 窗口事件 ============
 

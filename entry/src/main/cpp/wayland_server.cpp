@@ -243,8 +243,6 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
     wl_resource_set_implementation(surfRes, &k_surface_impl, state,
     [](wl_resource* r) {
         auto* self = WaylandServer::GetInstance();
-
-        // 谁的 mainSurface? 找到并清掉
         {
             std::lock_guard<std::mutex> lk(self->clientsMutex_);
             for (auto& kv : self->clients_) {
@@ -254,15 +252,12 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
                     ctx->firstCommit = false;
                     ctx->lastNotifiedW = -1;
                     ctx->lastNotifiedH = -1;
-                    OH_LOG_INFO(LOG_APP,
-                        "★MAIN_SURFACE_DESTROYED ctx=%{public}s",
-                        ctx->id.c_str());
-                    break;
                 }
+                // ★ 清理焦点
+                if (ctx->kbFocus == r)  ctx->kbFocus  = nullptr;
+                if (ctx->ptrFocus == r) ctx->ptrFocus = nullptr;
             }
         }
-        if (self->kbFocus_ == r) self->kbFocus_ = nullptr;
-        if (self->ptrFocus_ == r) self->ptrFocus_ = nullptr;
         auto* s = static_cast<SurfaceState*>(wl_resource_get_user_data(r));
         delete s;
     });
@@ -410,8 +405,8 @@ void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
     if (ctx->MarkFirstCommit()) {
         OH_LOG_INFO(LOG_APP, "★FIRST_COMMIT ctx=%{public}s surf=%{public}p",
                     ctx->id.c_str(), surfRes);
-        self->SetKeyboardFocus(surfRes);
-        self->SetPointerFocus(surfRes);
+        self->SetKeyboardFocusForCtx(ctx, surfRes);
+        self->SetPointerFocusForCtx(ctx, surfRes);
 
         // ★ 新事件: onClientConnect(id)
         self->FireClientConnect(ctx->id);
@@ -519,10 +514,10 @@ void WaylandServer::seat_get_keyboard(wl_client* c, wl_resource* sr, uint32_t id
     if (wl_resource_get_version(kb) >= 4) {
         wl_keyboard_send_repeat_info(kb, 25, 400);
     }
-    if (self->kbFocus_ &&
-        wl_resource_get_client(self->kbFocus_) == c) {
+    auto ctx = self->FindClientCtx(c);
+    if (ctx && ctx->kbFocus) {
         wl_array keys; wl_array_init(&keys);
-        wl_keyboard_send_enter(kb, self->NextSerial(), self->kbFocus_, &keys);
+        wl_keyboard_send_enter(kb, self->NextSerial(), ctx->kbFocus, &keys);
         wl_array_release(&keys);
     }
 }
@@ -556,76 +551,92 @@ void WaylandServer::pointer_set_cursor(wl_client*, wl_resource*, uint32_t,
 }
 
 // ─── 焦点 ───
-void WaylandServer::SetKeyboardFocus(wl_resource* surf) {
-    if (kbFocus_ == surf) return;
+void WaylandServer::SetKeyboardFocusForCtx(std::shared_ptr<ClientContext> ctx, wl_resource* surf) {
+    if (!ctx || ctx->kbFocus == surf) return;
     uint32_t serial = NextSerial();
-    if (kbFocus_) {
-        for (auto* k : seat_.keyboards)
-            if (wl_resource_get_client(k) == wl_resource_get_client(kbFocus_))
-                wl_keyboard_send_leave(k, serial, kbFocus_);
+    if (ctx->kbFocus) {
+        for (auto* k : seat_.keyboards) {
+            if (wl_resource_get_client(k) == ctx->client) {
+                wl_keyboard_send_leave(k, serial, ctx->kbFocus);
+            }
+        }
     }
-    kbFocus_ = surf;
-    if (kbFocus_) {
+    ctx->kbFocus = surf;
+    if (surf) {
         wl_array a; wl_array_init(&a);
-        for (auto* k : seat_.keyboards)
-            if (wl_resource_get_client(k) == wl_resource_get_client(kbFocus_))
-                wl_keyboard_send_enter(k, serial, kbFocus_, &a);
+        for (auto* k : seat_.keyboards) {
+            if (wl_resource_get_client(k) == ctx->client) {
+                wl_keyboard_send_enter(k, serial, surf, &a);
+            }
+        }
         wl_array_release(&a);
     }
 }
 
-void WaylandServer::SetPointerFocus(wl_resource* surf) {
-    if (ptrFocus_ == surf) return;
+void WaylandServer::SetPointerFocusForCtx(std::shared_ptr<ClientContext> ctx, wl_resource* surf) {
+    if (!ctx || ctx->ptrFocus == surf) return;
     uint32_t serial = NextSerial();
-    if (ptrFocus_) {
-        for (auto* p : seat_.pointers)
-            if (wl_resource_get_client(p) == wl_resource_get_client(ptrFocus_))
-                wl_pointer_send_leave(p, serial, ptrFocus_);
+    if (ctx->ptrFocus) {
+        for (auto* p : seat_.pointers) {
+            if (wl_resource_get_client(p) == ctx->client) {
+                wl_pointer_send_leave(p, serial, ctx->ptrFocus);
+            }
+        }
     }
-    ptrFocus_ = surf;
-    if (ptrFocus_) {
-        for (auto* p : seat_.pointers)
-            if (wl_resource_get_client(p) == wl_resource_get_client(ptrFocus_))
-                wl_pointer_send_enter(p, serial, ptrFocus_,
+    ctx->ptrFocus = surf;
+    if (surf) {
+        for (auto* p : seat_.pointers) {
+            if (wl_resource_get_client(p) == ctx->client) {
+                wl_pointer_send_enter(p, serial, surf,
                     wl_fixed_from_int(0), wl_fixed_from_int(0));
+            }
+        }
     }
 }
 
 // ─── 事件分发 ───
-void WaylandServer::DispatchKey(uint32_t code, bool pressed) {
-    if (!kbFocus_) return;
-    uint32_t serial = NextSerial(), t = NowMs();
-    auto* c = wl_resource_get_client(kbFocus_);
-    for (auto* k : seat_.keyboards)
-        if (wl_resource_get_client(k) == c)
-            wl_keyboard_send_key(k, serial, t, code,
-                pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
-    wl_display_flush_clients(display_);
-}
+void WaylandServer::DispatchKey(const std::string& clientId,
+                                  uint32_t code, bool pressed) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->kbFocus) return;
 
-void WaylandServer::DispatchModifiers(uint32_t d, uint32_t l, uint32_t lk, uint32_t g) {
-    if (!kbFocus_) return;
     uint32_t serial = NextSerial();
-    auto* c = wl_resource_get_client(kbFocus_);
-    for (auto* k : seat_.keyboards)
-        if (wl_resource_get_client(k) == c)
-            wl_keyboard_send_modifiers(k, serial, d, l, lk, g);
+    uint32_t t = NowMs();
+    for (auto* k : seat_.keyboards) {
+        if (wl_resource_get_client(k) != ctx->client) continue;
+        wl_keyboard_send_key(k, serial, t, code,
+            pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+                    : WL_KEYBOARD_KEY_STATE_RELEASED);
+    }
     wl_display_flush_clients(display_);
 }
 
-void WaylandServer::DispatchMouseMotion(double x, double y) {
-    if (!ptrFocus_) return;
-    // 输入坐标是"裁剪后的内容空间",客户端 surface 坐标是 buffer 全空间,
-    // 需要加上 window_geometry 的偏移补回 CSD 阴影/装饰区域。
-    WindowGeom g = GetWindowGeometry(ptrFocus_);
-    if (g.valid) {
-        x += g.x;
-        y += g.y;
+void WaylandServer::DispatchModifiers(const std::string& clientId,
+                                        uint32_t d, uint32_t l,
+                                        uint32_t lk, uint32_t g) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->kbFocus) return;
+
+    uint32_t serial = NextSerial();
+    for (auto* k : seat_.keyboards) {
+        if (wl_resource_get_client(k) != ctx->client) continue;
+        wl_keyboard_send_modifiers(k, serial, d, l, lk, g);
     }
+    wl_display_flush_clients(display_);
+}
+
+void WaylandServer::DispatchMouseMotion(const std::string& clientId,
+                                          double x, double y) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->ptrFocus) return;
+
+    // window_geometry 补偿
+    WindowGeom g = GetWindowGeometry(ctx->ptrFocus);
+    if (g.valid) { x += g.x; y += g.y; }
+
     uint32_t t = NowMs();
-    auto* c = wl_resource_get_client(ptrFocus_);
     for (auto* p : seat_.pointers) {
-        if (wl_resource_get_client(p) != c) continue;
+        if (wl_resource_get_client(p) != ctx->client) continue;
         wl_pointer_send_motion(p, t,
             wl_fixed_from_double(x), wl_fixed_from_double(y));
         if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
@@ -633,65 +644,72 @@ void WaylandServer::DispatchMouseMotion(double x, double y) {
     wl_display_flush_clients(display_);
 }
 
-void WaylandServer::DispatchMouseButton(uint32_t button, bool pressed) {
-    if (!ptrFocus_) return;
-    uint32_t serial = NextSerial(), t = NowMs();
-    auto* c = wl_resource_get_client(ptrFocus_);
+void WaylandServer::DispatchMouseButton(const std::string& clientId,
+                                          uint32_t button, bool pressed) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->ptrFocus) return;
+
+    uint32_t serial = NextSerial();
+    uint32_t t = NowMs();
     for (auto* p : seat_.pointers) {
-        if (wl_resource_get_client(p) != c) continue;
+        if (wl_resource_get_client(p) != ctx->client) continue;
         wl_pointer_send_button(p, serial, t, button,
-            pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
+            pressed ? WL_POINTER_BUTTON_STATE_PRESSED
+                    : WL_POINTER_BUTTON_STATE_RELEASED);
         if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
     }
     wl_display_flush_clients(display_);
 }
 
-void WaylandServer::DispatchMouseAxis(double dx, double dy) {
-    if (!ptrFocus_) return;
+void WaylandServer::DispatchMouseAxis(const std::string& clientId,
+                                        double dx, double dy) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->ptrFocus) return;
+
     uint32_t t = NowMs();
-    auto* c = wl_resource_get_client(ptrFocus_);
     for (auto* p : seat_.pointers) {
-        if (wl_resource_get_client(p) != c) continue;
+        if (wl_resource_get_client(p) != ctx->client) continue;
         if (dx != 0)
             wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL,
-                                 wl_fixed_from_double(dx));
+                wl_fixed_from_double(dx));
         if (dy != 0)
             wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
-                                 wl_fixed_from_double(dy));
+                wl_fixed_from_double(dy));
         if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
     }
     wl_display_flush_clients(display_);
 }
 
-void WaylandServer::DispatchMouseEnter(double x, double y) {
-    if (!ptrFocus_) return;
-    WindowGeom g = GetWindowGeometry(ptrFocus_);
-    if (g.valid) {
-        x += g.x;
-        y += g.y;
-    }
+void WaylandServer::DispatchMouseEnter(const std::string& clientId,
+                                         double x, double y) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->ptrFocus) return;
+
+    WindowGeom g = GetWindowGeometry(ctx->ptrFocus);
+    if (g.valid) { x += g.x; y += g.y; }
+
     uint32_t serial = NextSerial();
-    auto* c = wl_resource_get_client(ptrFocus_);
-    for (auto* p : seat_.pointers)
-        if (wl_resource_get_client(p) == c)
-            wl_pointer_send_enter(p, serial, ptrFocus_,
-                wl_fixed_from_double(x), wl_fixed_from_double(y));
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != ctx->client) continue;
+        wl_pointer_send_enter(p, serial, ctx->ptrFocus,
+            wl_fixed_from_double(x), wl_fixed_from_double(y));
+    }
 }
 
-void WaylandServer::DispatchMouseLeave() {
-    if (!ptrFocus_) return;
+void WaylandServer::DispatchMouseLeave(const std::string& clientId) {
+    auto ctx = FindClientCtxById(clientId);
+    if (!ctx || !ctx->ptrFocus) return;
+
     uint32_t serial = NextSerial();
-    auto* c = wl_resource_get_client(ptrFocus_);
-    for (auto* p : seat_.pointers)
-        if (wl_resource_get_client(p) == c)
-            wl_pointer_send_leave(p, serial, ptrFocus_);
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != ctx->client) continue;
+        wl_pointer_send_leave(p, serial, ctx->ptrFocus);
+    }
 }
 
 // 修改或追加 ResetFirstCommit 的实现：
 // 确保带上 WaylandServer:: 作用域
 void WaylandServer::ResetFirstCommit() {
-    kbFocus_ = nullptr;
-    ptrFocus_ = nullptr;
     std::lock_guard<std::mutex> lk(clientsMutex_);
     for (auto& kv : clients_) {
         auto& ctx = kv.second;
@@ -699,6 +717,8 @@ void WaylandServer::ResetFirstCommit() {
         ctx->firstCommit = false;
         ctx->lastNotifiedW = -1;
         ctx->lastNotifiedH = -1;
+        ctx->kbFocus = nullptr;
+        ctx->ptrFocus = nullptr;
     }
 }
 
@@ -743,18 +763,22 @@ void WaylandServer::FireMoveRequest() {
 }
 
 void WaylandServer::ReleaseAllPointerButtons() {
-    if (!ptrFocus_) return;
+    std::lock_guard<std::mutex> lk(clientsMutex_);
     uint32_t serial = NextSerial();
     uint32_t t = NowMs();
-    auto* c = wl_resource_get_client(ptrFocus_);
-    // 主流 CSD 发 move 都是响应 BTN_LEFT(0x110),保险起见把左/中/右都释放一次
     const uint32_t btns[] = {0x110, 0x111, 0x112};
-    for (auto* p : seat_.pointers) {
-        if (wl_resource_get_client(p) != c) continue;
-        for (uint32_t b : btns) {
-            wl_pointer_send_button(p, serial, t, b, WL_POINTER_BUTTON_STATE_RELEASED);
+
+    for (auto& kv : clients_) {
+        auto& ctx = kv.second;
+        if (!ctx->ptrFocus) continue;
+        for (auto* p : seat_.pointers) {
+            if (wl_resource_get_client(p) != ctx->client) continue;
+            for (uint32_t b : btns) {
+                wl_pointer_send_button(p, serial, t, b,
+                    WL_POINTER_BUTTON_STATE_RELEASED);
+            }
+            if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
         }
-        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
     }
     wl_display_flush_clients(display_);
 }

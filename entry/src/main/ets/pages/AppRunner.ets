@@ -60,8 +60,7 @@ struct AppRunner {
     if (mask === 0) return;
     if (pressed) this.modMask |= mask;
     else this.modMask &= ~mask;
-    // TODO(multi-client): 未来 wl.sendModifiers 加 clientId 参数
-    wl.sendModifiers(this.modMask, 0, 0, 0);
+    wl.sendModifiers(this.clientId, this.modMask, 0, 0, 0);   // ★
   }
 
   build() {
@@ -73,12 +72,9 @@ struct AppRunner {
       })
         .width('100%').height('100%')
         .onLoad((): void => {
-          // ★ 关键: 告知 native 层这个 XComponent 属于哪个 wayland client
           const xcId = `wl_xc_${this.instanceId}`;
           wl.bindXComponentClient(xcId, this.clientId);
-          console.info(`HBOX_XC_BIND xcId=${xcId} cid=${this.clientId}`);
-
-          wl.sendMouseHover(true);
+          wl.sendMouseHover(this.clientId, true);   // ★
         })
     }
     .width('100%').height('100%')
@@ -90,14 +86,12 @@ struct AppRunner {
       if (code === 0) return;
       const pressed: boolean = ev.type === KeyType.Down;
       this.updateModifiers(ev.keyCode, pressed);
-      // TODO(multi-client): wl.sendKey(clientId, code, pressed)
-      wl.sendKey(code, pressed);
+      wl.sendKey(this.clientId, code, pressed);   // ★
     })
     .onMouse((ev: MouseEvent): void => {
       this.lastVpX = ev.x;
       this.lastVpY = ev.y;
 
-      // Resize drag 接管
       if (this.resizing) {
         if (ev.action === MouseAction.Move || ev.action === MouseAction.Hover) {
           const dxPx: number = vp2px(ev.x - this.resizeStartVpX);
@@ -105,14 +99,12 @@ struct AppRunner {
           WaylandService.getInstance().notifyHostResizeDrag(
             this.resizeEdges, dxPx, dyPx);
         } else if (ev.action === MouseAction.Release) {
-          console.info(`HBOX_GUI_RESIZE_DRAG_RUNNER_END inst=${this.instanceId}`);
           this.resizing = false;
           WaylandService.getInstance().notifyHostResizeEnd();
         }
         return;
       }
 
-      // 普通模式: vp → buffer 比例映射
       const sz: WlBufferSize =
         WaylandService.getInstance().getLatestBufferSize(this.clientId);
       if (sz.w <= 0 || sz.h <= 0 || this.surfacePxW <= 0 || this.surfacePxH <= 0) return;
@@ -121,21 +113,23 @@ struct AppRunner {
       switch (ev.action) {
         case MouseAction.Move:
         case MouseAction.Hover:
-          wl.sendMouseMove(x, y);
+          wl.sendMouseMove(this.clientId, x, y);   // ★
           break;
         case MouseAction.Press:
-          wl.sendMouseMove(x, y);
-          wl.sendMouseButton(mapMouseButton(ev.button), true);
+          wl.sendMouseMove(this.clientId, x, y);   // ★
+          wl.sendMouseButton(this.clientId,
+            mapMouseButton(ev.button), true);    // ★
           break;
         case MouseAction.Release:
-          wl.sendMouseButton(mapMouseButton(ev.button), false);
+          wl.sendMouseButton(this.clientId,
+            mapMouseButton(ev.button), false);   // ★
           break;
         default:
           break;
       }
     })
     .onHover((isHover: boolean): void => {
-      wl.sendMouseHover(isHover);
+      wl.sendMouseHover(this.clientId, isHover);   // ★
     })
     .onAreaChange((_o: Area, n: Area): void => {
       this.surfacePxW = vp2px(n.width as number);

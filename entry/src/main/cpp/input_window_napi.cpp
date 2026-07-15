@@ -65,65 +65,87 @@ namespace iwnapi {
 // ===================== keyboard / mouse =====================
 
 napi_value SendKey(napi_env env, napi_callback_info info) {
-    size_t argc = 2; napi_value args[2];
+    size_t argc = 3;
+    napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    int32_t code = 0; bool pressed = false;
-    napi_get_value_int32(env, args[0], &code);
-    napi_get_value_bool (env, args[1], &pressed);
-    WaylandServer::GetInstance()->DispatchKey((uint32_t)code, pressed);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
+    int32_t code = 0;
+    bool pressed = false;
+    napi_get_value_int32(env, args[1], &code);
+    napi_get_value_bool(env, args[2], &pressed);
+    WaylandServer::GetInstance()->DispatchKey(cid, (uint32_t)code, pressed);
     return nullptr;
 }
 
 napi_value SendModifiers(napi_env env, napi_callback_info info) {
-    size_t argc = 4; napi_value args[4];
+    size_t argc = 5;
+    napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    uint32_t v[4] = {0,0,0,0};
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
+    uint32_t v[4] = {0, 0, 0, 0};
     for (int i = 0; i < 4; i++) {
         int32_t t = 0;
-        napi_get_value_int32(env, args[i], &t);
+        napi_get_value_int32(env, args[i + 1], &t);
         v[i] = (uint32_t)t;
     }
-    WaylandServer::GetInstance()->DispatchModifiers(v[0], v[1], v[2], v[3]);
+    WaylandServer::GetInstance()->DispatchModifiers(cid, v[0], v[1], v[2], v[3]);
     return nullptr;
 }
 
 napi_value SendMouseMove(napi_env env, napi_callback_info info) {
-    size_t argc = 2; napi_value args[2];
+    size_t argc = 3;
+    napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
     double x = 0, y = 0;
-    napi_get_value_double(env, args[0], &x);
-    napi_get_value_double(env, args[1], &y);
-    WaylandServer::GetInstance()->DispatchMouseMotion(x, y);
+    napi_get_value_double(env, args[1], &x);
+    napi_get_value_double(env, args[2], &y);
+    WaylandServer::GetInstance()->DispatchMouseMotion(cid, x, y);
     return nullptr;
 }
 
 napi_value SendMouseButton(napi_env env, napi_callback_info info) {
-    size_t argc = 2; napi_value args[2];
+    size_t argc = 3;
+    napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    int32_t btn = 0; bool pressed = false;
-    napi_get_value_int32(env, args[0], &btn);
-    napi_get_value_bool (env, args[1], &pressed);
-    WaylandServer::GetInstance()->DispatchMouseButton((uint32_t)btn, pressed);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
+    int32_t btn = 0;
+    bool pressed = false;
+    napi_get_value_int32(env, args[1], &btn);
+    napi_get_value_bool(env, args[2], &pressed);
+    WaylandServer::GetInstance()->DispatchMouseButton(cid, (uint32_t)btn, pressed);
     return nullptr;
 }
 
 napi_value SendMouseAxis(napi_env env, napi_callback_info info) {
-    size_t argc = 2; napi_value args[2];
+    size_t argc = 3;
+    napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
     double dx = 0, dy = 0;
-    napi_get_value_double(env, args[0], &dx);
-    napi_get_value_double(env, args[1], &dy);
-    WaylandServer::GetInstance()->DispatchMouseAxis(dx, dy);
+    napi_get_value_double(env, args[1], &dx);
+    napi_get_value_double(env, args[2], &dy);
+    WaylandServer::GetInstance()->DispatchMouseAxis(cid, dx, dy);
     return nullptr;
 }
 
 napi_value SendMouseHover(napi_env env, napi_callback_info info) {
-    size_t argc = 1; napi_value args[1];
+    size_t argc = 2;
+    napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string cid = napiutil::GetStringArg(env, args[0]);
     bool inside = false;
-    napi_get_value_bool(env, args[0], &inside);
-    if (inside) WaylandServer::GetInstance()->DispatchMouseEnter(0, 0);
-    else        WaylandServer::GetInstance()->DispatchMouseLeave();
+    napi_get_value_bool(env, args[1], &inside);
+    if (inside)
+        WaylandServer::GetInstance()->DispatchMouseEnter(cid, 0, 0);
+    else
+        WaylandServer::GetInstance()->DispatchMouseLeave(cid);
     return nullptr;
 }
 

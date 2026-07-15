@@ -51,15 +51,17 @@ public:
     static void region_subtract(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
     
     // I/O
-    void DispatchKey(uint32_t evdevCode, bool pressed);
-    void DispatchModifiers(uint32_t dep, uint32_t lat, uint32_t loc, uint32_t group);
-    void DispatchMouseMotion(double x, double y);
-    void DispatchMouseButton(uint32_t button, bool pressed);
-    void DispatchMouseAxis(double dx, double dy);
-    void DispatchMouseEnter(double x, double y);
-    void DispatchMouseLeave();
-    void SetKeyboardFocus(wl_resource* surface);
-    void SetPointerFocus(wl_resource* surface);
+    void DispatchKey(const std::string& clientId, uint32_t evdevCode, bool pressed);
+    void DispatchModifiers(const std::string& clientId, uint32_t dep, uint32_t lat, uint32_t loc, uint32_t group);
+    void DispatchMouseMotion(const std::string& clientId, double x, double y);
+    void DispatchMouseButton(const std::string& clientId, uint32_t button, bool pressed);
+    void DispatchMouseAxis(const std::string& clientId, double dx, double dy);
+    void DispatchMouseEnter(const std::string& clientId, double x, double y);
+    void DispatchMouseLeave(const std::string& clientId);
+    // 内部使用: 按 ctx 设置焦点
+    void SetKeyboardFocusForCtx(std::shared_ptr<ClientContext> ctx, wl_resource* surface);
+    void SetPointerFocusForCtx(std::shared_ptr<ClientContext> ctx, wl_resource* surface);
+
     static void seat_bind(wl_client*, void*, uint32_t, uint32_t);
     static void seat_get_pointer(wl_client*, wl_resource*, uint32_t);
     static void seat_get_keyboard(wl_client*, wl_resource*, uint32_t);
@@ -181,8 +183,6 @@ private:
 
     // I/O
     SeatState seat_;
-    wl_resource* kbFocus_ = nullptr;
-    wl_resource* ptrFocus_ = nullptr;
     int keymapFd_ = -1;
     size_t keymapSize_ = 0;
     bool BuildKeymapFd();
