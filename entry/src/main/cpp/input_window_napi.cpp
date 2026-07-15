@@ -58,6 +58,38 @@ void RebindNoArgTsfn(napi_env env,
         napiutil::NoArgTsfnCallJs, &slot);
 }
 
+struct ClientIdEvent {
+    std::string cid;
+};
+
+struct ClientResizeEvent {
+    std::string cid;
+    uint32_t edges;
+};
+
+void ClientIdTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    auto* ev = static_cast<ClientIdEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, arg;
+        napi_get_undefined(env, &undef);
+        napi_create_string_utf8(env, ev->cid.c_str(), NAPI_AUTO_LENGTH, &arg);
+        napi_call_function(env, undef, jsCb, 1, &arg, nullptr);
+    }
+    delete ev;
+}
+
+void ClientResizeTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    auto* ev = static_cast<ClientResizeEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[2];
+        napi_get_undefined(env, &undef);
+        napi_create_string_utf8(env, ev->cid.c_str(), NAPI_AUTO_LENGTH, &args[0]);
+        napi_create_uint32(env, ev->edges, &args[1]);
+        napi_call_function(env, undef, jsCb, 2, args, nullptr);
+    }
+    delete ev;
+}
+
 } // anonymous namespace
 
 namespace iwnapi {
@@ -194,36 +226,66 @@ napi_value GetLatestSize(napi_env env, napi_callback_info info) {
 napi_value SetMoveCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1; napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    RebindNoArgTsfn(env, args[0], g_moveTsfn, "WLMove");
-    WaylandServer::GetInstance()->SetMoveCallback([]() {
-        if (g_moveTsfn) {
-            napi_call_threadsafe_function(g_moveTsfn, nullptr, napi_tsfn_blocking);
-        }
-    });
+    if (g_moveTsfn) {
+        napi_release_threadsafe_function(g_moveTsfn, napi_tsfn_release);
+        g_moveTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLMove", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, ClientIdTsfnCallJs, &g_moveTsfn);
+
+    WaylandServer::GetInstance()->SetMoveCallback(
+        [](const std::string& cid) {
+            if (g_moveTsfn) {
+                napi_call_threadsafe_function(g_moveTsfn,
+                    new ClientIdEvent{cid}, napi_tsfn_blocking);
+            }
+        });
     return nullptr;
 }
 
 napi_value SetMaximizeCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1; napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    RebindNoArgTsfn(env, args[0], g_maximizeTsfn, "WLMaximize");
-    WaylandServer::GetInstance()->SetMaximizeCallback([]() {
-        if (g_maximizeTsfn) {
-            napi_call_threadsafe_function(g_maximizeTsfn, nullptr, napi_tsfn_blocking);
-        }
-    });
+    if (g_maximizeTsfn) {
+        napi_release_threadsafe_function(g_maximizeTsfn, napi_tsfn_release);
+        g_maximizeTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLMaximize", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, ClientIdTsfnCallJs, &g_maximizeTsfn);
+
+    WaylandServer::GetInstance()->SetMaximizeCallback(
+        [](const std::string& cid) {
+            if (g_maximizeTsfn) {
+                napi_call_threadsafe_function(g_maximizeTsfn,
+                    new ClientIdEvent{cid}, napi_tsfn_blocking);
+            }
+        });
     return nullptr;
 }
 
 napi_value SetUnmaximizeCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1; napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    RebindNoArgTsfn(env, args[0], g_unmaximizeTsfn, "WLUnmaximize");
-    WaylandServer::GetInstance()->SetUnmaximizeCallback([]() {
-        if (g_unmaximizeTsfn) {
-            napi_call_threadsafe_function(g_unmaximizeTsfn, nullptr, napi_tsfn_blocking);
-        }
-    });
+    if (g_unmaximizeTsfn) {
+        napi_release_threadsafe_function(g_unmaximizeTsfn, napi_tsfn_release);
+        g_unmaximizeTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLUnmaximize", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, ClientIdTsfnCallJs, &g_unmaximizeTsfn);
+
+    WaylandServer::GetInstance()->SetUnmaximizeCallback(
+        [](const std::string& cid) {
+            if (g_unmaximizeTsfn) {
+                napi_call_threadsafe_function(g_unmaximizeTsfn,
+                    new ClientIdEvent{cid}, napi_tsfn_blocking);
+            }
+        });
     return nullptr;
 }
 
@@ -234,41 +296,53 @@ napi_value SetResizeCallback(napi_env env, napi_callback_info info) {
         napi_release_threadsafe_function(g_resizeTsfn, napi_tsfn_release);
         g_resizeTsfn = nullptr;
     }
-    napi_value resName;
-    napi_create_string_utf8(env, "WLResize", NAPI_AUTO_LENGTH, &resName);
-    napi_create_threadsafe_function(env, args[0], nullptr, resName,
-        0, 1, nullptr, nullptr, nullptr, ResizeTsfnCallJs, &g_resizeTsfn);
+    napi_value name;
+    napi_create_string_utf8(env, "WLResize", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, ClientResizeTsfnCallJs, &g_resizeTsfn);
 
-    WaylandServer::GetInstance()->SetResizeCallback([](uint32_t edges) {
-        if (g_resizeTsfn) {
-            auto* e = new uint32_t(edges);
-            napi_call_threadsafe_function(g_resizeTsfn, e, napi_tsfn_blocking);
-        }
-    });
-    return nullptr;
-}
-
-napi_value RequestClientResize(napi_env env, napi_callback_info info) {
-    size_t argc = 3; napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    int32_t w = 0, h = 0;
-    bool maximized = false;
-    napi_get_value_int32(env, args[0], &w);
-    napi_get_value_int32(env, args[1], &h);
-    napi_get_value_bool (env, args[2], &maximized);
-    WaylandServer::GetInstance()->SendToplevelConfigure(w, h, maximized);
+    WaylandServer::GetInstance()->SetResizeCallback(
+        [](const std::string& cid, uint32_t edges) {
+            if (g_resizeTsfn) {
+                napi_call_threadsafe_function(g_resizeTsfn,
+                    new ClientResizeEvent{cid, edges}, napi_tsfn_blocking);
+            }
+        });
     return nullptr;
 }
 
 napi_value SetMinimizeCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1; napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    RebindNoArgTsfn(env, args[0], g_minimizeTsfn, "WLMinimize");
-    WaylandServer::GetInstance()->SetMinimizeCallback([]() {
-        if (g_minimizeTsfn) {
-            napi_call_threadsafe_function(g_minimizeTsfn, nullptr, napi_tsfn_blocking);
-        }
-    });
+    if (g_minimizeTsfn) {
+        napi_release_threadsafe_function(g_minimizeTsfn, napi_tsfn_release);
+        g_minimizeTsfn = nullptr;
+    }
+    napi_value name;
+    napi_create_string_utf8(env, "WLMinimize", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+        0, 1, nullptr, nullptr, nullptr, ClientIdTsfnCallJs, &g_minimizeTsfn);
+
+    WaylandServer::GetInstance()->SetMinimizeCallback(
+        [](const std::string& cid) {
+            if (g_minimizeTsfn) {
+                napi_call_threadsafe_function(g_minimizeTsfn,
+                    new ClientIdEvent{cid}, napi_tsfn_blocking);
+            }
+        });
+    return nullptr;
+}
+
+napi_value RequestClientResize(napi_env env, napi_callback_info info) {
+    size_t argc = 4; napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string cid = napiutil::GetStringArg(env, args[0]);
+    int32_t w = 0, h = 0;
+    bool maximized = false;
+    napi_get_value_int32(env, args[1], &w);
+    napi_get_value_int32(env, args[2], &h);
+    napi_get_value_bool(env, args[3], &maximized);
+    WaylandServer::GetInstance()->SendToplevelConfigure(cid, w, h, maximized);
     return nullptr;
 }
 

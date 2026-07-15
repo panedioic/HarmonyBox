@@ -38,4 +38,7 @@ struct ClientContext {
         bool expected = false;
         return firstCommit.compare_exchange_strong(expected, true);
     }
+    
+    wl_resource* activeToplevel   = nullptr;
+    wl_resource* activeXdgSurface = nullptr;
 };

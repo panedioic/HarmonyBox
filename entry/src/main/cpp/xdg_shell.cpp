@@ -30,32 +30,48 @@ static void tl_set_app_id(wl_client*, wl_resource*, const char* a) {
 static void tl_show_window_menu(wl_client*, wl_resource*, wl_resource*, uint32_t,
                                 int32_t, int32_t) {}
 // for dragging
-static void tl_move(wl_client*, wl_resource*, wl_resource*, uint32_t serial) {
-    OH_LOG_INFO(LOG_APP, "xdg_toplevel.move serial=%{public}u", serial);
-    WaylandServer::GetInstance()->FireMoveRequest();
+static void tl_move(wl_client* client, wl_resource*, wl_resource*, uint32_t serial) {
+    auto ctx = WaylandServer::GetInstance()->FindClientCtx(client);
+    if (!ctx) return;
+    OH_LOG_INFO(LOG_APP, "xdg_toplevel.move cid=%{public}s serial=%{public}u",
+                ctx->id.c_str(), serial);
+    WaylandServer::GetInstance()->FireMoveRequest(ctx->id);
 }
 
 // for maximize window
-static void tl_set_maximized(wl_client*, wl_resource*) {
-    OH_LOG_INFO(LOG_APP, "xdg_toplevel.set_maximized");
-    WaylandServer::GetInstance()->FireMaximizeRequest();
+static void tl_set_maximized(wl_client* client, wl_resource*) {
+    auto ctx = WaylandServer::GetInstance()->FindClientCtx(client);
+    if (!ctx) return;
+    OH_LOG_INFO(LOG_APP, "xdg_toplevel.set_maximized cid=%{public}s",
+                ctx->id.c_str());
+    WaylandServer::GetInstance()->FireMaximizeRequest(ctx->id);
 }
 
-static void tl_unset_maximized(wl_client*, wl_resource*) {
-    OH_LOG_INFO(LOG_APP, "xdg_toplevel.unset_maximized");
-    WaylandServer::GetInstance()->FireUnmaximizeRequest();
+static void tl_unset_maximized(wl_client* client, wl_resource*) {
+    auto ctx = WaylandServer::GetInstance()->FindClientCtx(client);
+    if (!ctx) return;
+    OH_LOG_INFO(LOG_APP, "xdg_toplevel.unset_maximized cid=%{public}s",
+                ctx->id.c_str());
+    WaylandServer::GetInstance()->FireUnmaximizeRequest(ctx->id);
 }
 
-static void tl_resize(wl_client*, wl_resource*, wl_resource*, uint32_t serial, uint32_t edges) {
-    OH_LOG_INFO(LOG_APP, "HBOX_GUI_RESIZE_DRAG_NATIVE_REQ serial=%{public}u edges=0x%{public}x",
-                serial, edges);
-    WaylandServer::GetInstance()->FireResizeRequest(edges);
+static void tl_resize(wl_client* client, wl_resource*, wl_resource*,
+                       uint32_t serial, uint32_t edges) {
+    auto ctx = WaylandServer::GetInstance()->FindClientCtx(client);
+    if (!ctx) return;
+    OH_LOG_INFO(LOG_APP,
+        "HBOX_GUI_RESIZE_DRAG_NATIVE_REQ cid=%{public}s "
+        "serial=%{public}u edges=0x%{public}x",
+        ctx->id.c_str(), serial, edges);
+    WaylandServer::GetInstance()->FireResizeRequest(ctx->id, edges);
 }
 
 // for minimize window
-static void tl_set_minimized(wl_client*, wl_resource*) {
-    OH_LOG_INFO(LOG_APP, "HBOX_GUI_MIN_REQ");
-    WaylandServer::GetInstance()->FireMinimizeRequest();
+static void tl_set_minimized(wl_client* client, wl_resource*) {
+    auto ctx = WaylandServer::GetInstance()->FindClientCtx(client);
+    if (!ctx) return;
+    OH_LOG_INFO(LOG_APP, "HBOX_GUI_MIN_REQ cid=%{public}s", ctx->id.c_str());
+    WaylandServer::GetInstance()->FireMinimizeRequest(ctx->id);
 }
 
 static void tl_set_max_size(wl_client*, wl_resource*, int32_t, int32_t) {}
@@ -107,7 +123,10 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
     uint32_t serial = wl_display_next_serial(dpy);
     xdg_surface_send_configure(xsRes, serial);
     d->configureSent = true;
-    WaylandServer::GetInstance()->SetActiveToplevel(tl, xsRes);
+
+    // ★ 加 client 参数
+    WaylandServer::GetInstance()->SetActiveToplevel(client, tl, xsRes);
+
     OH_LOG_INFO(LOG_APP, "xdg_surface configure sent serial=%{public}u", serial);
 }
 

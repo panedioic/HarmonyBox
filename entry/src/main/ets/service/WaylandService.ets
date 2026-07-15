@@ -76,21 +76,21 @@ export class WaylandService {
       if (this.commitListener) this.commitListener(cid, w, h);
     });
 
-    // 其余回调暂时保持原样, 7-D 再改
-    wl.setMoveCallback((): void => {
-      if (this.moveListener) this.moveListener(DEFAULT_CLIENT_ID);
+    // init() 里全部改成透传 cid, 不再用 DEFAULT_CLIENT_ID
+    wl.setMoveCallback((cid: string): void => {
+      if (this.moveListener) this.moveListener(cid);
     });
-    wl.setMaximizeCallback((): void => {
-      if (this.maximizeListener) this.maximizeListener(DEFAULT_CLIENT_ID);
+    wl.setMaximizeCallback((cid: string): void => {
+      if (this.maximizeListener) this.maximizeListener(cid);
     });
-    wl.setUnmaximizeCallback((): void => {
-      if (this.unmaximizeListener) this.unmaximizeListener(DEFAULT_CLIENT_ID);
+    wl.setUnmaximizeCallback((cid: string): void => {
+      if (this.unmaximizeListener) this.unmaximizeListener(cid);
     });
-    wl.setResizeCallback((edges: number): void => {
-      if (this.resizeListener) this.resizeListener(DEFAULT_CLIENT_ID, edges);
+    wl.setResizeCallback((cid: string, edges: number): void => {
+      if (this.resizeListener) this.resizeListener(cid, edges);
     });
-    wl.setMinimizeCallback((): void => {
-      if (this.minimizeListener) this.minimizeListener(DEFAULT_CLIENT_ID);
+    wl.setMinimizeCallback((cid: string): void => {
+      if (this.minimizeListener) this.minimizeListener(cid);
     });
 
     // ★ setStateCallback 桥接删除
@@ -185,9 +185,12 @@ export class WaylandService {
     }
   }
 
-  requestClientResize(_clientId: string, bufW: number, bufH: number, maximized: boolean): void {
+  requestClientResize(clientId: string, bufW: number, bufH: number, maximized: boolean): void {
+    if (!clientId) return;
     try {
-      wl.requestClientResize(bufW, bufH, maximized);
-    } catch (e) { /* ignore */ }
+      wl.requestClientResize(clientId, bufW, bufH, maximized);
+    } catch (e) {
+      console.warn('requestClientResize failed', e);
+    }
   }
 }

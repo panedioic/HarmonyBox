@@ -756,62 +756,73 @@ WaylandServer::WindowGeom WaylandServer::GetWindowGeometry(wl_resource* surf) {
 }
 
 // for dragging
-void WaylandServer::FireMoveRequest() {
-    // 给客户端补一个 button release,避免它的实现认为鼠标仍然按下
-    ReleaseAllPointerButtons();
-    if (moveCallback_) moveCallback_();
+void WaylandServer::FireMoveRequest(const std::string& cid) {
+    ReleaseAllPointerButtons(cid);
+    if (moveCallback_) moveCallback_(cid);
 }
 
-void WaylandServer::ReleaseAllPointerButtons() {
-    std::lock_guard<std::mutex> lk(clientsMutex_);
+void WaylandServer::FireMaximizeRequest(const std::string& cid) {
+    ReleaseAllPointerButtons(cid);
+    if (maximizeCallback_) maximizeCallback_(cid);
+}
+
+void WaylandServer::FireUnmaximizeRequest(const std::string& cid) {
+    ReleaseAllPointerButtons(cid);
+    if (unmaximizeCallback_) unmaximizeCallback_(cid);
+}
+
+void WaylandServer::FireResizeRequest(const std::string& cid, uint32_t edges) {
+    ReleaseAllPointerButtons(cid);
+    if (resizeCallback_) resizeCallback_(cid, edges);
+}
+
+void WaylandServer::FireMinimizeRequest(const std::string& cid) {
+    ReleaseAllPointerButtons(cid);
+    if (minimizeCallback_) minimizeCallback_(cid);
+}
+
+void WaylandServer::ReleaseAllPointerButtons(const std::string& cid) {
+    auto ctx = FindClientCtxById(cid);
+    if (!ctx || !ctx->ptrFocus) return;
+
     uint32_t serial = NextSerial();
     uint32_t t = NowMs();
     const uint32_t btns[] = {0x110, 0x111, 0x112};
 
-    for (auto& kv : clients_) {
-        auto& ctx = kv.second;
-        if (!ctx->ptrFocus) continue;
-        for (auto* p : seat_.pointers) {
-            if (wl_resource_get_client(p) != ctx->client) continue;
-            for (uint32_t b : btns) {
-                wl_pointer_send_button(p, serial, t, b,
-                    WL_POINTER_BUTTON_STATE_RELEASED);
-            }
-            if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
+    for (auto* p : seat_.pointers) {
+        if (wl_resource_get_client(p) != ctx->client) continue;
+        for (uint32_t b : btns) {
+            wl_pointer_send_button(p, serial, t, b,
+                WL_POINTER_BUTTON_STATE_RELEASED);
         }
+        if (wl_resource_get_version(p) >= 5) wl_pointer_send_frame(p);
     }
     wl_display_flush_clients(display_);
 }
 
-void WaylandServer::FireMaximizeRequest() {
-    ReleaseAllPointerButtons();
-    if (maximizeCallback_) maximizeCallback_();
-}
-
-void WaylandServer::FireUnmaximizeRequest() {
-    ReleaseAllPointerButtons();
-    if (unmaximizeCallback_) unmaximizeCallback_();
-}
-
-void WaylandServer::FireResizeRequest(uint32_t edges) {
-    ReleaseAllPointerButtons();
-    if (resizeCallback_) resizeCallback_(edges);
-}
-
-void WaylandServer::SetActiveToplevel(wl_resource* tl, wl_resource* xs) {
-    activeToplevel_ = tl;
-    activeXdgSurface_ = xs;
+void WaylandServer::SetActiveToplevel(wl_client* c,
+                                       wl_resource* tl, wl_resource* xs) {
+    auto ctx = FindClientCtx(c);
+    if (!ctx) return;
+    ctx->activeToplevel = tl;
+    ctx->activeXdgSurface = xs;
 }
 
 void WaylandServer::ClearActiveToplevel(wl_resource* tl) {
-    if (activeToplevel_ == tl) {
-        activeToplevel_ = nullptr;
-        activeXdgSurface_ = nullptr;
+    std::lock_guard<std::mutex> lk(clientsMutex_);
+    for (auto& kv : clients_) {
+        auto& ctx = kv.second;
+        if (ctx->activeToplevel == tl) {
+            ctx->activeToplevel = nullptr;
+            ctx->activeXdgSurface = nullptr;
+            break;
+        }
     }
 }
 
 namespace {
 struct ConfigureCtx {
+    std::string cid;
     int w;
     int h;
     bool maximized;
@@ -819,21 +830,24 @@ struct ConfigureCtx {
 }
 
 static void idle_send_configure(void* data) {
-    auto* ctx = static_cast<ConfigureCtx*>(data);
-    WaylandServer::GetInstance()->DoSendToplevelConfigure(ctx->w, ctx->h, ctx->maximized);
-    delete ctx;
+    auto* c = static_cast<ConfigureCtx*>(data);
+    WaylandServer::GetInstance()->DoSendToplevelConfigure(
+        c->cid, c->w, c->h, c->maximized);
+    delete c;
 }
 
-void WaylandServer::SendToplevelConfigure(int w, int h, bool maximized) {
-    if (!display_) return;
-    if (w <= 0 || h <= 0) return;
-    auto* ctx = new ConfigureCtx{w, h, maximized};
+void WaylandServer::SendToplevelConfigure(const std::string& cid,
+                                            int w, int h, bool maximized) {
+    if (!display_ || w <= 0 || h <= 0) return;
+    auto* c = new ConfigureCtx{cid, w, h, maximized};
     wl_event_loop* loop = wl_display_get_event_loop(display_);
-    wl_event_loop_add_idle(loop, idle_send_configure, ctx);
+    wl_event_loop_add_idle(loop, idle_send_configure, c);
 }
 
-void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
-    if (!activeToplevel_ || !activeXdgSurface_ || !display_) return;
+void WaylandServer::DoSendToplevelConfigure(const std::string& cid,
+                                              int w, int h, bool maximized) {
+    auto ctx = FindClientCtxById(cid);
+    if (!ctx || !ctx->activeToplevel || !ctx->activeXdgSurface || !display_) return;
 
     wl_array states;
     wl_array_init(&states);
@@ -843,21 +857,17 @@ void WaylandServer::DoSendToplevelConfigure(int w, int h, bool maximized) {
         uint32_t* s2 = (uint32_t*)wl_array_add(&states, sizeof(uint32_t));
         *s2 = XDG_TOPLEVEL_STATE_MAXIMIZED;
     }
-    xdg_toplevel_send_configure(activeToplevel_, w, h, &states);
+    xdg_toplevel_send_configure(ctx->activeToplevel, w, h, &states);
     wl_array_release(&states);
 
     uint32_t serial = wl_display_next_serial(display_);
-    xdg_surface_send_configure(activeXdgSurface_, serial);
+    xdg_surface_send_configure(ctx->activeXdgSurface, serial);
     wl_display_flush_clients(display_);
 
-    OH_LOG_INFO(LOG_APP, "HBOX_WIN_RESIZE_CFG_SEND %{public}dx%{public}d "
-                         "max=%{public}d serial=%{public}u",
-                w, h, maximized ? 1 : 0, serial);
-}
-
-void WaylandServer::FireMinimizeRequest() {
-    ReleaseAllPointerButtons();
-    if (minimizeCallback_) minimizeCallback_();
+    OH_LOG_INFO(LOG_APP,
+        "HBOX_WIN_RESIZE_CFG_SEND cid=%{public}s %{public}dx%{public}d "
+        "max=%{public}d serial=%{public}u",
+        cid.c_str(), w, h, maximized ? 1 : 0, serial);
 }
 
 // ─── wl_subsurface stub ───

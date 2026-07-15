@@ -92,27 +92,37 @@ public:
     WindowGeom GetWindowGeometry(wl_resource* surf);
     
     // for dragging
-    void SetMoveCallback(std::function<void()> cb) { moveCallback_ = std::move(cb); }
-    void FireMoveRequest();
-    void ReleaseAllPointerButtons();
+    void SetMoveCallback(std::function<void(const std::string&)> cb) {
+        moveCallback_ = std::move(cb);
+    }
+    void FireMoveRequest(const std::string& cid);
+    void ReleaseAllPointerButtons(const std::string& cid);
     
     // for maximize window
-    void SetMaximizeCallback(std::function<void()> cb) { maximizeCallback_ = std::move(cb); }
-    void SetUnmaximizeCallback(std::function<void()> cb) { unmaximizeCallback_ = std::move(cb); }
-    void SetResizeCallback(std::function<void(uint32_t)> cb) { resizeCallback_ = std::move(cb); }
+    void SetMaximizeCallback(std::function<void(const std::string&)> cb) {
+        maximizeCallback_ = std::move(cb);
+    }
+    void SetUnmaximizeCallback(std::function<void(const std::string&)> cb) {
+        unmaximizeCallback_ = std::move(cb);
+    }
+    void SetResizeCallback(std::function<void(const std::string&, uint32_t)> cb) {
+        resizeCallback_ = std::move(cb);
+    }
 
-    void FireMaximizeRequest();
-    void FireUnmaximizeRequest();
-    void FireResizeRequest(uint32_t edges);
+    void FireMaximizeRequest(const std::string& cid);
+    void FireUnmaximizeRequest(const std::string& cid);
+    void FireResizeRequest(const std::string& cid, uint32_t edges);
     
-    void SetActiveToplevel(wl_resource* tl, wl_resource* xs);
-    void ClearActiveToplevel(wl_resource* tl);
-    void SendToplevelConfigure(int w, int h, bool maximized);     // 任意线程可调
-    void DoSendToplevelConfigure(int w, int h, bool maximized);   // 仅 wl 线程调,内部使用
+    void SetActiveToplevel(wl_client* c, wl_resource* tl, wl_resource* xs);
+    void ClearActiveToplevel(wl_resource* tl);   // 遍历所有 ctx
+    void SendToplevelConfigure(const std::string& cid, int w, int h, bool maximized);
+    void DoSendToplevelConfigure(const std::string& cid, int w, int h, bool maximized);
     
     // for minimize window
-    void SetMinimizeCallback(std::function<void()> cb) { minimizeCallback_ = std::move(cb); }
-    void FireMinimizeRequest();
+    void SetMinimizeCallback(std::function<void(const std::string&)> cb) {
+        minimizeCallback_ = std::move(cb);
+    }
+    void FireMinimizeRequest(const std::string& cid);
     
     // wl_subcompositor / wl_subsurface stub
     static void wl_subcompositor_bind(wl_client* client, void* data,
@@ -197,18 +207,15 @@ private:
     std::map<wl_resource*, WindowGeom> geomMap_;
     
     // for dragging
-    std::function<void()> moveCallback_;
+    std::function<void(const std::string&)> moveCallback_;
     
     // for maximize window
-    std::function<void()> maximizeCallback_;
-    std::function<void()> unmaximizeCallback_;
-    std::function<void(uint32_t)> resizeCallback_;
-    
-    wl_resource* activeToplevel_ = nullptr;
-    wl_resource* activeXdgSurface_ = nullptr;
+    std::function<void(const std::string&)> maximizeCallback_;
+    std::function<void(const std::string&)> unmaximizeCallback_;
+    std::function<void(const std::string&, uint32_t)> resizeCallback_;
     
     // for minimize window
-    std::function<void()> minimizeCallback_;
+    std::function<void(const std::string&)> minimizeCallback_;
 
     // per-client 表
     std::mutex                                                    clientsMutex_;

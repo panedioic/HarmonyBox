@@ -173,18 +173,16 @@ export const sendMouseHover: (clientId: string, inside: boolean) => void;
 export const setSizeCallback: (cb: (clientId: string, w: number, h: number) => void) => void;
 export const getLatestSize: (clientId: string) => { w: number; h: number };
 
-export const setMoveCallback: (cb: () => void) => void;
-export const setMaximizeCallback: (cb: () => void) => void;
-export const setUnmaximizeCallback: (cb: () => void) => void;
-export const setMinimizeCallback: (cb: () => void) => void;
+export const setMoveCallback: (cb: (clientId: string) => void) => void;
+export const setMaximizeCallback: (cb: (clientId: string) => void) => void;
+export const setUnmaximizeCallback: (cb: (clientId: string) => void) => void;
+export const setResizeCallback: (cb: (clientId: string, edges: number) => void) => void;
+export const setMinimizeCallback: (cb: (clientId: string) => void) => void;
 
-/** edges 是 xdg_toplevel.resize_edge 位掩码: top=1, bottom=2, left=4, right=8。 */
-export const setResizeCallback: (cb: (edges: number) => void) => void;
-
-/** 主动告诉客户端目标 buffer 尺寸。 */
 export const requestClientResize: (
-  bufW: number,
-  bufH: number,
+  clientId: string,
+  w: number,
+  h: number,
   maximized: boolean
 ) => void;
 
