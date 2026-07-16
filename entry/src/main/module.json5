@@ -32,6 +32,17 @@
             ]
           }
         ]
+      },
+      {
+        "name": "AppRunnerAbility",
+        "srcEntry": "./ets/apprunnerability/AppRunnerAbility.ets",
+        "description": "$string:AppRunnerAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:AppRunnerAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": false,
+        "launchType": "multiton"
       }
     ],
     "extensionAbilities": [

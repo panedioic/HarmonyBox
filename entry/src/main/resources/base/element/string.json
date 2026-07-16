@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_label",
       "value": "HarmonyBox"
+    },
+    {
+      "name": "AppRunnerAbility_label",
+      "value": "HarmonyBox 应用"
+    },
+    {
+      "name": "AppRunnerAbility_desc",
+      "value": "HarmonyBox 应用实例窗口"
     }
   ]
 }

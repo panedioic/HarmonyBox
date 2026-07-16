@@ -884,4 +884,22 @@ export class WindowManagerService {
       console.error(`applyWindowSize failed: ${e.code} ${e.message}`);
     });
   }
+
+  // =========================================================
+  // Ability 挂载 (Phase 11 Step 2: stub, 完整实现在 Step 4)
+  // =========================================================
+
+  attachAppRunnerAbility(
+    instanceId: string,
+    ctx: common.UIAbilityContext,
+    stage: window.WindowStage
+  ): void {
+    console.info(`[WMS] attachAppRunnerAbility inst=${instanceId} (Step 2 stub)`);
+    // TODO Step 4: 找到 instance, 挂 hostAbilityContext/hostWindow, setupHostWindow
+  }
+
+  detachAppRunnerAbility(instanceId: string): void {
+    console.info(`[WMS] detachAppRunnerAbility inst=${instanceId} (Step 2 stub)`);
+    // TODO Step 4: 清理 hostAbilityContext, 触发 onHostWindowDestroyed
+  }
 }
