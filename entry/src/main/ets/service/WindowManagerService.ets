@@ -43,6 +43,9 @@ const PENDING_TTL_MS: number = 15000;
 export type RunningIdsListener = (ids: string[]) => void;
 export type InstancesListener  = (list: AppInstance[]) => void;
 
+// ─── 实验字段 (实验后删除) ───
+// interface DataRect { left: number; top: number; width: number; height: number };
+
 // =========================================================
 // WindowManagerService
 // =========================================================
@@ -84,6 +87,89 @@ export class WindowManagerService {
   private resizeStart:              ResizeStart | null = null;
   private resizeDragLastConfigure:  number = 0;
   private resizingInstanceId:       string | null = null;
+
+  /*
+  // ─── 实验字段 (实验后删除) ───
+  private exp_mainHidden: boolean = false;
+  private exp_subRectListener: ((data: window.RectChangeOptions) => void) | null = null;
+  private exp_latestSubRect: DataRect | null = null;
+  private exp_followTimer: number = -1;
+
+  // ─── 实验方法 (实验后删除) ───
+  private async experimentHideMainBehind(subWin: window.Window): Promise<void> {
+    if (this.exp_mainHidden) {
+      console.info('EXP: 已有窗口在跟随, 跳过');
+      return;
+    }
+    const windowStage = AppStorage.get<window.WindowStage>('windowStage');
+    if (!windowStage) return;
+    const mainWin = windowStage.getMainWindowSync();
+
+    try {
+      await mainWin.setWindowLimits({
+        minWidth: 1, minHeight: 1, maxWidth: 100, maxHeight: 100
+      }, true);
+      console.info('EXP: setWindowLimits ok');
+    } catch (e) {
+      console.warn(`EXP: setWindowLimits fail ${JSON.stringify(e)}`);
+    }
+
+    try {
+      await mainWin.resizeAsync(1, 1);
+      console.info('EXP: main resizeAsync 1x1 ok');
+    } catch (e) {
+      console.warn(`EXP: resizeAsync fail ${JSON.stringify(e)}`);
+    }
+
+    try {
+      mainWin.setWindowDecorVisible(false);
+      mainWin.setWindowDecorHeight(40);
+      mainWin.setWindowTitleButtonVisible(false, false, false);
+      console.info('EXP: setWindowDecorVisible false ok');
+    } catch (e) {
+      console.warn(`EXP: setWindowDecorVisible fail ${JSON.stringify(e)}`);
+    }
+
+    try {
+      await mainWin.setWindowFocusable(false);
+      console.info('EXP: setWindowFocusable false ok');
+    } catch (e) {
+      console.warn(`EXP: setWindowFocusable fail ${JSON.stringify(e)}`);
+    }
+
+    // 立即挪到子窗中心 (保持不变)
+    try {
+      const r = subWin.getWindowProperties().windowRect;
+      this.exp_latestSubRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+      await mainWin.moveWindowToAsync(
+        r.left + Math.floor(r.width / 2),
+        r.top + Math.floor(r.height / 2)
+      );
+      console.info(`EXP: initial move to ${r.left + r.width / 2},${r.top + r.height / 2}`);
+    } catch (e) {
+      console.warn(`EXP: initial move fail ${JSON.stringify(e)}`);
+    }
+
+    // ★ 监听: 只更新 latestSubRect, 不直接挪
+    const listener = (data: window.RectChangeOptions): void => {
+      const r = data.rect;
+      this.exp_latestSubRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+    };
+    this.exp_subRectListener = listener;
+    subWin.on('windowRectChange', listener);
+
+    // ★ 定时器: 每 100ms 追一次最新位置
+    this.exp_followTimer = setInterval((): void => {
+      const r = this.exp_latestSubRect;
+      if (!r) return;
+      const cx: number = r.left + Math.floor(r.width / 2);
+      const cy: number = r.top + Math.floor(r.height / 2);
+      mainWin.moveWindowToAsync(cx, cy).catch((): void => {  });
+    }, 100);
+
+    console.info('EXP: windowRectChange listener + follow timer attached');
+    this.exp_mainHidden = true;
+  }*/
 
   // =========================================================
   // lifecycle
@@ -617,6 +703,11 @@ export class WindowManagerService {
       inst.hostWindow = subWin;
       this.notifyChanged();
       await subWin.showWindow();
+
+      // ─── 实验: 主窗躲子窗后面 (仅第一个应用) ───
+      // this.experimentHideMainBehind(subWin).catch((e: BusinessError): void => {
+      //   console.error(`EXP failed: ${e.code} ${e.message}`);
+      // });
 
       if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
         this.firstCommitDone.add(instanceId);
