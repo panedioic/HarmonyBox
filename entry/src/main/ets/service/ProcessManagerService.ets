@@ -141,6 +141,10 @@ export class ProcessManagerService {
     const userEnvs: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
     const containerEnv: string[] = [...(container.config.envVars || [])];
 
+    // ★ 先生成 instanceId, 好注入到子进程 env, 供 wayland 侧精确匹配
+    const instanceId: string = `inst-${++this.instanceSeq}`;
+    const identityEnv: string[] = [`HBOX_INSTANCE_ID=${instanceId}`];
+
     let exeAbs: string;
     let launchArgs: string[];
     let launchEnvs: string[];
@@ -173,19 +177,18 @@ export class ProcessManagerService {
       // 最终启动参数
       exeAbs = userExe;
       launchArgs = ['box64', wineBinPath, userExe, ...userArgs];
-      launchEnvs = [...containerEnv, ...wineEnv, ...userEnvs];
+      launchEnvs = [...containerEnv, ...wineEnv, ...userEnvs, ...identityEnv];
     } else if (container.config.type === ContainerType.LINUX) {
       // 最终启动参数
       exeAbs = userExe;
       launchArgs = ['box64', userExe, ...userArgs];
-      launchEnvs = [...commonEnv, ...containerEnv, ...userEnvs];
+      launchEnvs = [...commonEnv, ...containerEnv, ...userEnvs, ...identityEnv];
     } else {
       this.toast(`暂不支持容器类型 ${container.config.type}`, 2000);
       return { ok: false, instanceId: '', errorMsg: '不支持的容器类型' };
     }
 
     // 8. 生成 instanceId, 预登记
-    const instanceId: string = `inst-${++this.instanceSeq}`;
     WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
 
     this.toast(`正在启动 ${app.name}...`, 1200);

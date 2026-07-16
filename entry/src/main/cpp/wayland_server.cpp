@@ -77,6 +77,35 @@ static const struct wl_output_interface k_output_impl = {
     .release = WaylandServer::wl_output_release,
 };
 
+static std::string ReadProcEnvVar(pid_t pid, const std::string& key) {
+    if (pid <= 0) return "";
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/environ", pid);
+    FILE* f = fopen(path, "rb");
+    if (!f) return "";
+    std::string content;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        content.append(buf, n);
+    }
+    fclose(f);
+
+    // /proc/*/environ 是 \0 分隔的 KEY=VAL 条目
+    const std::string prefix = key + "=";
+    size_t pos = 0;
+    while (pos < content.size()) {
+        size_t end = content.find('\0', pos);
+        if (end == std::string::npos) end = content.size();
+        if (end - pos > prefix.size() &&
+            content.compare(pos, prefix.size(), prefix) == 0) {
+            return content.substr(pos + prefix.size(), end - pos - prefix.size());
+        }
+        pos = end + 1;
+    }
+    return "";
+}
+
 // wl_display client_created listener trampoline
 static void OnWlClientCreated(wl_listener* /*l*/, void* data) {
     auto* client = static_cast<wl_client*>(data);
@@ -116,6 +145,12 @@ WaylandServer::GetOrCreateClientCtx(wl_client* c) {
     wl_client_get_credentials(c, &pid, &uid, &gid);
     ctx->pid = pid;
 
+    // ★ 从子进程 env 读 HBOX_INSTANCE_ID
+    ctx->instanceId = ReadProcEnvVar(pid, "HBOX_INSTANCE_ID");
+    OH_LOG_INFO(LOG_APP,
+        "★CLIENT_CTX id=%{public}s pid=%{public}d instanceId=%{public}s",
+        ctx->id.c_str(), pid, ctx->instanceId.c_str());
+    
     // 挂 destroy 监听
     ctx->destroyListener.notify = OnWlClientDestroyed;
     wl_client_add_destroy_listener(c, &ctx->destroyListener);
@@ -409,7 +444,7 @@ void WaylandServer::surface_commit(wl_client* client, wl_resource* surfRes) {
         self->SetPointerFocusForCtx(ctx, surfRes);
 
         // ★ 新事件: onClientConnect(id)
-        self->FireClientConnect(ctx->id);
+        self->FireClientConnect(ctx->id, ctx->instanceId);
 
         // ★ 老事件: FireState("active") 保持兼容
         // 目前 ArkTS WaylandService 里 setStateCallback 收到 "active" 转成

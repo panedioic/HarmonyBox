@@ -375,8 +375,28 @@ void StringTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
 }
 } // anonymous
 
-namespace clientnapi {
+namespace {
+struct ClientConnectEvent {
+    std::string cid;
+    std::string instanceId;
+};
 
+void ClientConnectTsfnCallJs(napi_env env, napi_value jsCb, void*, void* data) {
+    auto* ev = static_cast<ClientConnectEvent*>(data);
+    if (env && jsCb && ev) {
+        napi_value undef, args[2];
+        napi_get_undefined(env, &undef);
+        napi_create_string_utf8(env, ev->cid.c_str(),
+                                NAPI_AUTO_LENGTH, &args[0]);
+        napi_create_string_utf8(env, ev->instanceId.c_str(),
+                                NAPI_AUTO_LENGTH, &args[1]);
+        napi_call_function(env, undef, jsCb, 2, args, nullptr);
+    }
+    delete ev;
+}
+} // anonymous
+
+namespace clientnapi {
 napi_value SetClientConnectCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1; napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
@@ -386,14 +406,17 @@ napi_value SetClientConnectCallback(napi_env env, napi_callback_info info) {
     }
     napi_value name;
     napi_create_string_utf8(env, "WLClientConnect", NAPI_AUTO_LENGTH, &name);
+    // ★ 换成 ClientConnectTsfnCallJs
     napi_create_threadsafe_function(env, args[0], nullptr, name,
-        0, 1, nullptr, nullptr, nullptr, StringTsfnCallJs, &g_clientConnectTsfn);
+        0, 1, nullptr, nullptr, nullptr,
+        ClientConnectTsfnCallJs, &g_clientConnectTsfn);
 
     WaylandServer::GetInstance()->SetClientConnectCallback(
-        [](const std::string& id) {
+        [](const std::string& id, const std::string& inst) {
             if (g_clientConnectTsfn) {
                 napi_call_threadsafe_function(g_clientConnectTsfn,
-                    new std::string(id), napi_tsfn_blocking);
+                    new ClientConnectEvent{id, inst},
+                    napi_tsfn_blocking);
             }
         });
     return nullptr;

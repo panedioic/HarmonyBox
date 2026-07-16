@@ -9,6 +9,7 @@
 
 struct ClientContext {
     std::string   id;             // "c1", "c2", ... 上抛给 ArkTS
+    std::string   instanceId;   // ★ 新: 从子进程 env 读到的
     wl_client*    client = nullptr;
     pid_t         pid = -1;
 

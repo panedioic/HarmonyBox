@@ -168,14 +168,15 @@ public:
     std::shared_ptr<ClientContext> FindClientCtxById(const std::string& id);
     std::shared_ptr<ClientContext> GetOrCreateClientCtx(wl_client* c);
     void EraseClientCtx(wl_client* c);
-    void SetClientConnectCallback(std::function<void(const std::string&)> cb) {
+    void SetClientConnectCallback(
+        std::function<void(const std::string&, const std::string&)> cb) {
         clientConnectCb_ = std::move(cb);
     }
     void SetClientDisconnectCallback(std::function<void(const std::string&)> cb) {
         clientDisconnectCb_ = std::move(cb);
     }
-    void FireClientConnect(const std::string& id) {
-        if (clientConnectCb_) clientConnectCb_(id);
+    void FireClientConnect(const std::string& id, const std::string& instanceId) {
+        if (clientConnectCb_) clientConnectCb_(id, instanceId);
     }
     void FireClientDisconnect(const std::string& id) {
         if (clientDisconnectCb_) clientDisconnectCb_(id);
@@ -224,7 +225,7 @@ private:
     std::atomic<int>                                               clientSeq_{0};
 
     // 新事件回调
-    std::function<void(const std::string&)> clientConnectCb_;
+    std::function<void(const std::string&, const std::string&)> clientConnectCb_;
     std::function<void(const std::string&)> clientDisconnectCb_;
 
     // wl_display 全局 listener

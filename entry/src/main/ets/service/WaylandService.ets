@@ -14,6 +14,7 @@ export type ClientIdListener = (clientId: string) => void;
 export type ClientCommitListener = (clientId: string, w: number, h: number) => void;
 export type ClientResizeListener = (clientId: string, edges: number) => void;
 export type HostResizeDragListener = (edges: number, dxPx: number, dyPx: number) => void;
+type ClientConnectListener = (cid: string, instanceId: string) => void;
 
 export class WaylandService {
   private static instance: WaylandService | null = null;
@@ -35,7 +36,7 @@ export class WaylandService {
   private useNativeDecor: boolean = true;
 
   // ===== client event listeners =====
-  private connectListener:    ClientIdListener | null = null;
+  private connectListener:    ClientConnectListener | null = null;
   private disconnectListener: ClientIdListener | null = null;
   private commitListener:     ClientCommitListener | null = null;
   private moveListener:       ClientIdListener | null = null;
@@ -48,6 +49,8 @@ export class WaylandService {
   private hostResizeBeginListeners: Map<string, (edges: number) => void> = new Map();
   private hostResizeDragListener:  HostResizeDragListener | null = null;
   private hostResizeEndListener:   (() => void) | null = null;
+
+
 
   // =========================================================
   // lifecycle
@@ -62,9 +65,9 @@ export class WaylandService {
     this.useNativeDecor = prefs.useNativeDecor;
 
     // ★ 新: 显式带 clientId
-    wl.setClientConnectCallback((cid: string): void => {
-      console.info(`[WL] connect cid=${cid}`);
-      if (this.connectListener) this.connectListener(cid);
+    wl.setClientConnectCallback((cid: string, instanceId: string): void => {
+      console.info(`[WL] connect cid=${cid} inst=${instanceId}`);
+      if (this.connectListener) this.connectListener(cid, instanceId);
     });
     wl.setClientDisconnectCallback((cid: string): void => {
       console.info(`[WL] disconnect cid=${cid}`);
@@ -139,14 +142,14 @@ export class WaylandService {
   // =========================================================
   // client event listeners
   // =========================================================
-  setClientConnectListener(cb: ClientIdListener | null):     void { this.connectListener = cb; }
-  setClientDisconnectListener(cb: ClientIdListener | null):  void { this.disconnectListener = cb; }
-  setClientCommitListener(cb: ClientCommitListener | null):  void { this.commitListener = cb; }
-  setClientMoveListener(cb: ClientIdListener | null):        void { this.moveListener = cb; }
-  setClientResizeListener(cb: ClientResizeListener | null):  void { this.resizeListener = cb; }
-  setClientMaximizeListener(cb: ClientIdListener | null):    void { this.maximizeListener = cb; }
-  setClientUnmaximizeListener(cb: ClientIdListener | null):  void { this.unmaximizeListener = cb; }
-  setClientMinimizeListener(cb: ClientIdListener | null):    void { this.minimizeListener = cb; }
+  setClientConnectListener(cb: ClientConnectListener | null): void { this.connectListener = cb; }
+  setClientDisconnectListener(cb: ClientIdListener | null):   void { this.disconnectListener = cb; }
+  setClientCommitListener(cb: ClientCommitListener | null):   void { this.commitListener = cb; }
+  setClientMoveListener(cb: ClientIdListener | null):         void { this.moveListener = cb; }
+  setClientResizeListener(cb: ClientResizeListener | null):   void { this.resizeListener = cb; }
+  setClientMaximizeListener(cb: ClientIdListener | null):     void { this.maximizeListener = cb; }
+  setClientUnmaximizeListener(cb: ClientIdListener | null):   void { this.unmaximizeListener = cb; }
+  setClientMinimizeListener(cb: ClientIdListener | null):     void { this.minimizeListener = cb; }
 
   // =========================================================
   // host-side resize drag

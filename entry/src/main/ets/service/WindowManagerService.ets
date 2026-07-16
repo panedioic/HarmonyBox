@@ -96,8 +96,8 @@ export class WindowManagerService {
     const wlSvc = WaylandService.getInstance();
     wlSvc.init(ctx);
 
-    wlSvc.setClientConnectListener((cid: string): void => {
-      this.handleClientConnect(cid);
+    wlSvc.setClientConnectListener((cid: string, instanceId: string): void => {
+      this.handleClientConnect(cid, instanceId);
     });
     wlSvc.setClientDisconnectListener((cid: string): void => {
       this.handleClientDisconnect(cid);
@@ -302,25 +302,50 @@ export class WindowManagerService {
   // client event handlers (来自 wayland)
   // =========================================================
 
-  private handleClientConnect(clientId: string): void {
+  private handleClientConnect(clientId: string, recvInstanceId: string): void {
     this.pruneExpiredPending();
-    const pending: PendingLaunch | undefined = this.pendingQueue.shift();
+
+    let pending: PendingLaunch | undefined;
+    let matchType: string = 'AUTO';
+
+    // 1. 优先: instanceId 精确匹配
+    if (recvInstanceId) {
+      const idx: number = this.pendingQueue.findIndex(
+        (p: PendingLaunch): boolean => p.instanceId === recvInstanceId
+      );
+      if (idx >= 0) {
+        pending = this.pendingQueue.splice(idx, 1)[0];
+        matchType = 'EXACT';
+      }
+    }
+
+    // 2. 兜底: FIFO 头部
+    if (!pending && this.pendingQueue.length > 0) {
+      pending = this.pendingQueue.shift();
+      matchType = recvInstanceId ? 'FIFO_FALLBACK' : 'FIFO';
+    }
 
     let instanceId: string;
-    let appName:    string;
-    let appId:      string;
+    let appName: string;
+    let appId: string;
 
     if (pending) {
       instanceId = pending.instanceId;
       appName    = pending.appName;
       appId      = pending.appId;
     } else {
-      // shell 里手动起的 wine, 无预登记 → auto 实例
-      instanceId = `auto-${++this.autoSeq}`;
+      // shell 里手动起的 wine, 无预登记
+      // 若 client 带了 instanceId 但队列没匹配, 用它做实例名; 否则生成 auto-N
+      instanceId = recvInstanceId || `auto-${++this.autoSeq}`;
       const stashed: string | undefined = AppStorage.get<string>('currentAppName');
       appName = (stashed && stashed.length > 0) ? stashed : 'External App';
       appId   = '';
     }
+
+    console.info(
+      `HBOX_WM_CLIENT_MATCH_${matchType} inst=${instanceId} `
+        + `cid=${clientId} recvInst=${recvInstanceId || '(none)'}`
+    );
 
     const inst = this.ensureInstance(instanceId, appName, appId, 0);
     inst.clientId = clientId;
