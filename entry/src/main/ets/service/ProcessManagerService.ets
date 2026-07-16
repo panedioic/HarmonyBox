@@ -53,7 +53,8 @@ export class ProcessManagerService {
     return ProcessManagerService.instance;
   }
 
-  private ctx: common.UIAbilityContext | null = null;
+  private ctx: common.Context | null = null;             // ← 类型从 UIAbilityContext 改成 Context
+  private uiCtx: common.UIAbilityContext | null = null;  // ← 新增
 
   // pid 输出缓冲与订阅
   private buffers: Map<number, string[]> = new Map();
@@ -74,10 +75,19 @@ export class ProcessManagerService {
   // lifecycle
   // =========================================================
 
-  init(ctx: common.UIAbilityContext): void {
+  initStage(ctx: common.Context): void {
     this.ctx = ctx;
-
     wl.startProcMgr(SOCK_PATH);
+  }
+
+  initUI(ctx: common.UIAbilityContext): void {
+    this.uiCtx = ctx;
+  }
+
+  /** @deprecated 使用 initStage / initUI 替代 */
+  init(ctx: common.UIAbilityContext): void {
+    this.initStage(ctx);
+    this.initUI(ctx);
   }
 
   setToastFn(fn: ((msg: string, dur: number) => void) | null): void {
@@ -289,7 +299,7 @@ export class ProcessManagerService {
   // private: 参数构建
   // =========================================================
 
-  private parseAppEnv(envText: string, ctx: common.UIAbilityContext, appDir: string): string[] {
+  private parseAppEnv(envText: string, ctx: common.Context, appDir: string): string[] {
     if (!envText) return [];
     const filesDir: string = ctx.filesDir;
     const out: string[] = [];

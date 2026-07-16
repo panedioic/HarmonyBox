@@ -3,6 +3,7 @@
     "name": "entry",
     "type": "entry",
     "description": "$string:module_desc",
+    "srcEntry": "./ets/entryability/HBoxAbilityStage.ets",   // ★ 新增
     "mainElement": "EntryAbility",
     "deviceTypes": [
       "tablet",

@@ -59,7 +59,8 @@ export class WindowManagerService {
     return WindowManagerService.instance;
   }
 
-  private ctx: common.UIAbilityContext | null = null;
+  private ctx: common.Context | null = null;             // ← 通用 Context
+  private uiCtx: common.UIAbilityContext | null = null;  // ← 未来 startAbility 用
   private installed: boolean = false;
 
   // 实例索引
@@ -175,12 +176,13 @@ export class WindowManagerService {
   // lifecycle
   // =========================================================
 
-  init(ctx: common.UIAbilityContext): void {
+  initStage(ctx: common.Context): void {
     this.ctx = ctx;
     if (this.installed) return;
 
     const wlSvc = WaylandService.getInstance();
-    wlSvc.init(ctx);
+    // WaylandService.initStage 已由 HBoxAbilityStage 先行调用, 这里不再重复
+    // (幂等保护也在 initStage 内部)
 
     wlSvc.setClientConnectListener((cid: string, instanceId: string): void => {
       this.handleClientConnect(cid, instanceId);
@@ -214,6 +216,16 @@ export class WindowManagerService {
     });
 
     this.installed = true;
+  }
+
+  initUI(ctx: common.UIAbilityContext): void {
+    this.uiCtx = ctx;
+  }
+
+  /** @deprecated 使用 initStage / initUI 替代 */
+  init(ctx: common.UIAbilityContext): void {
+    this.initStage(ctx);
+    this.initUI(ctx);
   }
 
   shutdown(): void {

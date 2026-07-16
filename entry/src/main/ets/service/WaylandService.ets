@@ -26,6 +26,8 @@ export class WaylandService {
   }
 
   private ctx: common.UIAbilityContext | null = null;
+  private stageCtx: common.Context | null = null;
+  private uiCtx: common.UIAbilityContext | null = null;
 
   // ===== state =====
   private serverReady: boolean = false;
@@ -55,16 +57,17 @@ export class WaylandService {
   // =========================================================
   // lifecycle
   // =========================================================
-  init(ctx: common.UIAbilityContext): boolean {
+
+  /** Stage 阶段初始化: 挂 native 回调 + 启动 wayland server */
+  initStage(ctx: common.Context): boolean {
     if (this.serverReady) return true;
-    this.ctx = ctx;
+    this.stageCtx = ctx;
     this.sockPath = `${ctx.filesDir}/wl-sock`;
 
     const prefs: UiPrefs = ToolEnvStore.loadUiPrefs(ctx);
     this.uiScale = prefs.scale;
     this.useNativeDecor = prefs.useNativeDecor;
 
-    // ★ 新: 显式带 clientId
     wl.setClientConnectCallback((cid: string, instanceId: string): void => {
       console.info(`[WL] connect cid=${cid} inst=${instanceId}`);
       if (this.connectListener) this.connectListener(cid, instanceId);
@@ -73,13 +76,9 @@ export class WaylandService {
       console.info(`[WL] disconnect cid=${cid}`);
       if (this.disconnectListener) this.disconnectListener(cid);
     });
-
-    // sizeCallback 现在带 cid
     wl.setSizeCallback((cid: string, w: number, h: number): void => {
       if (this.commitListener) this.commitListener(cid, w, h);
     });
-
-    // init() 里全部改成透传 cid, 不再用 DEFAULT_CLIENT_ID
     wl.setMoveCallback((cid: string): void => {
       if (this.moveListener) this.moveListener(cid);
     });
@@ -96,14 +95,20 @@ export class WaylandService {
       if (this.minimizeListener) this.minimizeListener(cid);
     });
 
-    // ★ setStateCallback 桥接删除
-    // wl.setStateCallback((s: string): void => {
-    //     if (s === 'active')      this.connectListener?.(DEFAULT_CLIENT_ID);
-    //     else if (s === 'exited') this.disconnectListener?.(DEFAULT_CLIENT_ID);
-    // });
-
     const ok: boolean = wl.startWaylandServer(this.sockPath);
     this.serverReady = ok;
+    return ok;
+  }
+
+  /** UI 阶段: 只保存 uiCtx, 供未来需要 startAbility 等操作时用 */
+  initUI(ctx: common.UIAbilityContext): void {
+    this.uiCtx = ctx;
+  }
+
+  /** @deprecated 使用 initStage / initUI 替代 */
+  init(ctx: common.UIAbilityContext): boolean {
+    const ok: boolean = this.initStage(ctx);
+    this.initUI(ctx);
     return ok;
   }
 
