@@ -1,6 +1,6 @@
 import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { WaylandService, WlBufferSize } from './WaylandService';
 import { ProcessManagerService } from './ProcessManagerService';
 
@@ -36,6 +36,11 @@ export interface AppInstance {
   hostWindow: window.Window | null;
   logWindow:  window.Window | null;
   createdAt:  number;
+  // ★ Phase 11:
+  hostAbilityContext: common.UIAbilityContext | null;
+  logAbilityContext:  common.UIAbilityContext | null;
+  hostAttachPending:  boolean;
+  logAttachPending:   boolean;
 }
 
 const PENDING_TTL_MS: number = 15000;
@@ -282,8 +287,8 @@ export class WindowManagerService {
     // 否则等 disconnect 事件或用户手动关窗
   }
 
-  /** 创建日志窗口 (streaming stdout/exit) */
-  async createLogWindow(instanceId: string, appName: string, pid: number): Promise<void> {
+  /** @deprecated 迁移到 CliRunnerAbility 后此路径废弃, 保留用作回退参考 */
+  async createLogWindow_deprecated(instanceId: string, appName: string, pid: number): Promise<void> {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
       if (!windowStage) {
@@ -347,6 +352,41 @@ export class WindowManagerService {
     }
   }
 
+  /** 创建日志窗口: 通过 startAbility 拉起 CliRunnerAbility */
+  async createLogWindow(instanceId: string, appName: string, pid: number): Promise<void> {
+    const inst = this.ensureInstance(instanceId, appName, '', pid);
+    if (inst.logAttachPending || inst.logAbilityContext) {
+      console.info(`[WMS] createLogWindow skip (pending or attached) inst=${instanceId}`);
+      return;
+    }
+    const uiCtx = this.uiCtx;
+    if (!uiCtx) {
+      console.error('[WMS] createLogWindow: uiCtx not ready');
+      ProcessManagerService.getInstance().terminate(pid);
+      return;
+    }
+
+    inst.logAttachPending = true;
+    const want: Want = {
+      bundleName: uiCtx.abilityInfo.bundleName,
+      abilityName: 'CliRunnerAbility',
+      parameters: {
+        instanceId: instanceId,
+        appName:    appName,
+        appId:      inst.appId,
+        pid:        pid
+      }
+    };
+    try {
+      await uiCtx.startAbility(want);
+      console.info(`[WMS] CliRunnerAbility startAbility ok inst=${instanceId}`);
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`[WMS] CliRunnerAbility startAbility failed: ${err.code} ${err.message}`);
+      inst.logAttachPending = false;
+    }
+  }
+
   // =========================================================
   // API: 外部销毁 / 恢复
   // =========================================================
@@ -355,14 +395,27 @@ export class WindowManagerService {
   destroyInstance(instanceId: string): void {
     const inst: AppInstance | undefined = this.instances.get(instanceId);
     if (!inst) return;
-    if (inst.hostWindow) {
+
+    // GUI: 优先用 terminateSelf 关闭整个 Ability
+    if (inst.hostAbilityContext) {
+      inst.hostAbilityContext.terminateSelf().catch((): void => { /* ignore */ });
+      inst.hostAbilityContext = null;
+      inst.hostWindow = null;
+    } else if (inst.hostWindow) {
       inst.hostWindow.destroyWindow().catch((): void => { /* ignore */ });
       inst.hostWindow = null;
     }
-    if (inst.logWindow) {
+
+    // LOG: 同上
+    if (inst.logAbilityContext) {
+      inst.logAbilityContext.terminateSelf().catch((): void => { /* ignore */ });
+      inst.logAbilityContext = null;
+      inst.logWindow = null;
+    } else if (inst.logWindow) {
       inst.logWindow.destroyWindow().catch((): void => { /* ignore */ });
       inst.logWindow = null;
     }
+
     if (inst.pid > 0) {
       ProcessManagerService.getInstance().terminate(inst.pid);
     }
@@ -460,15 +513,19 @@ export class WindowManagerService {
     const inst: AppInstance | undefined = this.instances.get(instanceId);
     if (!inst) return;
 
-    if (inst.hostWindow) {
+    // 关闭 GUI 窗口 (Ability 或 SubWindow)
+    if (inst.hostAbilityContext) {
+      inst.hostAbilityContext.terminateSelf().catch((): void => { /* ignore */ });
+      inst.hostAbilityContext = null;
+      inst.hostWindow = null;
+    } else if (inst.hostWindow) {
       inst.hostWindow.destroyWindow().catch((): void => { /* ignore */ });
       inst.hostWindow = null;
     }
     this.clientIndex.delete(clientId);
     inst.clientId = null;
 
-    // 日志窗口保留 (用户可能想看退出后的日志); 无日志窗口时直接清
-    if (inst.logWindow === null) {
+    if (inst.logWindow === null && inst.logAbilityContext === null) {   // ★
       this.cleanupInstance(instanceId);
     }
   }
@@ -652,7 +709,8 @@ export class WindowManagerService {
   // host window creation (统一入口)
   // =========================================================
 
-  private async createHostWindow(inst: AppInstance): Promise<void> {
+  /** @deprecated 迁移到 AppRunnerAbility 后此路径废弃, 保留用作回退参考 */
+  private async createHostWindow_deprecated(inst: AppInstance): Promise<void> {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
       if (!windowStage) {
@@ -732,11 +790,47 @@ export class WindowManagerService {
     }
   }
 
+  // =========================================================
+  // host window creation (通过 startAbility 拉起 AppRunnerAbility)
+  // =========================================================
+
+  private async createHostWindow(inst: AppInstance): Promise<void> {
+    if (inst.hostAttachPending || inst.hostAbilityContext) {
+      console.info(`[WMS] createHostWindow skip (pending or attached) inst=${inst.instanceId}`);
+      return;
+    }
+    const uiCtx = this.uiCtx;
+    if (!uiCtx) {
+      console.error('[WMS] createHostWindow: uiCtx not ready');
+      return;
+    }
+
+    inst.hostAttachPending = true;
+    const want: Want = {
+      bundleName: uiCtx.abilityInfo.bundleName,
+      abilityName: 'AppRunnerAbility',
+      parameters: {
+        instanceId: inst.instanceId,
+        appName:    inst.appName,
+        appId:      inst.appId,
+        clientId:   inst.clientId ?? ''
+      }
+    };
+    try {
+      await uiCtx.startAbility(want);
+      console.info(`[WMS] AppRunnerAbility startAbility ok inst=${inst.instanceId}`);
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`[WMS] AppRunnerAbility startAbility failed: ${err.code} ${err.message}`);
+      inst.hostAttachPending = false;
+    }
+  }
+
   private onHostWindowDestroyed(instanceId: string): void {
     const inst = this.instances.get(instanceId);
     if (!inst) return;
     inst.hostWindow = null;
-    // 用户手动关窗 → 视为结束这个实例
+    inst.hostAbilityContext = null;   // ★ 新增
     if (inst.clientId) {
       this.clientIndex.delete(inst.clientId);
       inst.clientId = null;
@@ -747,7 +841,7 @@ export class WindowManagerService {
     this.firstCommitDone.delete(instanceId);
     this.maximizedInsts.delete(instanceId);
     this.savedHostSizes.delete(instanceId);
-    if (inst.logWindow === null) {
+    if (inst.logWindow === null && inst.logAbilityContext === null) {   // ★ 补齐 Ability 判断
       this.cleanupInstance(instanceId);
     }
   }
@@ -766,10 +860,14 @@ export class WindowManagerService {
         appId,
         appName,
         pid,
-        clientId:   null,
-        hostWindow: null,
-        logWindow:  null,
-        createdAt:  Date.now()
+        clientId:            null,
+        hostWindow:          null,
+        logWindow:           null,
+        createdAt:           Date.now(),
+        hostAbilityContext:  null,
+        logAbilityContext:   null,
+        hostAttachPending:   false,
+        logAttachPending:    false
       };
       this.instances.set(instanceId, inst);
       if (appId) {
@@ -894,13 +992,39 @@ export class WindowManagerService {
     ctx: common.UIAbilityContext,
     stage: window.WindowStage
   ): void {
-    console.info(`[WMS] attachAppRunnerAbility inst=${instanceId} (Step 2 stub)`);
-    // TODO Step 4: 找到 instance, 挂 hostAbilityContext/hostWindow, setupHostWindow
+    console.info(`[WMS] attachAppRunnerAbility inst=${instanceId}`);
+    const inst = this.instances.get(instanceId);
+    if (!inst) {
+      console.error(`[WMS] attach: instance ${instanceId} not found, closing ability`);
+      ctx.terminateSelf().catch((): void => { /* ignore */ });
+      return;
+    }
+
+    let mainWin: window.Window;
+    try {
+      mainWin = stage.getMainWindowSync();
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`[WMS] getMainWindowSync failed: ${err.code} ${err.message}`);
+      return;
+    }
+
+    inst.hostAbilityContext = ctx;
+    inst.hostWindow = mainWin;
+    inst.hostAttachPending = false;
+
+    this.setupHostWindow(inst, mainWin);
+    this.notifyChanged();
   }
 
   detachAppRunnerAbility(instanceId: string): void {
-    console.info(`[WMS] detachAppRunnerAbility inst=${instanceId} (Step 2 stub)`);
-    // TODO Step 4: 清理 hostAbilityContext, 触发 onHostWindowDestroyed
+    console.info(`[WMS] detachAppRunnerAbility inst=${instanceId}`);
+    const inst = this.instances.get(instanceId);
+    if (!inst) return;
+    inst.hostAbilityContext = null;
+    // hostWindow 由 onHostWindowDestroyed 清空 (windowEvent WINDOW_DESTROYED 会触发)
+    // 但 Ability 层的销毁不一定伴随 windowEvent, 显式调一次保底
+    this.onHostWindowDestroyed(instanceId);
   }
 
   attachCliRunnerAbility(
@@ -908,12 +1032,134 @@ export class WindowManagerService {
     ctx: common.UIAbilityContext,
     stage: window.WindowStage
   ): void {
-    console.info(`[WMS] attachCliRunnerAbility inst=${instanceId} (Step 3 stub)`);
-    // TODO Step 4: 找到 instance, 挂 logAbilityContext/logWindow, setupLogWindow
+    console.info(`[WMS] attachCliRunnerAbility inst=${instanceId}`);
+    const inst = this.instances.get(instanceId);
+    if (!inst) {
+      console.error(`[WMS] attachCli: instance ${instanceId} not found, closing ability`);
+      ctx.terminateSelf().catch((): void => { /* ignore */ });
+      return;
+    }
+
+    let mainWin: window.Window;
+    try {
+      mainWin = stage.getMainWindowSync();
+    } catch (e) {
+      const err = e as BusinessError;
+      console.error(`[WMS] getMainWindowSync (log) failed: ${err.code} ${err.message}`);
+      return;
+    }
+
+    inst.logAbilityContext = ctx;
+    inst.logWindow = mainWin;
+    inst.logAttachPending = false;
+
+    this.setupLogWindow(inst, mainWin);
+    this.notifyChanged();
   }
 
   detachCliRunnerAbility(instanceId: string): void {
-    console.info(`[WMS] detachCliRunnerAbility inst=${instanceId} (Step 3 stub)`);
-    // TODO Step 4: 清理 logAbilityContext, 处理进程 terminate 逻辑
+    console.info(`[WMS] detachCliRunnerAbility inst=${instanceId}`);
+    const inst = this.instances.get(instanceId);
+    if (!inst) return;
+    inst.logAbilityContext = null;
+    inst.logWindow = null;
+    // 用户关闭日志窗 → terminate 进程 (与原 createLogWindow 语义一致)
+    if (inst.pid > 0) {
+      ProcessManagerService.getInstance().terminate(inst.pid);
+    }
+    // 只有 GUI 也没了才清整个 instance
+    if (inst.hostWindow === null && inst.hostAbilityContext === null) {
+      this.cleanupInstance(instanceId);
+    }
+  }
+
+  // =========================================================
+  // setup: Ability 侧回调时把窗口挂上, 尺寸/位置/事件全在这里
+  // =========================================================
+
+  private setupHostWindow(inst: AppInstance, win: window.Window): void {
+    const wlSvc = WaylandService.getInstance();
+    const useNative: boolean = wlSvc.getUseNativeDecor();
+
+    // 装饰栏
+    try { win.setWindowDecorVisible(useNative); } catch (e) { /* ignore */ }
+    try { win.setWindowBackgroundColor('#FF000000'); } catch (e) { /* ignore */ }
+    // 主窗口不支持 setWindowCornerRadius, 通过 AppRunner 页面的 borderRadius 实现视觉圆角
+
+    // 尺寸: 基于 wayland buffer 或缺省 800x600
+    const sz: WlBufferSize = wlSvc.getLatestBufferSize(inst.clientId ?? '');
+    const scale: number = wlSvc.getUiScale();
+    const bufW: number = sz.w > 0 ? sz.w : 800;
+    const bufH: number = sz.h > 0 ? sz.h : 600;
+    const totalW: number = Math.max(1, Math.round(bufW * scale));
+    const totalH: number = Math.max(1, Math.round(bufH * scale));
+
+    win.resize(totalW, totalH).then((): void => {
+      try {
+        const prop = win.getWindowProperties();
+        const di = display.getDisplayByIdSync(prop.displayId);
+        win.moveWindowToGlobal(
+          Math.round((di.availableWidth - totalW) / 2),
+          Math.round((di.availableHeight - totalH) / 2),
+          { displayId: prop.displayId }
+        ).catch((): void => { /* ignore */ });
+      } catch (e) { /* ignore */ }
+    }).catch((e: BusinessError): void => {
+      console.warn(`[WMS] setupHostWindow resize failed: ${e.code} ${e.message}`);
+    });
+
+    const instanceId: string = inst.instanceId;
+    win.on('windowEvent', (event: window.WindowEventType): void => {
+      if (event === window.WindowEventType.WINDOW_DESTROYED) {
+        this.onHostWindowDestroyed(instanceId);
+      }
+    });
+    win.on('windowSizeChange', (size: window.Size): void => {
+      this.handleHostSizeChange(instanceId, size.width, size.height);
+    });
+
+    if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
+      this.firstCommitDone.add(instanceId);
+      this.applyWindowSize(win, sz.w, sz.h);
+    }
+    console.info(`HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
+  }
+
+  private setupLogWindow(inst: AppInstance, win: window.Window): void {
+    try { win.setWindowBackgroundColor('#FF0E0E0E'); } catch (e) { /* ignore */ }
+
+    const w: number = 1440;
+    const h: number = 960;
+    const attachedToGui: boolean = inst.hostAbilityContext !== null || inst.hostWindow !== null;
+    const offset: number = attachedToGui ? 200 : 0;
+
+    win.resize(w, h).then((): void => {
+      try {
+        const prop = win.getWindowProperties();
+        const di = display.getDisplayByIdSync(prop.displayId);
+        win.moveWindowToGlobal(
+          Math.round((di.availableWidth - w) / 2 - offset),
+          Math.round((di.availableHeight - h) / 2 + offset / 2),
+          { displayId: prop.displayId }
+        ).catch((): void => { /* ignore */ });
+      } catch (e) { /* ignore */ }
+    }).catch((e: BusinessError): void => {
+      console.warn(`[WMS] setupLogWindow resize failed: ${e.code} ${e.message}`);
+    });
+
+    const instanceId: string = inst.instanceId;
+    const pid: number = inst.pid;
+    win.on('windowEvent', (event: window.WindowEventType): void => {
+      if (event === window.WindowEventType.WINDOW_DESTROYED) {
+        const cur = this.instances.get(instanceId);
+        if (cur) cur.logWindow = null;
+        if (pid > 0) ProcessManagerService.getInstance().terminate(pid);
+        if (cur && cur.hostWindow === null && cur.hostAbilityContext === null) {
+          this.cleanupInstance(instanceId);
+        }
+      }
+    });
+
+    console.info(`HBOX_WM_LOG_SHOWN inst=${instanceId}`);
   }
 }
