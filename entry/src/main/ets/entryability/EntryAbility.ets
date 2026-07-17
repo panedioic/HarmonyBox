@@ -14,6 +14,14 @@ export default class EntryAbility extends UIAbility {
     WindowManagerService.getInstance().initUI(this.context);
   }
 
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // launcher 已运行时再次被拉起 (比如从系统 shortcut), 保证 uiCtx 引用最新的 EntryAbility context
+    console.info('[EntryAbility] onNewWant');
+    WaylandService.getInstance().initUI(this.context);
+    ProcessManagerService.getInstance().initUI(this.context);
+    WindowManagerService.getInstance().initUI(this.context);
+  }
+
   onWindowStageCreate(windowStage: window.WindowStage): void {
     AppStorage.setOrCreate<window.WindowStage>('windowStage', windowStage);
 
@@ -37,5 +45,11 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
     AppStorage.delete('windowStage');
+  }
+
+  onDestroy(): void {
+    console.info('[EntryAbility] onDestroy');
+    // 不主动 shutdown wayland: AppRunnerAbility 可能还在跑
+    // wayland server 生命周期已挪到 HBoxAbilityStage
   }
 }

@@ -33,19 +33,20 @@ struct Index {
     this.installedApps = AppRegistry.load(ctx);
 
     const wm = WindowManagerService.getInstance();
-    wm.init(ctx);
+    wm.initUI(ctx);                                    // ★ init → initUI
     wm.setRunningIdsListener((ids: string[]): void => {
       this.runningAppIds = ids;
     });
 
     const pm = ProcessManagerService.getInstance();
-    pm.init(ctx);
+    pm.initUI(ctx);                                    // ★ init → initUI
     pm.setToastFn((msg: string, dur: number): void => this.toast(msg, dur));
   }
 
   aboutToDisappear(): void {
     WindowManagerService.getInstance().setRunningIdsListener(null);
-    WindowManagerService.getInstance().shutdown();
+    // ★ 不再调 shutdown: wayland server 生命周期跟 AbilityStage 走
+    //   launcher 关闭不影响正在跑的 AppRunnerAbility
   }
 
   // =========================================================

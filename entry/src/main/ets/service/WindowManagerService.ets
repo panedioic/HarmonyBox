@@ -234,8 +234,11 @@ export class WindowManagerService {
     this.initUI(ctx);
   }
 
+  /** @deprecated 生命周期已挪到 AbilityStage, 这里保留兼容 */
   shutdown(): void {
-    WaylandService.getInstance().shutdown();
+    console.warn('[WMS] shutdown called (deprecated)');
+    // 不再主动关 wayland server, 由系统进程回收时统一清理
+    // WaylandService.getInstance().shutdown();
   }
 
   // =========================================================
