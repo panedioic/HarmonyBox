@@ -1,8 +1,5 @@
 import { Theme, PageType } from '../common/Theme';
 
-import { common, Want } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
-
 interface NavItem {
   id: string;
   label: string;
@@ -54,64 +51,6 @@ export struct Sidebar {
       .width('100%')
       .padding({ left: 12, right: 12 })
       .alignItems(HorizontalAlign.Start)
-
-      // 测试用，随后删除
-      Button('测试拉起 AppRunnerAbility')
-        .onClick((): void => {
-          const ctx = getContext(this) as common.UIAbilityContext;
-          const want: Want = {
-            bundleName: ctx.abilityInfo.bundleName,
-            abilityName: 'AppRunnerAbility',
-            parameters: {
-              instanceId: `test-${Date.now()}`,
-              appName: '测试应用',
-              appId: 'test-app',
-              clientId: ''
-            }
-          };
-          ctx.startAbility(want).then((): void => {
-            console.info('[test] startAbility success');
-          }).catch((e: BusinessError): void => {
-            console.error(`[test] startAbility failed: ${e.code} ${e.message}`);
-          });
-        })
-      Button('测试拉起 CliRunnerAbility')
-        .onClick((): void => {
-          const ctx = getContext(this) as common.UIAbilityContext;
-          const want: Want = {
-            bundleName: ctx.abilityInfo.bundleName,
-            abilityName: 'CliRunnerAbility',
-            parameters: {
-              instanceId: `test-${Date.now()}`,
-              appName: '测试应用',
-              appId: 'test-app',
-              pid: 12345
-            }
-          };
-          ctx.startAbility(want).then((): void => {
-            console.info('[test] startAbility CliRunner success');
-          }).catch((e: BusinessError): void => {
-            console.error(`[test] startAbility CliRunner failed: ${e.code} ${e.message}`);
-          });
-        })
-      Button('测试 shortcut 拉起 (AppRunner)')
-        .onClick((): void => {
-          const ctx = getContext(this) as common.UIAbilityContext;
-          // 用户改成真实存在的 app id
-          const testAppId: string = 'app_1784102406291';
-
-          const want: Want = {
-            bundleName: ctx.abilityInfo.bundleName,
-            abilityName: 'AppRunnerAbility',
-            parameters: {
-              shortcutAppId: testAppId
-              // 故意不传 instanceId
-            }
-          };
-          ctx.startAbility(want).catch((e: BusinessError): void => {
-            console.error(`[test] shortcut startAbility failed: ${e.code} ${e.message}`);
-          });
-        })
     }
     .width(208)
     .height('100%')
