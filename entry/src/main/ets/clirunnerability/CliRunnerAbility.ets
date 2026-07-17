@@ -5,6 +5,7 @@ import { WindowManagerService } from '../service/WindowManagerService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
 import { AppRegistry } from '../model/AppRegistry';
+import { LaunchMode } from '../model/AppInfo';
 
 export default class CliRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -59,7 +60,7 @@ export default class CliRunnerAbility extends UIAbility {
     // ★ shortcut 场景: 现场 launch (showLog=false 避免死循环拉起自己)
     if (this.shortcutAppId && !this.instanceId) {
       const r = await ProcessManagerService.getInstance()
-        .launchAppById(this.shortcutAppId, { showLog: false });
+        .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.CLI });
       if (!r.ok) {
         console.error(`[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
         this.context.terminateSelf().catch((): void => { /* ignore */ });

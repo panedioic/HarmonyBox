@@ -13,6 +13,11 @@ export enum RuntimeMode {
   CLI = 'cli'
 }
 
+export enum LaunchMode {
+  GUI = 'gui',   // 默认: 直接拉起 AppRunnerAbility, 展示 loading, 等 wayland
+  CLI = 'cli'    // 先拉起 CliRunnerAbility, wayland 连上后再拉 AppRunnerAbility
+}
+
 export interface AppConfig {
   envVars: string;
   args: string;

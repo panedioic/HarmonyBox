@@ -2,7 +2,7 @@ import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { Theme, PageType } from '../common/Theme';
-import { AppInfo } from '../model/AppInfo';
+import { AppInfo, LaunchMode } from '../model/AppInfo';
 import { AppRegistry } from '../model/AppRegistry';
 import { InstallService } from '../service/InstallService';
 import { WindowManagerService } from '../service/WindowManagerService';
@@ -53,10 +53,9 @@ struct Index {
   // app actions
   // =========================================================
   launchApp = (app: AppInfo): void => {
-    // 先尝试恢复已有窗口
     WindowManagerService.getInstance().bringToFront(app.id).then((restored: boolean): void => {
       if (!restored) {
-        ProcessManagerService.getInstance().launchApp(app, { showLog: false })
+        ProcessManagerService.getInstance().launchApp(app, { launchMode: LaunchMode.GUI })
           .catch((e: BusinessError): void => {
             console.error(`launchApp failed: ${e.code} ${e.message}`);
           });
@@ -67,7 +66,7 @@ struct Index {
   launchAppWithLog = (app: AppInfo): void => {
     WindowManagerService.getInstance().bringToFront(app.id).then((restored: boolean): void => {
       if (!restored) {
-        ProcessManagerService.getInstance().launchApp(app, { showLog: true })
+        ProcessManagerService.getInstance().launchApp(app, { launchMode: LaunchMode.CLI })
           .catch((e: BusinessError): void => {
             console.error(`launchAppWithLog failed: ${e.code} ${e.message}`);
           });

@@ -5,6 +5,7 @@ import { WindowManagerService } from '../service/WindowManagerService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
 import { AppRegistry } from '../model/AppRegistry';
+import { LaunchMode } from '../model/AppInfo';
 
 export default class AppRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -60,7 +61,7 @@ export default class AppRunnerAbility extends UIAbility {
     // ★ shortcut 场景: 有 shortcutAppId 但无 instanceId, 现场 launch
     if (this.shortcutAppId && !this.instanceId) {
       const r = await ProcessManagerService.getInstance()
-        .launchAppById(this.shortcutAppId, { showLog: false });
+        .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.GUI });
       if (!r.ok) {
         console.error(`[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
         this.context.terminateSelf().catch((): void => { /* ignore */ });

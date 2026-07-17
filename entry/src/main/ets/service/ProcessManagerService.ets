@@ -1,6 +1,6 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
-import { AppInfo } from '../model/AppInfo';
+import { AppInfo, LaunchMode } from '../model/AppInfo';
 import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from './ContainerService';
 import { WindowManagerService } from './WindowManagerService';
@@ -11,7 +11,7 @@ import { AppRegistry } from '../model/AppRegistry';
 // =========================================================
 
 export interface LaunchOptions {
-  showLog: boolean;
+  launchMode: LaunchMode;
 }
 
 export interface LaunchResult {
@@ -237,8 +237,8 @@ export class ProcessManagerService {
       }
     });
 
-    // 13. 日志窗口
-    if (opts.showLog) {
+    // 13. CLI-first 立即开日志窗 (GUI-first 由 wayland 触发 startAbility)
+    if (opts.launchMode === LaunchMode.CLI) {
       await WindowManagerService.getInstance().createLogWindow(instanceId, app.name, pid);
     }
 
