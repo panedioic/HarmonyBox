@@ -79,4 +79,13 @@ export class AppRegistry {
     AppRegistry.save(context, apps);
     return apps;
   }
+
+  static getById(context: common.Context, appId: string): AppInfo | null {
+    if (!appId) return null;
+    const apps: AppInfo[] = AppRegistry.load(context);
+    for (const a of apps) {
+      if (a.id === appId) return a;
+    }
+    return null;
+  }
 }

@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { WindowManagerService } from '../service/WindowManagerService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
+import { AppRegistry } from '../model/AppRegistry';
 
 export default class CliRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -39,7 +40,7 @@ export default class CliRunnerAbility extends UIAbility {
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
-    console.info(`[CliRunnerAbility] onWindowStageCreate inst=${this.instanceId}`);
+    console.info(`[CliRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`);
 
     const storage: LocalStorage = new LocalStorage();
     storage.setOrCreate<string>('instanceId', this.instanceId);
@@ -55,8 +56,37 @@ export default class CliRunnerAbility extends UIAbility {
       return;
     }
 
+    // ★ shortcut 场景: 现场 launch (showLog=false 避免死循环拉起自己)
+    if (this.shortcutAppId && !this.instanceId) {
+      const r = await ProcessManagerService.getInstance()
+        .launchAppById(this.shortcutAppId, { showLog: false });
+      if (!r.ok) {
+        console.error(`[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        this.context.terminateSelf().catch((): void => { /* ignore */ });
+        return;
+      }
+      this.instanceId = r.instanceId;
+      this.pid = ProcessManagerService.getInstance().getPidByInstance(this.instanceId);
+      storage.setOrCreate<string>('instanceId', this.instanceId);
+      storage.setOrCreate<number>('cliPid',     this.pid);
+
+      const app = AppRegistry.getById(this.context, this.shortcutAppId);
+      if (app) {
+        this.appName = app.name;
+        this.appId = app.id;
+        storage.setOrCreate<string>('appName', app.name);
+        storage.setOrCreate<string>('appId',   app.id);
+      }
+    }
+
+    if (this.instanceId) {
+      WindowManagerService.getInstance().ensureInstanceFromAbility(
+        this.instanceId, this.appName, this.appId
+      );
+    }
+
     WindowManagerService.getInstance().attachCliRunnerAbility(
-      this.instanceId, this.context, stage
+      this.instanceId, this.context, stage, storage
     );
 
     try {

@@ -29,18 +29,19 @@ interface PendingLaunch {
 
 export interface AppInstance {
   instanceId: string;
-  appId:      string;              // 空表示 auto 实例 (shell 里手动起的)
+  appId:      string;                 // 空表示 auto 实例 (shell 里手动起的)
   appName:    string;
   pid:        number;
   clientId:   string | null;
   hostWindow: window.Window | null;
   logWindow:  window.Window | null;
   createdAt:  number;
-  // ★ Phase 11:
   hostAbilityContext: common.UIAbilityContext | null;
   logAbilityContext:  common.UIAbilityContext | null;
   hostAttachPending:  boolean;
   logAttachPending:   boolean;
+  hostStorage: LocalStorage | null;   // ★
+  logStorage:  LocalStorage | null;   // ★
 }
 
 const PENDING_TTL_MS: number = 15000;
@@ -502,6 +503,24 @@ export class WindowManagerService {
     inst.clientId = clientId;
     this.clientIndex.set(clientId, instanceId);
 
+    // ★ 分支: instance 已经有 GUI Ability (shortcut / GUI-first loading 场景)
+    if (inst.hostAbilityContext && inst.hostWindow) {
+      console.info(`[WMS] instance ${instanceId} already has AppRunnerAbility, updating clientId only`);
+      if (inst.hostStorage) {
+        inst.hostStorage.setOrCreate<string>('clientId', clientId);
+      }
+      // 尺寸可能之前用 800x600 default 初始化, 现在 buffer 到了重新 apply 一次
+      const wlSvc = WaylandService.getInstance();
+      const sz: WlBufferSize = wlSvc.getLatestBufferSize(clientId);
+      if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
+        this.firstCommitDone.add(instanceId);
+        this.applyWindowSize(inst.hostWindow, sz.w, sz.h);
+      }
+      this.notifyChanged();
+      return;
+    }
+
+    // 默认路径: 走 startAbility 拉起
     this.createHostWindow(inst).catch((e: BusinessError): void => {
       console.error(`HBOX_WM_HOST_CREATE_FAIL code=${e.code} msg=${e.message}`);
     });
@@ -867,7 +886,9 @@ export class WindowManagerService {
         hostAbilityContext:  null,
         logAbilityContext:   null,
         hostAttachPending:   false,
-        logAttachPending:    false
+        logAttachPending:    false,
+        hostStorage:         null,
+        logStorage:          null
       };
       this.instances.set(instanceId, inst);
       if (appId) {
@@ -894,6 +915,8 @@ export class WindowManagerService {
   private cleanupInstance(instanceId: string): void {
     const inst = this.instances.get(instanceId);
     if (!inst) return;
+    inst.hostStorage = null;
+    inst.logStorage = null;
     if (inst.clientId) this.clientIndex.delete(inst.clientId);
     if (inst.appId) {
       const list = this.appIndex.get(inst.appId);
@@ -990,7 +1013,8 @@ export class WindowManagerService {
   attachAppRunnerAbility(
     instanceId: string,
     ctx: common.UIAbilityContext,
-    stage: window.WindowStage
+    stage: window.WindowStage,
+    storage: LocalStorage | null
   ): void {
     console.info(`[WMS] attachAppRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
@@ -1011,7 +1035,13 @@ export class WindowManagerService {
 
     inst.hostAbilityContext = ctx;
     inst.hostWindow = mainWin;
+    inst.hostStorage = storage;
     inst.hostAttachPending = false;
+
+    // storage 里同步一次 clientId (可能非空: WMS-发起路径, 或空: shortcut 路径)
+    if (storage && inst.clientId) {
+      storage.setOrCreate<string>('clientId', inst.clientId);
+    }
 
     this.setupHostWindow(inst, mainWin);
     this.notifyChanged();
@@ -1030,7 +1060,8 @@ export class WindowManagerService {
   attachCliRunnerAbility(
     instanceId: string,
     ctx: common.UIAbilityContext,
-    stage: window.WindowStage
+    stage: window.WindowStage,
+    storage: LocalStorage | null
   ): void {
     console.info(`[WMS] attachCliRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
@@ -1051,6 +1082,7 @@ export class WindowManagerService {
 
     inst.logAbilityContext = ctx;
     inst.logWindow = mainWin;
+    inst.logStorage = storage;
     inst.logAttachPending = false;
 
     this.setupLogWindow(inst, mainWin);

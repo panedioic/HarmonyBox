@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { WindowManagerService } from '../service/WindowManagerService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
+import { AppRegistry } from '../model/AppRegistry';
 
 export default class AppRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -40,7 +41,7 @@ export default class AppRunnerAbility extends UIAbility {
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
-    console.info(`[AppRunnerAbility] onWindowStageCreate inst=${this.instanceId}`);
+    console.info(`[AppRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`);
 
     const storage: LocalStorage = new LocalStorage();
     storage.setOrCreate<string>('instanceId', this.instanceId);
@@ -56,8 +57,39 @@ export default class AppRunnerAbility extends UIAbility {
       return;
     }
 
+    // ★ shortcut 场景: 有 shortcutAppId 但无 instanceId, 现场 launch
+    if (this.shortcutAppId && !this.instanceId) {
+      const r = await ProcessManagerService.getInstance()
+        .launchAppById(this.shortcutAppId, { showLog: false });
+      if (!r.ok) {
+        console.error(`[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        this.context.terminateSelf().catch((): void => { /* ignore */ });
+        return;
+      }
+      this.instanceId = r.instanceId;
+      // 更新 storage 里的 instanceId, 让页面拿到最新值
+      storage.setOrCreate<string>('instanceId', this.instanceId);
+
+      // 从 registry 取 appName / appId 补齐 storage
+      const uiCtx = this.context;
+      const app = AppRegistry.getById(uiCtx, this.shortcutAppId);
+      if (app) {
+        this.appName = app.name;
+        this.appId = app.id;
+        storage.setOrCreate<string>('appName', app.name);
+        storage.setOrCreate<string>('appId',   app.id);
+      }
+    }
+
+    // ★ 保证 WMS 里有 instance
+    if (this.instanceId) {
+      WindowManagerService.getInstance().ensureInstanceFromAbility(
+        this.instanceId, this.appName, this.appId
+      );
+    }
+
     WindowManagerService.getInstance().attachAppRunnerAbility(
-      this.instanceId, this.context, stage
+      this.instanceId, this.context, stage, storage
     );
 
     try {

@@ -41,7 +41,7 @@
         "label": "$string:AppRunnerAbility_label",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
-        "exported": false,
+        "exported": true,
         "launchType": "multiton"
       },
       {

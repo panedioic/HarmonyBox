@@ -4,6 +4,7 @@ import { AppInfo } from '../model/AppInfo';
 import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from './ContainerService';
 import { WindowManagerService } from './WindowManagerService';
+import { AppRegistry } from '../model/AppRegistry';
 
 // =========================================================
 // 公开接口
@@ -242,6 +243,19 @@ export class ProcessManagerService {
     }
 
     return { ok: true, instanceId, errorMsg: '' };
+  }
+
+  /** shortcut / Ability 内部触发: 按 appId 查 AppInfo 后启动 */
+  async launchAppById(appId: string, opts: LaunchOptions): Promise<LaunchResult> {
+    if (!this.ctx) {
+      return { ok: false, instanceId: '', errorMsg: 'context 未初始化' };
+    }
+    const app: AppInfo | null = AppRegistry.getById(this.ctx, appId);
+    if (!app) {
+      this.toast(`未找到应用 ${appId}`, 2500);
+      return { ok: false, instanceId: '', errorMsg: `未找到应用 ${appId}` };
+    }
+    return this.launchApp(app, opts);
   }
 
   // =========================================================

@@ -94,6 +94,24 @@ export struct Sidebar {
             console.error(`[test] startAbility CliRunner failed: ${e.code} ${e.message}`);
           });
         })
+      Button('测试 shortcut 拉起 (AppRunner)')
+        .onClick((): void => {
+          const ctx = getContext(this) as common.UIAbilityContext;
+          // 用户改成真实存在的 app id
+          const testAppId: string = 'app_1784102406291';
+
+          const want: Want = {
+            bundleName: ctx.abilityInfo.bundleName,
+            abilityName: 'AppRunnerAbility',
+            parameters: {
+              shortcutAppId: testAppId
+              // 故意不传 instanceId
+            }
+          };
+          ctx.startAbility(want).catch((e: BusinessError): void => {
+            console.error(`[test] shortcut startAbility failed: ${e.code} ${e.message}`);
+          });
+        })
     }
     .width(208)
     .height('100%')
