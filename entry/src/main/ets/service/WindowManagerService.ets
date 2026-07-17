@@ -506,7 +506,7 @@ export class WindowManagerService {
     inst.clientId = clientId;
     this.clientIndex.set(clientId, instanceId);
 
-    // ★ 分支: instance 已经有 GUI Ability (shortcut / GUI-first loading 场景)
+    // ★ 分支 1: GUI Ability 已挂载 → 只更新 storage.clientId (loading → XComponent)
     if (inst.hostAbilityContext && inst.hostWindow) {
       console.info(`[WMS] instance ${instanceId} already has AppRunnerAbility, updating clientId only`);
       if (inst.hostStorage) {
@@ -523,7 +523,15 @@ export class WindowManagerService {
       return;
     }
 
-    // 默认路径: 走 startAbility 拉起
+    // ★ 分支 2: GUI Ability 正在拉起 (GUI-first 竞态) → 等 attach, 不重复
+    if (inst.hostAttachPending) {
+      console.info(`[WMS] hostAbility pending inst=${instanceId}, wait attach`);
+      // 什么都不做, attachAppRunnerAbility 会读 inst.clientId 补 storage
+      this.notifyChanged();
+      return;
+    }
+
+    // ★ 分支 3: 默认路径 (CLI-first 场景 / auto shell 场景) → 主动拉 AppRunner
     this.createHostWindow(inst).catch((e: BusinessError): void => {
       console.error(`HBOX_WM_HOST_CREATE_FAIL code=${e.code} msg=${e.message}`);
     });
@@ -868,6 +876,15 @@ export class WindowManagerService {
     }
   }
 
+  /**
+   * GUI-first: launchApp 在 spawn 前调用.
+   * 提前 ensureInstance + startAbility(AppRunnerAbility), 让 loading 尽早显示.
+   */
+  async prepareGuiHost(instanceId: string, appName: string, appId: string): Promise<void> {
+    const inst = this.ensureInstance(instanceId, appName, appId, 0);
+    await this.createHostWindow(inst);
+  }
+
   // =========================================================
   // private helpers
   // =========================================================
@@ -1206,5 +1223,22 @@ export class WindowManagerService {
   ensureInstanceFromAbility(instanceId: string, appName: string, appId: string): void {
     if (!instanceId) return;
     this.ensureInstance(instanceId, appName, appId, 0);
+  }
+
+  /**
+   * AppRunner loading UI 的"打开日志"按钮用:
+   * 拉起 CliRunnerAbility, 挂到已有 instance 上
+   */
+  async openLogForInstance(instanceId: string): Promise<void> {
+    const inst = this.instances.get(instanceId);
+    if (!inst) {
+      console.warn(`[WMS] openLogForInstance: instance ${instanceId} not found`);
+      return;
+    }
+    if (inst.logAbilityContext || inst.logAttachPending) {
+      console.info(`[WMS] log ability already active inst=${instanceId}`);
+      return;
+    }
+    await this.createLogWindow(instanceId, inst.appName, inst.pid);
   }
 }

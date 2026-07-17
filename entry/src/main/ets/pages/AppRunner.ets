@@ -2,6 +2,9 @@ import wl from 'libentry.so';
 import { OH2EVDEV, modMaskOf } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { WaylandService, WlBufferSize } from '../service/WaylandService';
+import { common } from '@kit.AbilityKit';
+import { ProcessManagerService } from '../service/ProcessManagerService';
+import { WindowManagerService } from '../service/WindowManagerService';
 
 @Entry({ storage: LocalStorage.getShared() })
 @Component
@@ -23,6 +26,11 @@ struct AppRunner {
   private lastVpX: number = 0;
   private lastVpY: number = 0;
 
+  private static readonly LOADING_TIMEOUT_MS: number = 30_000;
+
+  @State loadingTimedOut: boolean = false;
+  private loadingTimer: number = -1;
+
   aboutToAppear(): void {
     this.scaleNumber = WaylandService.getInstance().getUiScale();
 
@@ -42,6 +50,17 @@ struct AppRunner {
       }
     );
 
+    // ★ Loading 场景启动超时定时器
+    if (this.clientId.length === 0) {
+      this.loadingTimer = setTimeout((): void => {
+        if (this.clientId.length === 0) {
+          this.loadingTimedOut = true;
+          console.warn(`[AppRunner] loading timeout inst=${this.instanceId}`);
+        }
+        this.loadingTimer = -1;
+      }, AppRunner.LOADING_TIMEOUT_MS) as number;
+    }
+
     console.info(
       `HBOX_APP_RUNNER_MOUNTED inst=${this.instanceId} app=${this.appName} `
         + `client=${this.clientId}`
@@ -50,6 +69,10 @@ struct AppRunner {
 
   aboutToDisappear(): void {
     WaylandService.getInstance().setHostResizeBeginListener(this.clientId, null);
+    if (this.loadingTimer >= 0) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = -1;
+    }
   }
 
   private updateModifiers(ohKey: number, pressed: boolean): void {
@@ -57,6 +80,20 @@ struct AppRunner {
     if (mask === 0) return;
     if (pressed) this.modMask |= mask; else this.modMask &= ~mask;
     wl.sendModifiers(this.clientId, this.modMask, 0, 0, 0); // ★
+  }
+
+  private cancelLoading(): void {
+    console.info(`[AppRunner] user cancelled loading inst=${this.instanceId}`);
+    WindowManagerService.getInstance().destroyInstance(this.instanceId);
+    // destroyInstance 会 terminateSelf, 页面随之销毁
+  }
+
+  private openLog(): void {
+    console.info(`[AppRunner] user opened log inst=${this.instanceId}`);
+    WindowManagerService.getInstance().openLogForInstance(this.instanceId)
+      .catch((e: BusinessError): void => {
+        console.error(`openLog failed: ${e.code} ${e.message}`);
+      });
   }
 
   build() {
@@ -75,16 +112,35 @@ struct AppRunner {
             wl.sendMouseHover(this.clientId, true);
           })
       } else {
-        // ─── Loading 状态: 无 clientId, 显示等待画面 ───
+        // ─── Loading 状态 ───
         Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-            .color('#5DD46E')
-            .margin({ bottom: 16 })
-          Text(`正在启动 ${this.appName}...`)
-            .fontSize(15)
-            .fontColor('#DDDDDD')
+          if (this.loadingTimedOut) {
+            Text('⚠️').fontSize(36).margin({ bottom: 12 })
+            Text(`${this.appName} 启动超时`)
+              .fontSize(15).fontColor('#DDDDDD').margin({ bottom: 4 })
+            Text('可能不是 Wayland 应用, 或启动失败.')
+              .fontSize(12).fontColor('#888888').margin({ bottom: 20 })
+          } else {
+            LoadingProgress()
+              .width(48).height(48)
+              .color('#5DD46E')
+              .margin({ bottom: 16 })
+            Text(`正在启动 ${this.appName}...`)
+              .fontSize(15).fontColor('#DDDDDD').margin({ bottom: 20 })
+          }
+
+          Row({ space: 12 }) {
+            Text('打开日志')
+              .fontSize(12).fontColor('#DDDDDD')
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .backgroundColor('#333333').borderRadius(6)
+              .onClick((): void => { this.openLog(); })
+            Text(this.loadingTimedOut ? '关闭' : '取消')
+              .fontSize(12).fontColor('#DDDDDD')
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .backgroundColor('#333333').borderRadius(6)
+              .onClick((): void => { this.cancelLoading(); })
+          }
         }
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Center)

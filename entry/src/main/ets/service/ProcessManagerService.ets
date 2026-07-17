@@ -202,6 +202,16 @@ export class ProcessManagerService {
     // 8. 生成 instanceId, 预登记
     WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
 
+    // ★ GUI-first: spawn 前先拉起 AppRunnerAbility 展 loading
+    if (opts.launchMode === LaunchMode.GUI) {
+      try {
+        await WindowManagerService.getInstance().prepareGuiHost(instanceId, app.name, app.id);
+      } catch (e) {
+        console.warn(`[PMS] prepareGuiHost failed: ${(e as Error).message}`);
+        // 不阻断: Ability 拉起失败也继续 spawn, 让日志能保留
+      }
+    }
+
     this.toast(`正在启动 ${app.name}...`, 1200);
 
     // 9. spawn
@@ -216,6 +226,10 @@ export class ProcessManagerService {
     }
     if (pid <= 0) {
       WindowManagerService.getInstance().cancelPending(instanceId);
+      // ★ 清理已拉起的 loading 窗
+      if (opts.launchMode === LaunchMode.GUI) {
+        WindowManagerService.getInstance().destroyInstance(instanceId);
+      }
       this.toast(`${app.name} 启动失败: (fork/exec)`, 2500);
       return { ok: false, instanceId: '', errorMsg: '启动失败: (fork/exec)' };
     }
