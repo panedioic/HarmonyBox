@@ -4,6 +4,9 @@ import { ContainerInfo, ContainerType, containerTypeLabel } from '../model/Conta
 import { ContainerService, InstallResult } from '../service/ContainerService';
 import { InstallContainerDialog } from '../components/InstallContainerDialog';
 import { picker } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Page_ContainerManager';
 
 @Component
 export struct ContainerManagerPage {
@@ -109,7 +112,7 @@ export struct ContainerManagerPage {
       }
     } catch (e) {
       this.exporting = '';
-      console.error(`export failed: ${(e as Error).message}`);
+      hilog.error(0x0000, TAG, `export failed: ${(e as Error).message}`);
     }
   }
 

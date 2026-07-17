@@ -1,6 +1,9 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_Font';
 
 export interface FontFile {
   name: string;
@@ -127,9 +130,9 @@ export class FontStore {
 
     // 列出实际上传的字体,方便确认是否落地
     const list: FontFile[] = FontStore.list(ctx);
-    console.info(`[FontStore] fontDir=${fontDir}, ${list.length} files`);
+    hilog.info(0x0000, TAG, `[FontStore] fontDir=${fontDir}, ${list.length} files`);
     for (const f of list) {
-      console.info(`[FontStore]   ${f.name} (${FontStore.formatSize(f.size)})`);
+      hilog.info(0x0000, TAG, `[FontStore]   ${f.name} (${FontStore.formatSize(f.size)})`);
     }
 
     const xml: string =

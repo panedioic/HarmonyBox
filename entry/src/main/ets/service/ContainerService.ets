@@ -235,10 +235,10 @@ export class ContainerService {
     try {
       const f: fs.File = fs.openSync(path,
         fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      console.info(`[Container] log file: ${path}`);
+      hilog.info(0x0000, TAG, `[Container] log file: ${path}`);
       return f.fd;
     } catch (e) {
-      console.error(`[Container] openLogFile err: ${(e as Error).message}`);
+      hilog.error(0x0000, TAG, `[Container] openLogFile err: ${(e as Error).message}`);
       return -1;
     }
   }
@@ -515,7 +515,7 @@ export class ContainerService {
 
     // 字体自动配置
     if (ContainerService.hasFonts(dest)) {
-      console.info(`[Container] 发现 fonts 目录, 生成 fontconfig`);
+      hilog.info(0x0000, TAG, `[Container] 发现 fonts 目录, 生成 fontconfig`);
       ContainerService.setupFontConfig(dest);
       const fontEnv: Record<string, string> =
         ContainerService.buildFontEnvVars(dest);
@@ -543,7 +543,7 @@ export class ContainerService {
       const initOk: boolean = await ContainerService.initWineContainer(info);
       if (!initOk) {
         // 允许初始化失败, 但标记 warning; 用户可后续手动修
-        console.warn(`[Container] wine 初始化未完成, 需要手动运行 wine.setup`);
+        hilog.warn(0x0000, TAG, `[Container] wine 初始化未完成, 需要手动运行 wine.setup`);
       }
     } else if (cfg.type === ContainerType.LINUX) {
       // linux 容器暂时不做额外操作
@@ -696,7 +696,7 @@ export class ContainerService {
    * @todo 走容器内 health.sh
    */
   static async healthCheck(info: ContainerInfo): Promise<boolean> {
-    console.info(`[ContainerRunner] healthCheck stub for ${info.id}`);
+    hilog.info(0x0000, TAG, `[ContainerRunner] healthCheck stub for ${info.id}`);
     return true;
   }
 
@@ -705,7 +705,7 @@ export class ContainerService {
    * @todo 通过 shell 执行容器内脚本
    */
   static async runScript(info: ContainerInfo, scriptRel: string, args: string[]): Promise<number> {
-    console.warn(`[ContainerRunner] runScript not implemented: ${info.id}/${scriptRel} args=${args.join(',')}`);
+    hilog.warn(0x0000, TAG, `[ContainerRunner] runScript not implemented: ${info.id}/${scriptRel} args=${args.join(',')}`);
     return 0;
   }
 
@@ -739,7 +739,6 @@ export class ContainerService {
         hilog.info(0x0000, TAG, `[Container] old prefix removed`);
       }
     } catch (e) {
-      console.warn(`[Container] rm prefix err: ${(e as Error).message}`);
       hilog.error(0x0000, TAG, `[Container] rm prefix err: ${(e as Error).message}`);
     }
 
@@ -993,7 +992,7 @@ export class ContainerService {
       fs.writeSync(f.fd, xml);
       fs.closeSync(f);
     } catch (_e) { /* ignore */ }
-    console.info(`[Container] fontconfig 已生成: ${confPath}`);
+    hilog.info(0x0000, TAG, `[Container] fontconfig 已生成: ${confPath}`);
   }
 
   /** 字体相关环境变量 (绝对路径) */

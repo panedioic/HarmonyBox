@@ -2,6 +2,9 @@ import { Theme } from '../common/Theme';
 import { AppInfo } from '../model/AppInfo';
 import { EditAppDialog } from './EditAppDialog';
 import { InstallAppDialog } from './InstallAppDialog';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Comp_Library';
 
 // LibraryPage 顶层增加 onEdit / onExport / onUpdate 三个回调透传
 @Component
@@ -150,7 +153,7 @@ struct AppCard {
         .onClick((): void => { this.onExport(this.app); })
 
       MenuItem({ content: '查看路径' })
-        .onClick((): void => { console.info(`installDir: ${this.app.installDir}`); })
+        .onClick((): void => { hilog.info(0x0000, TAG,`installDir: ${this.app.installDir}`); })
 
       MenuItem({ content: '删除应用' })
         .onClick((): void => { this.confirmDelete(); })

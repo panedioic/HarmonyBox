@@ -5,6 +5,9 @@ import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from './ContainerService';
 import { WindowManagerService } from './WindowManagerService';
 import { AppRegistry } from '../model/AppRegistry';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_ProcessManager';
 
 // =========================================================
 // 公开接口
@@ -133,7 +136,7 @@ export class ProcessManagerService {
 
     // 3. 确保基础设施
     if (!wl.ensureBox64TmpDir()) {
-      console.error('HBOX_PMS ensureBox64TmpDir failed');
+      hilog.error(0x0000, TAG, 'HBOX_PMS ensureBox64TmpDir failed');
     }
 
     // 4. 判断容器是否已经启动（暂时写的是判断wineserver是否运行，未来改成判断容器是否运行）
@@ -207,7 +210,7 @@ export class ProcessManagerService {
       try {
         await WindowManagerService.getInstance().prepareGuiHost(instanceId, app.name, app.id);
       } catch (e) {
-        console.warn(`[PMS] prepareGuiHost failed: ${(e as Error).message}`);
+        hilog.warn(0x0000, TAG, `[PMS] prepareGuiHost failed: ${(e as Error).message}`);
         // 不阻断: Ability 拉起失败也继续 spawn, 让日志能保留
       }
     }

@@ -2,6 +2,9 @@ import { picker } from '@kit.CoreFileKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_Install';
 
 export class InstallService {
   // 选择源文件夹,返回 URI
@@ -14,12 +17,12 @@ export class InstallService {
       try {
         options.selectMode = picker.DocumentSelectMode.FOLDER;
       } catch (e) {
-        console.warn('FOLDER mode not available, fallback to file');
+        hilog.warn(0x0000, TAG, 'FOLDER mode not available, fallback to file');
       }
       const uris: string[] = await documentPicker.select(options);
       return uris && uris.length > 0 ? uris[0] : null;
     } catch (e) {
-      console.error(`pickFolder failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `pickFolder failed: ${JSON.stringify(e)}`);
       return null;
     }
   }
@@ -29,7 +32,7 @@ export class InstallService {
     try {
       return new fileUri.FileUri(uri).path;
     } catch (e) {
-      console.error(`uriToPath failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `uriToPath failed: ${JSON.stringify(e)}`);
       return '';
     }
   }
@@ -62,7 +65,7 @@ export class InstallService {
         }
       }
     } catch (e) {
-      console.error(`copyDirRec failed at ${srcPath}: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `copyDirRec failed at ${srcPath}: ${JSON.stringify(e)}`);
       throw new Error(`复制失败: ${(e as Error).message || ''}`);
     }
   }
@@ -89,7 +92,7 @@ export class InstallService {
       InstallService.copyDirRec(srcPath, targetDir);
       return `apps/${appId}`;
     } catch (e) {
-      console.error(`installFromUri failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `installFromUri failed: ${JSON.stringify(e)}`);
       throw new Error((e as Error).message || '安装失败');
     }
   }
@@ -105,7 +108,7 @@ export class InstallService {
         fs.rmdirSync(fullPath);
       }
     } catch (e) {
-      console.error(`uninstall failed at ${fullPath}: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `uninstall failed at ${fullPath}: ${JSON.stringify(e)}`);
       throw new Error(`删除目录失败: ${(e as Error).message || ''}`);
     }
   }
@@ -119,7 +122,7 @@ export class InstallService {
       const uris: string[] = await documentPicker.select(options);
       return uris && uris.length > 0 ? uris[0] : null;
     } catch (e) {
-      console.error(`pickFile failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `pickFile failed: ${JSON.stringify(e)}`);
       return null;
     }
   }

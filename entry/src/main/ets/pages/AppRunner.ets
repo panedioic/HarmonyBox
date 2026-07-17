@@ -5,6 +5,9 @@ import { WaylandService, WlBufferSize } from '../service/WaylandService';
 import { common } from '@kit.AbilityKit';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WindowManagerService } from '../service/WindowManagerService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Page_AppRunner';
 
 @Entry({ storage: LocalStorage.getShared() })
 @Component
@@ -42,7 +45,7 @@ struct AppRunner {
         this.resizeEdges = edges;
         this.resizeStartVpX = this.lastVpX;
         this.resizeStartVpY = this.lastVpY;
-        console.info(
+        hilog.info(0x0000, TAG,
           `HBOX_GUI_RESIZE_DRAG_RUNNER_BEGIN inst=${this.instanceId} `
             + `edges=0x${edges.toString(16)} `
             + `startVp=${this.lastVpX.toFixed(1)},${this.lastVpY.toFixed(1)}`
@@ -55,13 +58,13 @@ struct AppRunner {
       this.loadingTimer = setTimeout((): void => {
         if (this.clientId.length === 0) {
           this.loadingTimedOut = true;
-          console.warn(`[AppRunner] loading timeout inst=${this.instanceId}`);
+          hilog.warn(0x0000, TAG,`[AppRunner] loading timeout inst=${this.instanceId}`);
         }
         this.loadingTimer = -1;
       }, AppRunner.LOADING_TIMEOUT_MS) as number;
     }
 
-    console.info(
+    hilog.info(0x0000, TAG,
       `HBOX_APP_RUNNER_MOUNTED inst=${this.instanceId} app=${this.appName} `
         + `client=${this.clientId}`
     );
@@ -83,16 +86,16 @@ struct AppRunner {
   }
 
   private cancelLoading(): void {
-    console.info(`[AppRunner] user cancelled loading inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,`[AppRunner] user cancelled loading inst=${this.instanceId}`);
     WindowManagerService.getInstance().destroyInstance(this.instanceId);
     // destroyInstance 会 terminateSelf, 页面随之销毁
   }
 
   private openLog(): void {
-    console.info(`[AppRunner] user opened log inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,`[AppRunner] user opened log inst=${this.instanceId}`);
     WindowManagerService.getInstance().openLogForInstance(this.instanceId)
       .catch((e: BusinessError): void => {
-        console.error(`openLog failed: ${e.code} ${e.message}`);
+        hilog.error(0x0000, TAG, `openLog failed: ${e.code} ${e.message}`);
       });
   }
 

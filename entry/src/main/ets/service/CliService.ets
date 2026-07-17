@@ -6,6 +6,9 @@ import { FontStore } from './FontStore';
 import { WineService } from './WineService';
 import { WaylandService } from './WaylandService';
 import { Box64Env, ToolEnvStore } from '../model/ToolEnvStore';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_Cli';
 
 export interface CliSubscriber {
   onLine: (line: string) => void;
@@ -88,7 +91,7 @@ export class CliService {
     }
     // CliService.ets - launchBox64 方法开头
     if (!wl.ensureBox64TmpDir()) {
-      console.error('HBOX_CLI ensureBox64TmpDir failed');
+      hilog.error(0x0000, TAG, 'HBOX_CLI ensureBox64TmpDir failed');
       // 不阻断启动，因为 C++ 侧还会在子进程中再检查一次
     }
     // 启动 Control Socket，用于创建子进程。若已经创建过则会略过。

@@ -3,6 +3,9 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { common, Want } from '@kit.AbilityKit';
 import { WaylandService, WlBufferSize } from './WaylandService';
 import { ProcessManagerService } from './ProcessManagerService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_WindowManager';
 
 // =========================================================
 // types
@@ -105,7 +108,7 @@ export class WindowManagerService {
   // ─── 实验方法 (实验后删除) ───
   private async experimentHideMainBehind(subWin: window.Window): Promise<void> {
     if (this.exp_mainHidden) {
-      console.info('EXP: 已有窗口在跟随, 跳过');
+      hilog.info(0x0000, TAG, 'EXP: 已有窗口在跟随, 跳过');
       return;
     }
     const windowStage = AppStorage.get<window.WindowStage>('windowStage');
@@ -116,32 +119,32 @@ export class WindowManagerService {
       await mainWin.setWindowLimits({
         minWidth: 1, minHeight: 1, maxWidth: 100, maxHeight: 100
       }, true);
-      console.info('EXP: setWindowLimits ok');
+      hilog.info(0x0000, TAG, 'EXP: setWindowLimits ok');
     } catch (e) {
-      console.warn(`EXP: setWindowLimits fail ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `EXP: setWindowLimits fail ${JSON.stringify(e)}`);
     }
 
     try {
       await mainWin.resizeAsync(1, 1);
-      console.info('EXP: main resizeAsync 1x1 ok');
+      hilog.info(0x0000, TAG, 'EXP: main resizeAsync 1x1 ok');
     } catch (e) {
-      console.warn(`EXP: resizeAsync fail ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `EXP: resizeAsync fail ${JSON.stringify(e)}`);
     }
 
     try {
       mainWin.setWindowDecorVisible(false);
       mainWin.setWindowDecorHeight(40);
       mainWin.setWindowTitleButtonVisible(false, false, false);
-      console.info('EXP: setWindowDecorVisible false ok');
+      hilog.info(0x0000, TAG, 'EXP: setWindowDecorVisible false ok');
     } catch (e) {
-      console.warn(`EXP: setWindowDecorVisible fail ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `EXP: setWindowDecorVisible fail ${JSON.stringify(e)}`);
     }
 
     try {
       await mainWin.setWindowFocusable(false);
-      console.info('EXP: setWindowFocusable false ok');
+      hilog.info(0x0000, TAG, 'EXP: setWindowFocusable false ok');
     } catch (e) {
-      console.warn(`EXP: setWindowFocusable fail ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `EXP: setWindowFocusable fail ${JSON.stringify(e)}`);
     }
 
     // 立即挪到子窗中心 (保持不变)
@@ -152,9 +155,9 @@ export class WindowManagerService {
         r.left + Math.floor(r.width / 2),
         r.top + Math.floor(r.height / 2)
       );
-      console.info(`EXP: initial move to ${r.left + r.width / 2},${r.top + r.height / 2}`);
+      hilog.info(0x0000, TAG, `EXP: initial move to ${r.left + r.width / 2},${r.top + r.height / 2}`);
     } catch (e) {
-      console.warn(`EXP: initial move fail ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `EXP: initial move fail ${JSON.stringify(e)}`);
     }
 
     // ★ 监听: 只更新 latestSubRect, 不直接挪
@@ -174,7 +177,7 @@ export class WindowManagerService {
       mainWin.moveWindowToAsync(cx, cy).catch((): void => {  });
     }, 100);
 
-    console.info('EXP: windowRectChange listener + follow timer attached');
+    hilog.info(0x0000, TAG, 'EXP: windowRectChange listener + follow timer attached');
     this.exp_mainHidden = true;
   }*/
 
@@ -236,7 +239,7 @@ export class WindowManagerService {
 
   /** @deprecated 生命周期已挪到 AbilityStage, 这里保留兼容 */
   shutdown(): void {
-    console.warn('[WMS] shutdown called (deprecated)');
+    hilog.warn(0x0000, TAG, '[WMS] shutdown called (deprecated)');
     // 不再主动关 wayland server, 由系统进程回收时统一清理
     // WaylandService.getInstance().shutdown();
   }
@@ -296,7 +299,7 @@ export class WindowManagerService {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
       if (!windowStage) {
-        console.error('HBOX_WM_LOG_NO_STAGE');
+        hilog.error(0x0000, TAG, 'HBOX_WM_LOG_NO_STAGE');
         return;
       }
       const main = windowStage.getMainWindowSync();
@@ -351,7 +354,7 @@ export class WindowManagerService {
       await subWin.showWindow();
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`createLogWindow failed: ${err.code}, ${err.message}`);
+      hilog.error(0x0000, TAG, `createLogWindow failed: ${err.code}, ${err.message}`);
       ProcessManagerService.getInstance().terminate(pid);
     }
   }
@@ -360,12 +363,12 @@ export class WindowManagerService {
   async createLogWindow(instanceId: string, appName: string, pid: number): Promise<void> {
     const inst = this.ensureInstance(instanceId, appName, '', pid);
     if (inst.logAttachPending || inst.logAbilityContext) {
-      console.info(`[WMS] createLogWindow skip (pending or attached) inst=${instanceId}`);
+      hilog.info(0x0000, TAG, `[WMS] createLogWindow skip (pending or attached) inst=${instanceId}`);
       return;
     }
     const uiCtx = this.uiCtx;
     if (!uiCtx) {
-      console.error('[WMS] createLogWindow: uiCtx not ready');
+      hilog.error(0x0000, TAG, '[WMS] createLogWindow: uiCtx not ready');
       ProcessManagerService.getInstance().terminate(pid);
       return;
     }
@@ -383,10 +386,10 @@ export class WindowManagerService {
     };
     try {
       await uiCtx.startAbility(want);
-      console.info(`[WMS] CliRunnerAbility startAbility ok inst=${instanceId}`);
+      hilog.info(0x0000, TAG, `[WMS] CliRunnerAbility startAbility ok inst=${instanceId}`);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[WMS] CliRunnerAbility startAbility failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG, `[WMS] CliRunnerAbility startAbility failed: ${err.code} ${err.message}`);
       inst.logAttachPending = false;
     }
   }
@@ -448,7 +451,7 @@ export class WindowManagerService {
       return true;
     } catch (e) {
       const err = e as BusinessError;
-      console.warn(`HBOX_WM_RESTORE_FAIL code=${err.code} msg=${err.message}`);
+      hilog.warn(0x0000, TAG, `HBOX_WM_RESTORE_FAIL code=${err.code} msg=${err.message}`);
       return false;
     }
   }
@@ -497,7 +500,7 @@ export class WindowManagerService {
       appId   = '';
     }
 
-    console.info(
+    hilog.info(0x0000, TAG,
       `HBOX_WM_CLIENT_MATCH_${matchType} inst=${instanceId} `
         + `cid=${clientId} recvInst=${recvInstanceId || '(none)'}`
     );
@@ -508,7 +511,7 @@ export class WindowManagerService {
 
     // ★ 分支 1: GUI Ability 已挂载 → 只更新 storage.clientId (loading → XComponent)
     if (inst.hostAbilityContext && inst.hostWindow) {
-      console.info(`[WMS] instance ${instanceId} already has AppRunnerAbility, updating clientId only`);
+      hilog.info(0x0000, TAG, `[WMS] instance ${instanceId} already has AppRunnerAbility, updating clientId only`);
       if (inst.hostStorage) {
         inst.hostStorage.setOrCreate<string>('clientId', clientId);
       }
@@ -525,7 +528,7 @@ export class WindowManagerService {
 
     // ★ 分支 2: GUI Ability 正在拉起 (GUI-first 竞态) → 等 attach, 不重复
     if (inst.hostAttachPending) {
-      console.info(`[WMS] hostAbility pending inst=${instanceId}, wait attach`);
+      hilog.info(0x0000, TAG, `[WMS] hostAbility pending inst=${instanceId}, wait attach`);
       // 什么都不做, attachAppRunnerAbility 会读 inst.clientId 补 storage
       this.notifyChanged();
       return;
@@ -533,7 +536,7 @@ export class WindowManagerService {
 
     // ★ 分支 3: 默认路径 (CLI-first 场景 / auto shell 场景) → 主动拉 AppRunner
     this.createHostWindow(inst).catch((e: BusinessError): void => {
-      console.error(`HBOX_WM_HOST_CREATE_FAIL code=${e.code} msg=${e.message}`);
+      hilog.error(0x0000, TAG, `HBOX_WM_HOST_CREATE_FAIL code=${e.code} msg=${e.message}`);
     });
   }
 
@@ -577,11 +580,11 @@ export class WindowManagerService {
       const movable: MovableWindow = inst.hostWindow as MovableWindow;
       if (movable.startMoving) {
         movable.startMoving().catch((e: BusinessError): void => {
-          console.error(`startMoving failed: ${e.code} ${e.message}`);
+          hilog.error(0x0000, TAG, `startMoving failed: ${e.code} ${e.message}`);
         });
       }
     } catch (e) {
-      console.error(`handleClientMove failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `handleClientMove failed: ${JSON.stringify(e)}`);
     }
   }
 
@@ -612,7 +615,7 @@ export class WindowManagerService {
     win.resize(availW, availH).then((): void => {
       win.moveWindowToGlobal(0, 0).catch((): void => { /* ignore */ });
     }).catch((e: BusinessError): void => {
-      console.warn(`HBOX_WIN_MAX_FAIL code=${e.code}`);
+      hilog.warn(0x0000, TAG, `HBOX_WIN_MAX_FAIL code=${e.code}`);
     });
   }
 
@@ -632,7 +635,7 @@ export class WindowManagerService {
     win.resize(saved.w, saved.h).then((): void => {
       win.moveWindowToGlobal(saved.x, saved.y).catch((): void => { /* ignore */ });
     }).catch((e: BusinessError): void => {
-      console.warn(`HBOX_WIN_UNMAX_FAIL code=${e.code}`);
+      hilog.warn(0x0000, TAG, `HBOX_WIN_UNMAX_FAIL code=${e.code}`);
     });
   }
 
@@ -640,7 +643,7 @@ export class WindowManagerService {
     const inst = this.getInstanceByClient(clientId);
     if (!inst || !inst.hostWindow) return;
     inst.hostWindow.minimize().catch((e: BusinessError): void => {
-      console.warn(`HBOX_WIN_MIN_FAIL code=${e.code} msg=${e.message}`);
+      hilog.warn(0x0000, TAG, `HBOX_WIN_MIN_FAIL code=${e.code} msg=${e.message}`);
     });
   }
 
@@ -657,7 +660,7 @@ export class WindowManagerService {
       this.resizingInstanceId = inst.instanceId;
       WaylandService.getInstance().fireHostResizeBegin(clientId, edges);   // ← 加 clientId
     } catch (e) {
-      console.warn(`HBOX_WIN_RESIZE_INIT_FAIL ${JSON.stringify(e)}`);
+      hilog.warn(0x0000, TAG, `HBOX_WIN_RESIZE_INIT_FAIL ${JSON.stringify(e)}`);
     }
   }
 
@@ -693,7 +696,7 @@ export class WindowManagerService {
     win.resize(newW, newH).then((): void => {
       win.moveWindowToGlobal(newX, newY).catch((): void => { /* ignore */ });
     }).catch((e: BusinessError): void => {
-      console.warn(`HBOX_WIN_RESIZE_DRAG_FAIL code=${e.code}`);
+      hilog.warn(0x0000, TAG, `HBOX_WIN_RESIZE_DRAG_FAIL code=${e.code}`);
     });
 
     const now = Date.now();
@@ -744,7 +747,7 @@ export class WindowManagerService {
     try {
       const windowStage = AppStorage.get<window.WindowStage>('windowStage');
       if (!windowStage) {
-        console.error('HBOX_WM_NO_STAGE');
+        hilog.error(0x0000, TAG, 'HBOX_WM_NO_STAGE');
         return;
       }
       const main = windowStage.getMainWindowSync();
@@ -806,17 +809,17 @@ export class WindowManagerService {
 
       // ─── 实验: 主窗躲子窗后面 (仅第一个应用) ───
       // this.experimentHideMainBehind(subWin).catch((e: BusinessError): void => {
-      //   console.error(`EXP failed: ${e.code} ${e.message}`);
+      //   hilog.error(0x0000, TAG, `EXP failed: ${e.code} ${e.message}`);
       // });
 
       if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
         this.firstCommitDone.add(instanceId);
         this.applyWindowSize(subWin, sz.w, sz.h);
       }
-      console.info(`HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
+      hilog.info(0x0000, TAG, `HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`HBOX_WM_HOST_FAIL code=${err.code} msg=${err.message}`);
+      hilog.error(0x0000, TAG, `HBOX_WM_HOST_FAIL code=${err.code} msg=${err.message}`);
     }
   }
 
@@ -826,12 +829,12 @@ export class WindowManagerService {
 
   private async createHostWindow(inst: AppInstance): Promise<void> {
     if (inst.hostAttachPending || inst.hostAbilityContext) {
-      console.info(`[WMS] createHostWindow skip (pending or attached) inst=${inst.instanceId}`);
+      hilog.info(0x0000, TAG, `[WMS] createHostWindow skip (pending or attached) inst=${inst.instanceId}`);
       return;
     }
     const uiCtx = this.uiCtx;
     if (!uiCtx) {
-      console.error('[WMS] createHostWindow: uiCtx not ready');
+      hilog.error(0x0000, TAG, '[WMS] createHostWindow: uiCtx not ready');
       return;
     }
 
@@ -848,10 +851,10 @@ export class WindowManagerService {
     };
     try {
       await uiCtx.startAbility(want);
-      console.info(`[WMS] AppRunnerAbility startAbility ok inst=${inst.instanceId}`);
+      hilog.info(0x0000, TAG, `[WMS] AppRunnerAbility startAbility ok inst=${inst.instanceId}`);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[WMS] AppRunnerAbility startAbility failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG, `[WMS] AppRunnerAbility startAbility failed: ${err.code} ${err.message}`);
       inst.hostAttachPending = false;
     }
   }
@@ -1022,7 +1025,7 @@ export class WindowManagerService {
         ).catch((): void => { /* ignore */ });
       } catch (e) { /* ignore */ }
     }).catch((e: BusinessError): void => {
-      console.error(`applyWindowSize failed: ${e.code} ${e.message}`);
+      hilog.error(0x0000, TAG, `applyWindowSize failed: ${e.code} ${e.message}`);
     });
   }
 
@@ -1036,10 +1039,10 @@ export class WindowManagerService {
     stage: window.WindowStage,
     storage: LocalStorage | null
   ): void {
-    console.info(`[WMS] attachAppRunnerAbility inst=${instanceId}`);
+    hilog.info(0x0000, TAG, `[WMS] attachAppRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
     if (!inst) {
-      console.error(`[WMS] attach: instance ${instanceId} not found, closing ability`);
+      hilog.error(0x0000, TAG, `[WMS] attach: instance ${instanceId} not found, closing ability`);
       ctx.terminateSelf().catch((): void => { /* ignore */ });
       return;
     }
@@ -1049,7 +1052,7 @@ export class WindowManagerService {
       mainWin = stage.getMainWindowSync();
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[WMS] getMainWindowSync failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG, `[WMS] getMainWindowSync failed: ${err.code} ${err.message}`);
       return;
     }
 
@@ -1068,7 +1071,7 @@ export class WindowManagerService {
   }
 
   detachAppRunnerAbility(instanceId: string): void {
-    console.info(`[WMS] detachAppRunnerAbility inst=${instanceId}`);
+    hilog.info(0x0000, TAG, `[WMS] detachAppRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
     if (!inst) return;
     inst.hostAbilityContext = null;
@@ -1083,10 +1086,10 @@ export class WindowManagerService {
     stage: window.WindowStage,
     storage: LocalStorage | null
   ): void {
-    console.info(`[WMS] attachCliRunnerAbility inst=${instanceId}`);
+    hilog.info(0x0000, TAG, `[WMS] attachCliRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
     if (!inst) {
-      console.error(`[WMS] attachCli: instance ${instanceId} not found, closing ability`);
+      hilog.error(0x0000, TAG, `[WMS] attachCli: instance ${instanceId} not found, closing ability`);
       ctx.terminateSelf().catch((): void => { /* ignore */ });
       return;
     }
@@ -1096,7 +1099,7 @@ export class WindowManagerService {
       mainWin = stage.getMainWindowSync();
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[WMS] getMainWindowSync (log) failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG, `[WMS] getMainWindowSync (log) failed: ${err.code} ${err.message}`);
       return;
     }
 
@@ -1110,7 +1113,7 @@ export class WindowManagerService {
   }
 
   detachCliRunnerAbility(instanceId: string): void {
-    console.info(`[WMS] detachCliRunnerAbility inst=${instanceId}`);
+    hilog.info(0x0000, TAG, `[WMS] detachCliRunnerAbility inst=${instanceId}`);
     const inst = this.instances.get(instanceId);
     if (!inst) return;
     inst.logAbilityContext = null;
@@ -1157,7 +1160,7 @@ export class WindowManagerService {
         ).catch((): void => { /* ignore */ });
       } catch (e) { /* ignore */ }
     }).catch((e: BusinessError): void => {
-      console.warn(`[WMS] setupHostWindow resize failed: ${e.code} ${e.message}`);
+      hilog.warn(0x0000, TAG, `[WMS] setupHostWindow resize failed: ${e.code} ${e.message}`);
     });
 
     const instanceId: string = inst.instanceId;
@@ -1174,7 +1177,7 @@ export class WindowManagerService {
       this.firstCommitDone.add(instanceId);
       this.applyWindowSize(win, sz.w, sz.h);
     }
-    console.info(`HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
+    hilog.info(0x0000, TAG, `HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
   }
 
   private setupLogWindow(inst: AppInstance, win: window.Window): void {
@@ -1196,7 +1199,7 @@ export class WindowManagerService {
         ).catch((): void => { /* ignore */ });
       } catch (e) { /* ignore */ }
     }).catch((e: BusinessError): void => {
-      console.warn(`[WMS] setupLogWindow resize failed: ${e.code} ${e.message}`);
+      hilog.warn(0x0000, TAG, `[WMS] setupLogWindow resize failed: ${e.code} ${e.message}`);
     });
 
     const instanceId: string = inst.instanceId;
@@ -1212,7 +1215,7 @@ export class WindowManagerService {
       }
     });
 
-    console.info(`HBOX_WM_LOG_SHOWN inst=${instanceId}`);
+    hilog.info(0x0000, TAG, `HBOX_WM_LOG_SHOWN inst=${instanceId}`);
   }
 
   /**
@@ -1232,11 +1235,11 @@ export class WindowManagerService {
   async openLogForInstance(instanceId: string): Promise<void> {
     const inst = this.instances.get(instanceId);
     if (!inst) {
-      console.warn(`[WMS] openLogForInstance: instance ${instanceId} not found`);
+      hilog.warn(0x0000, TAG, `[WMS] openLogForInstance: instance ${instanceId} not found`);
       return;
     }
     if (inst.logAbilityContext || inst.logAttachPending) {
-      console.info(`[WMS] log ability already active inst=${instanceId}`);
+      hilog.info(0x0000, TAG, `[WMS] log ability already active inst=${instanceId}`);
       return;
     }
     await this.createLogWindow(instanceId, inst.appName, inst.pid);

@@ -2,21 +2,24 @@ import { AbilityStage } from '@kit.AbilityKit';
 import { WaylandService } from '../service/WaylandService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WindowManagerService } from '../service/WindowManagerService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Ability_HBoxAbilityStage';
 
 export default class HBoxAbilityStage extends AbilityStage {
   onCreate(): void {
-    console.info('[HBoxAbilityStage] onCreate: initializing services...');
+    hilog.info(0x0000, TAG, '[HBoxAbilityStage] onCreate: initializing services...');
 
     // 顺序: wayland server → procmgr → windowmgr (listener 依赖 wl service)
     const wlOk: boolean = WaylandService.getInstance().initStage(this.context);
-    console.info(`[HBoxAbilityStage] wayland ready=${wlOk}`);
+    hilog.info(0x0000, TAG, `[HBoxAbilityStage] wayland ready=${wlOk}`);
 
     ProcessManagerService.getInstance().initStage(this.context);
-    console.info('[HBoxAbilityStage] procmgr initialized');
+    hilog.info(0x0000, TAG, '[HBoxAbilityStage] procmgr initialized');
 
     WindowManagerService.getInstance().initStage(this.context);
-    console.info('[HBoxAbilityStage] windowmgr initialized');
+    hilog.info(0x0000, TAG, '[HBoxAbilityStage] windowmgr initialized');
 
-    console.info('[HBoxAbilityStage] onCreate done');
+    hilog.info(0x0000, TAG, '[HBoxAbilityStage] onCreate done');
   }
 }

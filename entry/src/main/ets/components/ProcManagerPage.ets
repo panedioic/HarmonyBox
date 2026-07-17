@@ -1,6 +1,9 @@
 import { Theme } from '../common/Theme';
 import { BusinessError } from '@kit.BasicServicesKit';
 import wl from 'libentry.so';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Comp_ProcManager';
 
 // 导入接口类型声明 (确保与你 index.d.ts 里的定义保持一致)
 interface ProcessInfo {
@@ -41,7 +44,7 @@ export struct ProcManagerPage {
       });
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`listProcesses failed: ${err.code}, ${err.message}`);
+      hilog.error(0x0000, TAG,`listProcesses failed: ${err.code}, ${err.message}`);
     }
   }
 
@@ -52,7 +55,7 @@ export struct ProcManagerPage {
       setTimeout(() => this.refreshList(), 300);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`terminate failed: ${err.code}, ${err.message}`);
+      hilog.error(0x0000, TAG,`terminate failed: ${err.code}, ${err.message}`);
     }
   }
 

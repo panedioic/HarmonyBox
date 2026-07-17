@@ -1,6 +1,9 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { AppInfo, AppType, AppConfig, RuntimeMode, migrateAppType } from './AppInfo';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Model_AppRegistry';
 
 const REGISTRY_FILE: string = 'apps.json';
 
@@ -31,7 +34,7 @@ export class AppRegistry {
         a.containerId || ''
       ));
     } catch (e) {
-      console.error(`AppRegistry.load failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `AppRegistry.load failed: ${JSON.stringify(e)}`);
       return [];
     }
   }
@@ -51,7 +54,7 @@ export class AppRegistry {
         fs.closeSync(file.fd);
       }
     } catch (e) {
-      console.error(`AppRegistry.save failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `AppRegistry.save failed: ${JSON.stringify(e)}`);
     }
   }
 

@@ -5,6 +5,9 @@ import { ToolEnvStore, Box64Env, UiPrefs } from '../model/ToolEnvStore';
 import { LibStore, LibFile } from '../service/LibStore';
 import { WaylandService } from '../service/WaylandService';
 import { FontStore, FontFile } from '../service/FontStore';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Comp_Settings';
 
 interface ResourceStatus {
   id: string;
@@ -87,7 +90,7 @@ export struct SettingsPage {
       };
       ctx.startAbility(want);
     } catch (e) {
-      console.error(`openUrl failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG,`openUrl failed: ${JSON.stringify(e)}`);
     }
   }
 

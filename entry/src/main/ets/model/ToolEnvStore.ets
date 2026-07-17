@@ -1,5 +1,8 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Model_ToolEnvStore';
 
 export interface Box64Env {
   BOX64_LOG: string;            // '0' | '1' | '2' | '3'
@@ -54,7 +57,7 @@ export class ToolEnvStore {
       }
       return merged;
     } catch (e) {
-      console.error(`ToolEnvStore.loadBox64 failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `ToolEnvStore.loadBox64 failed: ${JSON.stringify(e)}`);
       return ToolEnvStore.defaults();
     }
   }
@@ -73,7 +76,7 @@ export class ToolEnvStore {
         fs.closeSync(file.fd);
       }
     } catch (e) {
-      console.error(`ToolEnvStore.saveBox64 failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `ToolEnvStore.saveBox64 failed: ${JSON.stringify(e)}`);
     }
   }
 
@@ -97,7 +100,7 @@ export class ToolEnvStore {
       }
       return merged;
     } catch (e) {
-      console.error(`loadUiPrefs failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `loadUiPrefs failed: ${JSON.stringify(e)}`);
       return ToolEnvStore.defaultUiPrefs();
     }
   }
@@ -122,7 +125,7 @@ export class ToolEnvStore {
         fs.closeSync(file.fd);
       }
     } catch (e) {
-      console.error(`saveUiPrefs failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `saveUiPrefs failed: ${JSON.stringify(e)}`);
     }
   }
 }

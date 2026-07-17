@@ -1,6 +1,9 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_Lib';
 
 export interface LibFile {
   name: string;
@@ -36,7 +39,7 @@ export class LibStore {
         } catch (e) { /* ignore */ }
       }
     } catch (e) {
-      console.error(`LibStore.list failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `LibStore.list failed: ${JSON.stringify(e)}`);
     }
     result.sort((a: LibFile, b: LibFile): number => a.name.localeCompare(b.name));
     return result;
@@ -74,12 +77,12 @@ export class LibStore {
             fs.closeSync(srcFile.fd);
           }
         } catch (e) {
-          console.error(`copy lib failed: ${JSON.stringify(e)}`);
+          hilog.error(0x0000, TAG, `copy lib failed: ${JSON.stringify(e)}`);
         }
       }
       return added;
     } catch (e) {
-      console.error(`pickAndAdd failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `pickAndAdd failed: ${JSON.stringify(e)}`);
       return 0;
     }
   }
@@ -92,7 +95,7 @@ export class LibStore {
         return true;
       }
     } catch (e) {
-      console.error(`LibStore.remove failed: ${JSON.stringify(e)}`);
+      hilog.error(0x0000, TAG, `LibStore.remove failed: ${JSON.stringify(e)}`);
     }
     return false;
   }

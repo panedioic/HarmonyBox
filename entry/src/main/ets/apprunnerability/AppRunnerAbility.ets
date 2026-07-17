@@ -6,6 +6,9 @@ import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
 import { AppRegistry } from '../model/AppRegistry';
 import { LaunchMode } from '../model/AppInfo';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Ability_AppRunner';
 
 export default class AppRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -22,7 +25,7 @@ export default class AppRunnerAbility extends UIAbility {
     this.clientId      = (params.clientId      as string) ?? '';
     this.shortcutAppId = (params.shortcutAppId as string) ?? '';
 
-    console.info(
+    hilog.info(0x0000, TAG,
       `[AppRunnerAbility] onCreate `
         + `inst=${this.instanceId} name=${this.appName} appId=${this.appId} `
         + `cid=${this.clientId} shortcut=${this.shortcutAppId}`
@@ -42,7 +45,9 @@ export default class AppRunnerAbility extends UIAbility {
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
-    console.info(`[AppRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`);
+    hilog.info(0x0000, TAG,
+      `[AppRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`
+    );
 
     const storage: LocalStorage = new LocalStorage();
     storage.setOrCreate<string>('instanceId', this.instanceId);
@@ -54,7 +59,9 @@ export default class AppRunnerAbility extends UIAbility {
       await stage.loadContent('pages/AppRunner', storage);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[AppRunnerAbility] loadContent failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG,
+        `[AppRunnerAbility] loadContent failed: ${err.code} ${err.message}`
+      );
       return;
     }
 
@@ -63,7 +70,9 @@ export default class AppRunnerAbility extends UIAbility {
       const r = await ProcessManagerService.getInstance()
         .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.GUI });
       if (!r.ok) {
-        console.error(`[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        hilog.error(0x0000, TAG,
+          `[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`
+        );
         this.context.terminateSelf().catch((): void => { /* ignore */ });
         return;
       }
@@ -100,24 +109,34 @@ export default class AppRunnerAbility extends UIAbility {
       }
     } catch (e) {
       const err = e as BusinessError;
-      console.warn(`[AppRunnerAbility] title set failed: ${err.code} ${err.message}`);
+      hilog.warn(0x0000, TAG,
+        `[AppRunnerAbility] title set failed: ${err.code} ${err.message}`
+      );
     }
   }
 
   onWindowStageDestroy(): void {
-    console.info(`[AppRunnerAbility] onWindowStageDestroy inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[AppRunnerAbility] onWindowStageDestroy inst=${this.instanceId}`
+    );
     WindowManagerService.getInstance().detachAppRunnerAbility(this.instanceId);
   }
 
   onDestroy(): void {
-    console.info(`[AppRunnerAbility] onDestroy inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[AppRunnerAbility] onDestroy inst=${this.instanceId}`
+    );
   }
 
   onForeground(): void {
-    console.info(`[AppRunnerAbility] onForeground inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[AppRunnerAbility] onForeground inst=${this.instanceId}`
+    );
   }
 
   onBackground(): void {
-    console.info(`[AppRunnerAbility] onBackground inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[AppRunnerAbility] onBackground inst=${this.instanceId}`
+    );
   }
 }

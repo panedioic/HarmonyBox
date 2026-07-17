@@ -6,6 +6,9 @@ import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WaylandService } from '../service/WaylandService';
 import { AppRegistry } from '../model/AppRegistry';
 import { LaunchMode } from '../model/AppInfo';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Ability_CliRunner';
 
 export default class CliRunnerAbility extends UIAbility {
   private instanceId: string = '';
@@ -22,7 +25,7 @@ export default class CliRunnerAbility extends UIAbility {
     this.pid           = (params.pid           as number) ?? 0;
     this.shortcutAppId = (params.shortcutAppId as string) ?? '';
 
-    console.info(
+    hilog.info(0x0000, TAG,
       `[CliRunnerAbility] onCreate `
         + `inst=${this.instanceId} name=${this.appName} appId=${this.appId} `
         + `pid=${this.pid} shortcut=${this.shortcutAppId}`
@@ -41,7 +44,9 @@ export default class CliRunnerAbility extends UIAbility {
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
-    console.info(`[CliRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`);
+    hilog.info(0x0000, TAG,
+      `[CliRunnerAbility] onWindowStageCreate inst=${this.instanceId} shortcut=${this.shortcutAppId}`
+    );
 
     const storage: LocalStorage = new LocalStorage();
     storage.setOrCreate<string>('instanceId', this.instanceId);
@@ -53,7 +58,9 @@ export default class CliRunnerAbility extends UIAbility {
       await stage.loadContent('pages/CliRunner', storage);
     } catch (e) {
       const err = e as BusinessError;
-      console.error(`[CliRunnerAbility] loadContent failed: ${err.code} ${err.message}`);
+      hilog.error(0x0000, TAG,
+        `[CliRunnerAbility] loadContent failed: ${err.code} ${err.message}`
+      );
       return;
     }
 
@@ -62,7 +69,9 @@ export default class CliRunnerAbility extends UIAbility {
       const r = await ProcessManagerService.getInstance()
         .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.CLI });
       if (!r.ok) {
-        console.error(`[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        hilog.error(0x0000, TAG,
+          `[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`
+        );
         this.context.terminateSelf().catch((): void => { /* ignore */ });
         return;
       }
@@ -96,24 +105,34 @@ export default class CliRunnerAbility extends UIAbility {
       mainWin.setWindowTitle?.(title);
     } catch (e) {
       const err = e as BusinessError;
-      console.warn(`[CliRunnerAbility] title set failed: ${err.code} ${err.message}`);
+      hilog.warn(0x0000, TAG,
+        `[CliRunnerAbility] title set failed: ${err.code} ${err.message}`
+      );
     }
   }
 
   onWindowStageDestroy(): void {
-    console.info(`[CliRunnerAbility] onWindowStageDestroy inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[CliRunnerAbility] onWindowStageDestroy inst=${this.instanceId}`
+    );
     WindowManagerService.getInstance().detachCliRunnerAbility(this.instanceId);
   }
 
   onDestroy(): void {
-    console.info(`[CliRunnerAbility] onDestroy inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[CliRunnerAbility] onDestroy inst=${this.instanceId}`
+    );
   }
 
   onForeground(): void {
-    console.info(`[CliRunnerAbility] onForeground inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[CliRunnerAbility] onForeground inst=${this.instanceId}`
+    );
   }
 
   onBackground(): void {
-    console.info(`[CliRunnerAbility] onBackground inst=${this.instanceId}`);
+    hilog.info(0x0000, TAG,
+      `[CliRunnerAbility] onBackground inst=${this.instanceId}`
+    );
   }
 }

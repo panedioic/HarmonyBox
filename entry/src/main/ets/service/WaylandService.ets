@@ -1,6 +1,9 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
 import { ToolEnvStore, UiPrefs } from '../model/ToolEnvStore';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Svc_Wayland';
 
 export interface WlBufferSize {
   w: number;
@@ -69,11 +72,11 @@ export class WaylandService {
     this.useNativeDecor = prefs.useNativeDecor;
 
     wl.setClientConnectCallback((cid: string, instanceId: string): void => {
-      console.info(`[WL] connect cid=${cid} inst=${instanceId}`);
+      hilog.info(0x0000, TAG, `[WL] connect cid=${cid} inst=${instanceId}`);
       if (this.connectListener) this.connectListener(cid, instanceId);
     });
     wl.setClientDisconnectCallback((cid: string): void => {
-      console.info(`[WL] disconnect cid=${cid}`);
+      hilog.info(0x0000, TAG, `[WL] disconnect cid=${cid}`);
       if (this.disconnectListener) this.disconnectListener(cid);
     });
     wl.setSizeCallback((cid: string, w: number, h: number): void => {
@@ -198,7 +201,7 @@ export class WaylandService {
     try {
       wl.requestClientResize(clientId, bufW, bufH, maximized);
     } catch (e) {
-      console.warn('requestClientResize failed', e);
+      hilog.warn(0x0000, TAG, 'requestClientResize failed', e);
     }
   }
 }

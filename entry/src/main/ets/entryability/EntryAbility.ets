@@ -4,10 +4,13 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { WaylandService } from '../service/WaylandService';
 import { ProcessManagerService } from '../service/ProcessManagerService';
 import { WindowManagerService } from '../service/WindowManagerService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_Ability_Enter';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    console.info('[EntryAbility] onCreate');
+    hilog.info(0x0000, TAG, '[EntryAbility] onCreate');
     // Stage 已启动 native 服务, 这里只补充 uiCtx (供 launcher 内部 startAbility 用)
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
@@ -16,7 +19,7 @@ export default class EntryAbility extends UIAbility {
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // launcher 已运行时再次被拉起 (比如从系统 shortcut), 保证 uiCtx 引用最新的 EntryAbility context
-    console.info('[EntryAbility] onNewWant');
+    hilog.info(0x0000, TAG, '[EntryAbility] onNewWant');
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
     WindowManagerService.getInstance().initUI(this.context);
@@ -27,7 +30,7 @@ export default class EntryAbility extends UIAbility {
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
-        console.error(`loadContent failed: ${err.code}, ${err.message}`);
+        hilog.error(0x0000, TAG, `loadContent failed: ${err.code}, ${err.message}`);
       }
     });
 
@@ -48,7 +51,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
-    console.info('[EntryAbility] onDestroy');
+    hilog.info(0x0000, TAG, '[EntryAbility] onDestroy');
     // 不主动 shutdown wayland: AppRunnerAbility 可能还在跑
     // wayland server 生命周期已挪到 HBoxAbilityStage
   }

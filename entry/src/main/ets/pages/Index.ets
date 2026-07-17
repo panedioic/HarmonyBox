@@ -18,6 +18,9 @@ import { ContainerManagerPage } from '../pages/ContainerManagerPage';
 import { PackageService, PackageResult } from '../service/PackageService';
 import { picker } from '@kit.CoreFileKit';
 import { ProcessManagerService, LaunchResult } from '../service/ProcessManagerService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Page_Index';
 
 @Entry
 @Component
@@ -57,7 +60,7 @@ struct Index {
       if (!restored) {
         ProcessManagerService.getInstance().launchApp(app, { launchMode: LaunchMode.GUI })
           .catch((e: BusinessError): void => {
-            console.error(`launchApp failed: ${e.code} ${e.message}`);
+            hilog.error(0x0000, TAG, `launchApp failed: ${e.code} ${e.message}`);
           });
       }
     });
@@ -68,7 +71,7 @@ struct Index {
       if (!restored) {
         ProcessManagerService.getInstance().launchApp(app, { launchMode: LaunchMode.CLI })
           .catch((e: BusinessError): void => {
-            console.error(`launchAppWithLog failed: ${e.code} ${e.message}`);
+            hilog.error(0x0000, TAG, `launchAppWithLog failed: ${e.code} ${e.message}`);
           });
       }
     });

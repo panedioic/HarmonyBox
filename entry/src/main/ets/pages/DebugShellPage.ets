@@ -6,6 +6,9 @@ import { LibStore } from '../service/LibStore';
 import { ShellRegistry, ShellIO } from '../shell/ShellRegistry';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { WaylandService } from '../service/WaylandService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'HBox_UI_Page_DebugShell';
 
 @Component
 export struct DebugShellPage {
@@ -41,7 +44,7 @@ export struct DebugShellPage {
     );
     this.inited = ok;
     if (!ok) {
-      console.error('shellInit failed');
+      hilog.error(0x0000, TAG, 'shellInit failed');
       return;
     }
 
@@ -50,7 +53,7 @@ export struct DebugShellPage {
       const sysEnv: string[] = this.buildSystemEnv(ctx);
       wl.shellSetSystemEnv(sysEnv);
     } catch (e) {
-      console.error('shellSetSystemEnv failed: ' + (e as Error).message);
+      hilog.error(0x0000, TAG, 'shellSetSystemEnv failed: ' + (e as Error).message);
     }
 
     this.registerCommands(ctx);
