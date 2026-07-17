@@ -75,6 +75,25 @@ export struct Sidebar {
             console.error(`[test] startAbility failed: ${e.code} ${e.message}`);
           });
         })
+      Button('测试拉起 CliRunnerAbility')
+        .onClick((): void => {
+          const ctx = getContext(this) as common.UIAbilityContext;
+          const want: Want = {
+            bundleName: ctx.abilityInfo.bundleName,
+            abilityName: 'CliRunnerAbility',
+            parameters: {
+              instanceId: `test-${Date.now()}`,
+              appName: '测试应用',
+              appId: 'test-app',
+              pid: 12345
+            }
+          };
+          ctx.startAbility(want).then((): void => {
+            console.info('[test] startAbility CliRunner success');
+          }).catch((e: BusinessError): void => {
+            console.error(`[test] startAbility CliRunner failed: ${e.code} ${e.message}`);
+          });
+        })
     }
     .width(208)
     .height('100%')

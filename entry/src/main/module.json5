@@ -43,6 +43,17 @@
         "startWindowBackground": "$color:start_window_background",
         "exported": false,
         "launchType": "multiton"
+      },
+      {
+        "name": "CliRunnerAbility",
+        "srcEntry": "./ets/clirunnerability/CliRunnerAbility.ets",
+        "description": "$string:CliRunnerAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:CliRunnerAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": false,
+        "launchType": "multiton"
       }
     ],
     "extensionAbilities": [

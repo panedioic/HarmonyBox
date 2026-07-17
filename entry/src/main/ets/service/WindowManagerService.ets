@@ -902,4 +902,18 @@ export class WindowManagerService {
     console.info(`[WMS] detachAppRunnerAbility inst=${instanceId} (Step 2 stub)`);
     // TODO Step 4: 清理 hostAbilityContext, 触发 onHostWindowDestroyed
   }
+
+  attachCliRunnerAbility(
+    instanceId: string,
+    ctx: common.UIAbilityContext,
+    stage: window.WindowStage
+  ): void {
+    console.info(`[WMS] attachCliRunnerAbility inst=${instanceId} (Step 3 stub)`);
+    // TODO Step 4: 找到 instance, 挂 logAbilityContext/logWindow, setupLogWindow
+  }
+
+  detachCliRunnerAbility(instanceId: string): void {
+    console.info(`[WMS] detachCliRunnerAbility inst=${instanceId} (Step 3 stub)`);
+    // TODO Step 4: 清理 logAbilityContext, 处理进程 terminate 逻辑
+  }
 }

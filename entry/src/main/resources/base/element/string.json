@@ -19,6 +19,14 @@
     {
       "name": "AppRunnerAbility_desc",
       "value": "HarmonyBox 应用实例窗口"
+    },
+    {
+      "name": "CliRunnerAbility_label",
+      "value": "HarmonyBox 日志"
+    },
+    {
+      "name": "CliRunnerAbility_desc",
+      "value": "HarmonyBox 应用日志窗口"
     }
   ]
 }
