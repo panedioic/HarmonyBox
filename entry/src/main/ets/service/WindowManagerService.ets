@@ -68,8 +68,9 @@ export class WindowManagerService {
     return WindowManagerService.instance;
   }
 
-  private ctx: common.Context | null = null;             // ← 通用 Context
-  private uiCtx: common.UIAbilityContext | null = null;  // ← 未来 startAbility 用
+  private ctx: common.Context | null = null;
+  private launcherCtx: common.UIAbilityContext | null = null;   // ★ EntryAbility
+  private fallbackCtx: common.UIAbilityContext | null = null;   // ★ 其他 Ability (兜底)
   private installed: boolean = false;
 
   // 实例索引
@@ -227,8 +228,28 @@ export class WindowManagerService {
     this.installed = true;
   }
 
+  /** EntryAbility.onCreate 调用 */
+  bindLauncherContext(ctx: common.UIAbilityContext): void {
+    this.launcherCtx = ctx;
+  }
+  /** EntryAbility.onDestroy 调用 */
+  unbindLauncherContext(ctx: common.UIAbilityContext): void {
+    if (this.launcherCtx === ctx) this.launcherCtx = null;
+  }
+  /** AppRunnerAbility / CliRunnerAbility.onCreate 调用 */
+  setFallbackContext(ctx: common.UIAbilityContext): void {
+    this.fallbackCtx = ctx;
+  }
+  /** AppRunnerAbility / CliRunnerAbility.onDestroy 调用 */
+  clearFallbackContext(ctx: common.UIAbilityContext): void {
+    if (this.fallbackCtx === ctx) this.fallbackCtx = null;
+  }
+  private getUiCtx(): common.UIAbilityContext | null {
+    return this.launcherCtx ?? this.fallbackCtx;
+  }
+  /** @deprecated 用 bindLauncherContext / setFallbackContext 替代 */
   initUI(ctx: common.UIAbilityContext): void {
-    this.uiCtx = ctx;
+    this.launcherCtx = ctx;
   }
 
   /** @deprecated 使用 initStage / initUI 替代 */
@@ -366,9 +387,9 @@ export class WindowManagerService {
       hilog.info(0x0000, TAG, `[WMS] createLogWindow skip (pending or attached) inst=${instanceId}`);
       return;
     }
-    const uiCtx = this.uiCtx;
+    const uiCtx = this.getUiCtx();            // ★
     if (!uiCtx) {
-      hilog.error(0x0000, TAG, '[WMS] createLogWindow: uiCtx not ready');
+      hilog.error(0x0000, TAG, '[WMS] createLogWindow: no active UI context');
       ProcessManagerService.getInstance().terminate(pid);
       return;
     }
@@ -832,9 +853,9 @@ export class WindowManagerService {
       hilog.info(0x0000, TAG, `[WMS] createHostWindow skip (pending or attached) inst=${inst.instanceId}`);
       return;
     }
-    const uiCtx = this.uiCtx;
+    const uiCtx = this.getUiCtx();            // ★ 换成 getUiCtx()
     if (!uiCtx) {
-      hilog.error(0x0000, TAG, '[WMS] createHostWindow: uiCtx not ready');
+      hilog.error(0x0000, TAG, '[WMS] createHostWindow: no active UI context');
       return;
     }
 

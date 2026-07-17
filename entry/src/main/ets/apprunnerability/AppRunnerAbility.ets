@@ -34,7 +34,7 @@ export default class AppRunnerAbility extends UIAbility {
     // 服务的 stage 初始化已由 HBoxAbilityStage 保证. 这里补 UI ctx.
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
-    WindowManagerService.getInstance().initUI(this.context);
+    WindowManagerService.getInstance().setFallbackContext(this.context);   // ★ 从 initUI 换成 setFallbackContext
 
     // ★ 保证 WMS 里有 instance (幂等; 处理 shortcut/test 场景)
     if (this.instanceId) {
@@ -126,6 +126,7 @@ export default class AppRunnerAbility extends UIAbility {
     hilog.info(0x0000, TAG,
       `[AppRunnerAbility] onDestroy inst=${this.instanceId}`
     );
+    WindowManagerService.getInstance().clearFallbackContext(this.context);  // ★
   }
 
   onForeground(): void {

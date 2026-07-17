@@ -14,7 +14,7 @@ export default class EntryAbility extends UIAbility {
     // Stage 已启动 native 服务, 这里只补充 uiCtx (供 launcher 内部 startAbility 用)
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
-    WindowManagerService.getInstance().initUI(this.context);
+    WindowManagerService.getInstance().bindLauncherContext(this.context);   // ★
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -22,7 +22,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, TAG, '[EntryAbility] onNewWant');
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
-    WindowManagerService.getInstance().initUI(this.context);
+    WindowManagerService.getInstance().bindLauncherContext(this.context);   // ★
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -54,5 +54,6 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, TAG, '[EntryAbility] onDestroy');
     // 不主动 shutdown wayland: AppRunnerAbility 可能还在跑
     // wayland server 生命周期已挪到 HBoxAbilityStage
+    WindowManagerService.getInstance().unbindLauncherContext(this.context);  // ★
   }
 }

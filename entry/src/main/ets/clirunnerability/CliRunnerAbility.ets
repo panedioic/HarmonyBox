@@ -33,7 +33,7 @@ export default class CliRunnerAbility extends UIAbility {
 
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
-    WindowManagerService.getInstance().initUI(this.context);
+    WindowManagerService.getInstance().setFallbackContext(this.context);   // ★
 
     // ★ 保证 WMS 里有 instance (幂等; 处理 shortcut/test 场景)
     if (this.instanceId) {
@@ -122,6 +122,7 @@ export default class CliRunnerAbility extends UIAbility {
     hilog.info(0x0000, TAG,
       `[CliRunnerAbility] onDestroy inst=${this.instanceId}`
     );
+    WindowManagerService.getInstance().clearFallbackContext(this.context);  // ★
   }
 
   onForeground(): void {
