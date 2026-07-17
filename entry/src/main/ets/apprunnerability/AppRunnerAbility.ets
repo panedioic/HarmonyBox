@@ -30,34 +30,44 @@ export default class AppRunnerAbility extends UIAbility {
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
     WindowManagerService.getInstance().initUI(this.context);
+
+    // ★ 保证 WMS 里有 instance (幂等; 处理 shortcut/test 场景)
+    if (this.instanceId) {
+      WindowManagerService.getInstance().ensureInstanceFromAbility(
+        this.instanceId, this.appName, this.appId
+      );
+    }
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
     console.info(`[AppRunnerAbility] onWindowStageCreate inst=${this.instanceId}`);
 
+    const storage: LocalStorage = new LocalStorage();
+    storage.setOrCreate<string>('instanceId', this.instanceId);
+    storage.setOrCreate<string>('appName',    this.appName);
+    storage.setOrCreate<string>('appId',      this.appId);
+    storage.setOrCreate<string>('clientId',   this.clientId);
+
     try {
-      await stage.loadContent('pages/AppRunner');
+      await stage.loadContent('pages/AppRunner', storage);
     } catch (e) {
       const err = e as BusinessError;
       console.error(`[AppRunnerAbility] loadContent failed: ${err.code} ${err.message}`);
       return;
     }
 
-    // 通知 WMS 挂载 (Step 2 只是空壳, 实际实现在 Step 4)
     WindowManagerService.getInstance().attachAppRunnerAbility(
       this.instanceId, this.context, stage
     );
 
-    // 主窗口自定义
     try {
       const mainWin: window.Window = stage.getMainWindowSync();
-      mainWin.setWindowBackgroundColor('#FF000000');
       if (this.appName) {
         mainWin.setWindowTitle?.(this.appName);
       }
     } catch (e) {
       const err = e as BusinessError;
-      console.warn(`[AppRunnerAbility] window customize failed: ${err.code} ${err.message}`);
+      console.warn(`[AppRunnerAbility] title set failed: ${err.code} ${err.message}`);
     }
   }
 

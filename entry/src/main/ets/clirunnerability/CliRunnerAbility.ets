@@ -29,13 +29,26 @@ export default class CliRunnerAbility extends UIAbility {
     WaylandService.getInstance().initUI(this.context);
     ProcessManagerService.getInstance().initUI(this.context);
     WindowManagerService.getInstance().initUI(this.context);
+
+    // ★ 保证 WMS 里有 instance (幂等; 处理 shortcut/test 场景)
+    if (this.instanceId) {
+      WindowManagerService.getInstance().ensureInstanceFromAbility(
+        this.instanceId, this.appName, this.appId
+      );
+    }
   }
 
   async onWindowStageCreate(stage: window.WindowStage): Promise<void> {
     console.info(`[CliRunnerAbility] onWindowStageCreate inst=${this.instanceId}`);
 
+    const storage: LocalStorage = new LocalStorage();
+    storage.setOrCreate<string>('instanceId', this.instanceId);
+    storage.setOrCreate<string>('appName',    this.appName);
+    storage.setOrCreate<string>('appId',      this.appId);
+    storage.setOrCreate<number>('cliPid',     this.pid);
+
     try {
-      await stage.loadContent('pages/CliRunner');
+      await stage.loadContent('pages/CliRunner', storage);
     } catch (e) {
       const err = e as BusinessError;
       console.error(`[CliRunnerAbility] loadContent failed: ${err.code} ${err.message}`);
@@ -48,12 +61,11 @@ export default class CliRunnerAbility extends UIAbility {
 
     try {
       const mainWin: window.Window = stage.getMainWindowSync();
-      mainWin.setWindowBackgroundColor('#FF1E1E1E');
       const title: string = this.appName ? `${this.appName} — 日志` : '应用日志';
       mainWin.setWindowTitle?.(title);
     } catch (e) {
       const err = e as BusinessError;
-      console.warn(`[CliRunnerAbility] window customize failed: ${err.code} ${err.message}`);
+      console.warn(`[CliRunnerAbility] title set failed: ${err.code} ${err.message}`);
     }
   }
 

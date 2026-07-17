@@ -1162,4 +1162,14 @@ export class WindowManagerService {
 
     console.info(`HBOX_WM_LOG_SHOWN inst=${instanceId}`);
   }
+
+  /**
+   * 由 Ability.onCreate 调用: 确保 instance 存在.
+   * - 正常 launch 路径: registerPending/bindPid 已经建过, 这里幂等
+   * - shortcut / test 路径: 现场建一个空 instance (clientId 空, 等 wayland 后关联)
+   */
+  ensureInstanceFromAbility(instanceId: string, appName: string, appId: string): void {
+    if (!instanceId) return;
+    this.ensureInstance(instanceId, appName, appId, 0);
+  }
 }

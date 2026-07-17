@@ -1,7 +1,7 @@
 import { ProcessManagerService, ProcessSubscriber } from '../service/ProcessManagerService';
 import { pasteboard } from '@kit.BasicServicesKit';
 
-@Entry
+@Entry({ storage: LocalStorage.getShared() })
 @Component
 struct CliRunner {
   @LocalStorageProp('appName')    appName:      string = '应用';
