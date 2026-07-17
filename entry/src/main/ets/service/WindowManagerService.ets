@@ -1159,6 +1159,7 @@ export class WindowManagerService {
 
     // 装饰栏
     try { win.setWindowDecorVisible(useNative); } catch (e) { /* ignore */ }
+    try { win.setWindowTitleButtonVisible(useNative, useNative, useNative); } catch (e) { /* ignore */ }
     try { win.setWindowBackgroundColor('#FF000000'); } catch (e) { /* ignore */ }
     // 主窗口不支持 setWindowCornerRadius, 通过 AppRunner 页面的 borderRadius 实现视觉圆角
 
