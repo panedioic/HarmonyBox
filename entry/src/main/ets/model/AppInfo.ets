@@ -215,14 +215,29 @@ export const BUILTIN_APPS: BuiltinAppEntry[] = [
   },
   {
     id: 'wine-notepad',
-    name: 'Wine 记事本',
+    name: 'Wine 记事本 (诊断)',
     icon: '📄',
-    desc: 'Wine 内置的记事本 (notepad.exe), 无需安装本体, 由 Wine 直接解析。需要一个已初始化的 Wine 容器。',
+    desc: 'Wine 内置的记事本 (notepad.exe)。不过当前 Wine 容器存在 bug，因此无法启动。',
     containerType: ContainerType.WINE,
     rawfileName: '',  // 不需要 rawfile
     execRelPath: 'notepad',
     execPathType: ExecPathType.BARE,
     runtimeMode: RuntimeMode.GUI,
     config: { envVars: '', args: '' }
-  }
+  },
+  {
+    id: 'wine-cmd-test',
+    name: 'Wine CMD 测试',
+    icon: '🔧',
+    desc: '执行 cmd /c echo, 用于测试非图形界面应用是否能正常运行。启动后应该在日志窗口看到输出并很快退出。',
+    containerType: ContainerType.WINE,
+    rawfileName: '',
+    execRelPath: 'cmd',
+    execPathType: ExecPathType.BARE,
+    runtimeMode: RuntimeMode.CLI,                          // ★ CLI 模式, 直接开日志窗
+    config: {
+      envVars: '',
+      args: '/c echo Hello from Wine cmd && echo box64=%PROCESSOR_ARCHITECTURE%'
+    }
+  },
 ];

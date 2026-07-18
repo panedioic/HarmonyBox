@@ -4,8 +4,8 @@ import { common } from '@kit.AbilityKit';
 import { InstallService } from './InstallService';
 import { LibStore } from './LibStore';
 
-const WINE_DIR_NAME: string = 'wine';
-const PREFIX_DIR_NAME: string = 'wineprefix';
+const WINE_DIR_NAME: string = 'containers/builtin-wine/wine';
+const PREFIX_DIR_NAME: string = 'containers/builtin-wine/wineprefix';
 const BOX64_PATH: string = '/data/service/hnp/bin/box64';
 
 export interface WineStatus {

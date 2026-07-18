@@ -208,6 +208,7 @@ export class ContainerService {
       const wineServerPath: string = `${wineRoot}/bin/wineserver`;
       const winePrefixPath: string = `${info.path}/wineprefix`;
       const base: string[] = [
+        // `BOX64_DYNAREC=0`,
         `BOX64_LD_LIBRARY_PATH=${wineRoot}/lib/x86_64:${wineRoot}/lib/wine/x86_64-unix`,
         `BOX64_LOG=2`,
         `BOX64_NOBANNER=0`,
