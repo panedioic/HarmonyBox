@@ -35,3 +35,5 @@ entry/libs/
 entry/src/main/resources/rawfile/containers/builtin-linux-base.tar
 entry/src/main/resources/rawfile/containers/builtin-wine.tar
 entry/src/main/resources/rawfile/containers/
+entry/src/main/resources/rawfile/apps/weston-terminal.tar.zst
+entry/src/main/resources/rawfile/apps/
