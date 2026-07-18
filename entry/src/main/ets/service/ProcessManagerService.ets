@@ -1,6 +1,6 @@
 import wl from 'libentry.so';
 import { common } from '@kit.AbilityKit';
-import { AppInfo, LaunchMode } from '../model/AppInfo';
+import { AppInfo, LaunchMode, resolveExecPath, ExecPathType } from '../model/AppInfo';
 import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from './ContainerService';
 import { WindowManagerService } from './WindowManagerService';
@@ -157,27 +157,23 @@ export class ProcessManagerService {
 
     // 5. 拼装参数
     const installRoot: string = `${ctx.filesDir}/${app.installDir}`;
-    const userExe: string = `${installRoot}/${app.execPath}`;
+    const userExe: string = resolveExecPath(app, container, ctx.filesDir);
+    const isBare: boolean = app.execPathType === ExecPathType.BARE;
     const userArgs: string[] = (app.config.args || '').split(/\s+/).filter((s: string): boolean => s.length > 0);
     const userEnvs: string[] = this.parseAppEnv(app.config.envVars, ctx, installRoot);
     const containerEnv: string[] = [...(container.config.envVars || [])];
 
-    // ★ 先生成 instanceId, 好注入到子进程 env, 供 wayland 侧精确匹配
+    // 6. 生成或复用 instanceId
     let instanceId: string;
     if (opts.reuseInstanceId) {
       instanceId = opts.reuseInstanceId;
-      // 不 registerPending: Ability 已 attach, WMS 走"已挂载"分支
     } else {
       instanceId = `inst-${++this.instanceSeq}`;
-      WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
     }
+    WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
     const identityEnv: string[] = [`HBOX_INSTANCE_ID=${instanceId}`];
 
-    let exeAbs: string;
-    let launchArgs: string[];
-    let launchEnvs: string[];
-
-    // 暂时把通用env写死在这里，之后改到容器配置及内
+    // 7. 通用环境变量 (未来搬到容器配置)
     const filesDir: string = ctx.filesDir;
     const ldPaths: string[] = [installRoot, `${installRoot}/lib`];
     const commonEnv: string[] = [
@@ -190,9 +186,15 @@ export class ProcessManagerService {
       `BOX64_LD_LIBRARY_PATH=${ldPaths.join(':')}`,
     ];
 
-    // 暂时根据容器类型判断，未来通过脚本启动
+    // 8. 组装启动命令
+    // BARE 场景: 路径原样传给 wine (或 PATH), 让下层去找
+    // 非 BARE: 使用 resolveExecPath 得到的绝对路径
+    let exeAbs: string;
+    let launchArgs: string[];
+    let launchEnvs: string[];
+
     if (container.config.type === ContainerType.WINE) {
-      const wineBinPath: string = `${container.path}/wine/bin/wine`;
+      const wineBinPath: string    = `${container.path}/wine/bin/wine`;
       const wineServerPath: string = `${container.path}/wine/bin/wineserver`;
       const winePrefixPath: string = `${container.path}/wineprefix`;
       const wineEnv: string[] = [
@@ -202,37 +204,38 @@ export class ProcessManagerService {
         `WINEDEBUG=-all`,
         `BOX64_NOBANNER=1`,
       ];
-      // 最终启动参数
-      exeAbs = userExe;
+      exeAbs = isBare ? wineBinPath : userExe;   // spawn 需要一个有效的绝对路径做 execveat
       launchArgs = ['box64', wineBinPath, userExe, ...userArgs];
       launchEnvs = [...containerEnv, ...wineEnv, ...userEnvs, ...identityEnv];
+
     } else if (container.config.type === ContainerType.LINUX) {
-      // 最终启动参数
-      exeAbs = userExe;
+      exeAbs = isBare ? 'box64' : userExe;       // BARE 时无有效路径, 让 runCommand 走 PATH
       launchArgs = ['box64', userExe, ...userArgs];
       launchEnvs = [...commonEnv, ...containerEnv, ...userEnvs, ...identityEnv];
+
     } else {
       this.toast(`暂不支持容器类型 ${container.config.type}`, 2000);
       return { ok: false, instanceId: '', errorMsg: '不支持的容器类型' };
     }
 
-    // 8. 生成 instanceId, 预登记
-    WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
+    // (原第 8 步的重复 registerPending 已删除)
 
-    // ★ GUI-first: spawn 前先拉起 AppRunnerAbility 展 loading
-    // (reuse 时跳过)
+    // 9. GUI-first: spawn 前先拉起 AppRunnerAbility 展 loading
+    hilog.info(0x0000, TAG,
+      `[PMS] launch inst=${instanceId} mode=${opts.launchMode} `
+        + `reuse=${opts.reuseInstanceId ?? '(none)'}`);
     if (opts.launchMode === LaunchMode.GUI && !opts.reuseInstanceId) {
       try {
+        hilog.info(0x0000, TAG, `[PMS] prepareGuiHost invoked inst=${instanceId}`);
         await WindowManagerService.getInstance().prepareGuiHost(instanceId, app.name, app.id);
       } catch (e) {
         hilog.warn(0x0000, TAG, `[PMS] prepareGuiHost failed: ${(e as Error).message}`);
-        // 不阻断: Ability 拉起失败也继续 spawn, 让日志能保留
       }
     }
 
     this.toast(`正在启动 ${app.name}...`, 1200);
 
-    // 9. spawn
+    // 10. spawn (保留原有逻辑)
     let pid: number = -1;
     try {
       const cb = (event: string, data: string): void => {
@@ -243,14 +246,12 @@ export class ProcessManagerService {
       pid = -1;
     }
     if (pid <= 0) {
-      if (!opts.reuseInstanceId) {
-        WindowManagerService.getInstance().cancelPending(instanceId);
-        // ★ 清理已拉起的 loading 窗
-        if (opts.launchMode === LaunchMode.GUI) {
-          WindowManagerService.getInstance().destroyInstance(instanceId);
-        }
+      WindowManagerService.getInstance().cancelPending(instanceId);
+      if (!opts.reuseInstanceId && opts.launchMode === LaunchMode.GUI) {
+        // 只有非 reuse 场景才主动 destroy (loading 窗口是 launchApp 拉起的);
+        // reuse 场景下 loading 窗口归调用方 (shortcut Ability) 管
+        WindowManagerService.getInstance().destroyInstance(instanceId);
       }
-      // reuse 场景下, 调用方 (shortcut Ability) 自己负责清理
       this.toast(`${app.name} 启动失败: (fork/exec)`, 2500);
       return { ok: false, instanceId: '', errorMsg: '启动失败: (fork/exec)' };
     }

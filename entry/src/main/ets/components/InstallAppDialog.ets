@@ -1,7 +1,10 @@
 import { common } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { Theme } from '../common/Theme';
-import { AppInfo, RuntimeMode, AppConfig, BuiltinAppEntry, BUILTIN_APPS } from '../model/AppInfo';
+import {
+  AppInfo, RuntimeMode, AppConfig, BuiltinAppEntry, BUILTIN_APPS,
+  ExecPathType, execPathTypeLabel, execPathTypeHint
+} from '../model/AppInfo';
 import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from '../service/ContainerService';
 import { PackageService, PackageResult } from '../service/PackageService';
@@ -56,6 +59,7 @@ export struct InstallAppDialog {
   @State envVars: string = '';
   @State launchArgs: string = '';
   @State runtimeMode: RuntimeMode = RuntimeMode.GUI;
+  @State execPathType: ExecPathType = ExecPathType.APP_RELATIVE;
 
   // 状态
   @State installing: boolean = false;
@@ -71,6 +75,13 @@ export struct InstallAppDialog {
   @State useAppJson: boolean = false;
 
   private allModes: RuntimeMode[] = [RuntimeMode.GUI, RuntimeMode.CLI];
+
+  private allPathTypes: ExecPathType[] = [
+    ExecPathType.APP_RELATIVE,
+    ExecPathType.CONTAINER_RELATIVE,
+    ExecPathType.ABSOLUTE,
+    ExecPathType.BARE
+  ];
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.Context;
@@ -186,6 +197,7 @@ export struct InstallAppDialog {
       let finalName: string = this.appName;
       let finalIcon: string = this.appIcon;
       let finalExec: string = this.execRelPath;
+      let finalExecType: ExecPathType = this.execPathType;    // ★
       let finalMode: RuntimeMode = this.runtimeMode;
       let finalConfig: AppConfig = { envVars: this.envVars, args: this.launchArgs };
 
@@ -199,6 +211,7 @@ export struct InstallAppDialog {
         finalName = entry.name;
         finalIcon = entry.icon;
         finalExec = entry.execRelPath;
+        finalExecType = entry.execPathType;
         finalMode = entry.runtimeMode;
         finalConfig = entry.config;
         r = await PackageService.importFromRawfile(ctx, entry.rawfileName, installAbsDir);
@@ -220,9 +233,10 @@ export struct InstallAppDialog {
         appId,
         finalName.trim(),
         finalIcon || '📦',
-        'deprecated' as never,   // AppType (deprecated, 不再使用)
+        'deprecated' as never,
         finalMode,
         finalExec.trim(),
+        finalExecType,                    // ★
         installRelDir,
         Date.now(),
         finalConfig,
@@ -490,16 +504,19 @@ export struct InstallAppDialog {
       this.AppJsonToggle()
 
       if (!this.useAppJson) {
-        Text('主可执行文件 (相对路径)')
+        Text('主可执行文件')
           .fontSize(12).fontColor(Theme.TEXT_SEC)
           .fontWeight(FontWeight.Medium)
           .margin({ top: 12, bottom: 6 })
-        TextInput({ placeholder: 'bin/app 或 main.exe', text: this.execRelPath })
+        TextInput({ placeholder: 'bin/app / notepad / /system/bin/sh', text: this.execRelPath })
           .height(36).fontSize(13).width('100%')
           .onChange((v: string): void => { this.execRelPath = v; })
-        Text('解压后相对于应用根目录的路径')
-          .fontSize(11).fontColor(Theme.TEXT_HINT)
-          .margin({ top: 4 })
+
+        Text('路径类型').fontSize(12).fontColor(Theme.TEXT_SEC)
+          .fontWeight(FontWeight.Medium).margin({ top: 10, bottom: 6 })
+        this.ExecPathTypeChips()
+        Text(execPathTypeHint(this.execPathType))
+          .fontSize(11).fontColor(Theme.TEXT_HINT).margin({ top: 2 })
 
         Divider().color(Theme.BORDER_LIGHT).margin({ top: 14, bottom: 10 })
         this.EditableForm()
@@ -539,12 +556,12 @@ export struct InstallAppDialog {
       this.AppJsonToggle()
 
       if (!this.useAppJson) {
-        Text('主可执行文件 (相对路径)')
+        Text('主可执行文件')
           .fontSize(12).fontColor(Theme.TEXT_SEC)
           .fontWeight(FontWeight.Medium)
           .margin({ top: 12, bottom: 6 })
         Row({ space: 8 }) {
-          TextInput({ placeholder: 'bin/app 或 main.exe', text: this.execRelPath })
+          TextInput({ placeholder: 'bin/app / notepad / /system/bin/sh', text: this.execRelPath })
             .layoutWeight(1).height(36).fontSize(13)
             .onChange((v: string): void => { this.execRelPath = v; })
           Button('浏览...').fontSize(12).height(36)
@@ -552,6 +569,12 @@ export struct InstallAppDialog {
             .onClick((): void => { this.chooseExecFile(); })
         }
         .width('100%')
+
+        Text('路径类型').fontSize(12).fontColor(Theme.TEXT_SEC)
+          .fontWeight(FontWeight.Medium).margin({ top: 10, bottom: 6 })
+        this.ExecPathTypeChips()
+        Text(execPathTypeHint(this.execPathType))
+          .fontSize(11).fontColor(Theme.TEXT_HINT).margin({ top: 2 })
 
         Divider().color(Theme.BORDER_LIGHT).margin({ top: 14, bottom: 10 })
         this.EditableForm()
@@ -617,6 +640,23 @@ export struct InstallAppDialog {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  ExecPathTypeChips() {
+    Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap }) {
+      ForEach(this.allPathTypes, (t: ExecPathType): void => {
+        Text(execPathTypeLabel(t))
+          .fontSize(11)
+          .fontColor(this.execPathType === t ? Color.White : Theme.TEXT_MAIN)
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor(this.execPathType === t ? Theme.HM_BLUE : '#F0F0F0')
+          .borderRadius(6)
+          .margin({ right: 6, bottom: 6 })
+          .onClick((): void => { this.execPathType = t; })
+      }, (t: ExecPathType): string => t)
+    }
+    .width('100%')
   }
 
   // ==============================================================

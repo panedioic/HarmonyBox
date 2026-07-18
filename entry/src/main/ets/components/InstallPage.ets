@@ -80,55 +80,11 @@ export struct InstallPage {
     this.statusText = '';
   }
 
+  /** @deprecated InstallPage 不再使用 */
   async startInstall(): Promise<void> {
-    const container: ContainerInfo | null = this.getSelectedContainer();
-    if (!container) {
-      this.statusText = '请先选择运行容器';
-      return;
-    }
-    if (!this.sourceFolderUri) { this.statusText = '请先选择应用文件夹'; return; }
-    if (!this.execRelPath.trim()) { this.statusText = '请填写主可执行文件路径'; return; }
-    if (!this.appName.trim()) { this.statusText = '请填写应用名称'; return; }
-
-    this.installing = true;
-    this.progress = 10;
-    this.statusText = '正在创建沙箱目录...';
-
-    try {
-      const context = getContext(this) as common.Context;
-      const appId: string = `app_${Date.now()}`;
-
-      this.progress = 30;
-      this.statusText = '正在复制文件到沙箱...';
-
-      const installDir: string = InstallService.installFromUri(
-        context, this.sourceFolderUri, appId
-      );
-
-      this.progress = 80;
-      this.statusText = '正在写入注册表...';
-
-      const config: AppConfig = { envVars: this.envVars, args: this.launchArgs };
-
-      const app: AppInfo = new AppInfo(
-        appId, this.appName.trim(), this.appIcon || '📦',
-        this.deriveAppType(container),
-        this.runtimeMode,
-        this.execRelPath.trim(), installDir,
-        Date.now(), config, container.id
-      );
-
-      this.progress = 100;
-      this.statusText = '安装完成';
-      setTimeout((): void => {
-        this.onInstalled(app);
-        this.resetForm();
-      }, 600);
-    } catch (e) {
-      const msg: string = (e as Error).message || '未知错误';
-      this.statusText = `安装失败: ${msg}`;
-      this.installing = false;
-    }
+    const msg: string = '安装方法已废弃';
+    this.statusText = `安装失败: ${msg}`;
+    this.installing = false;
   }
 
   resetForm(): void {

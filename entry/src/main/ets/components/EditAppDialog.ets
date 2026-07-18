@@ -1,6 +1,9 @@
 import { common } from '@kit.AbilityKit';
 import { Theme } from '../common/Theme';
-import { AppInfo, AppConfig, RuntimeMode } from '../model/AppInfo';
+import {
+  AppInfo, AppConfig, RuntimeMode, ExecPathType,
+  execPathTypeLabel, execPathTypeHint
+} from '../model/AppInfo';
 import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from '../service/ContainerService';
 
@@ -13,6 +16,7 @@ export struct EditAppDialog {
   @State editName: string = '';
   @State editIcon: string = '📦';
   @State editExec: string = '';
+  @State editExecPathType: ExecPathType = ExecPathType.APP_RELATIVE;
   @State editMode: RuntimeMode = RuntimeMode.GUI;
   @State editArgs: string = '';
   @State editEnvVars: string = '';
@@ -21,18 +25,23 @@ export struct EditAppDialog {
   @State containers: ContainerInfo[] = [];
 
   private allModes: RuntimeMode[] = [RuntimeMode.GUI, RuntimeMode.CLI];
+  private allPathTypes: ExecPathType[] = [
+    ExecPathType.APP_RELATIVE,
+    ExecPathType.CONTAINER_RELATIVE,
+    ExecPathType.ABSOLUTE,
+    ExecPathType.BARE
+  ];
 
   aboutToAppear(): void {
-    // 载入现有值
-    this.editName        = this.app.name;
-    this.editIcon        = this.app.icon || '📦';
-    this.editExec        = this.app.execPath;
-    this.editMode        = this.app.runtimeMode;
-    this.editEnvVars     = this.app.config.envVars || '';
-    this.editArgs        = this.app.config.args || '';
-    this.editContainerId = this.app.containerId || '';
+    this.editName         = this.app.name;
+    this.editIcon         = this.app.icon || '📦';
+    this.editExec         = this.app.execPath;
+    this.editExecPathType = this.app.execPathType || ExecPathType.APP_RELATIVE;
+    this.editMode         = this.app.runtimeMode;
+    this.editEnvVars      = this.app.config.envVars || '';
+    this.editArgs         = this.app.config.args || '';
+    this.editContainerId  = this.app.containerId || '';
 
-    // 载入可选容器
     const ctx = getContext(this) as common.Context;
     this.containers = ContainerService.list(ctx);
   }
@@ -49,6 +58,7 @@ export struct EditAppDialog {
       this.app.type,
       this.editMode,
       this.editExec.trim() || this.app.execPath,
+      this.editExecPathType,
       this.app.installDir,
       this.app.installedAt,
       cfg,
@@ -105,6 +115,23 @@ export struct EditAppDialog {
           .onClick((): void => { this.editMode = m; })
       }, (m: RuntimeMode): string => m)
     }
+  }
+
+  @Builder
+  ExecPathTypeChips() {
+    Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap }) {
+      ForEach(this.allPathTypes, (t: ExecPathType): void => {
+        Text(execPathTypeLabel(t))
+          .fontSize(11)
+          .fontColor(this.editExecPathType === t ? Color.White : Theme.TEXT_MAIN)
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor(this.editExecPathType === t ? Theme.HM_BLUE : '#F0F0F0')
+          .borderRadius(6)
+          .margin({ right: 6, bottom: 6 })
+          .onClick((): void => { this.editExecPathType = t; })
+      }, (t: ExecPathType): string => t)
+    }
+    .width('100%')
   }
 
   @Builder
@@ -181,12 +208,15 @@ export struct EditAppDialog {
           Divider().color(Theme.BORDER_LIGHT).margin({ top: 16 })
 
           // 运行配置
-          this.Label('主可执行文件 (相对路径)')
-          TextInput({ placeholder: 'bin/app 或 main.exe', text: this.editExec })
+          this.Label('主可执行文件')
+          TextInput({ placeholder: 'bin/app / notepad / /system/bin/sh', text: this.editExec })
             .height(36).fontSize(13).width('100%')
             .onChange((v: string): void => { this.editExec = v; })
-          Text('相对于应用根目录的路径')
-            .fontSize(11).fontColor(Theme.TEXT_HINT).margin({ top: 4 })
+
+          this.Label('路径类型')
+          this.ExecPathTypeChips()
+          Text(execPathTypeHint(this.editExecPathType))
+            .fontSize(11).fontColor(Theme.TEXT_HINT).margin({ top: 2 })
 
           this.Label('启动参数')
           TextInput({ placeholder: '--debug --port=8080', text: this.editArgs })
@@ -248,7 +278,7 @@ export struct EditAppDialog {
       .backgroundColor('#FAFBFC')
       .border({ width: { top: 1 }, color: Theme.BORDER_LIGHT })
     }
-    .width(640).height(560)
+    .width(640).height(600)
     .backgroundColor(Theme.HM_CARD)
     .borderRadius(Theme.RADIUS_LG)
     .clip(true)
