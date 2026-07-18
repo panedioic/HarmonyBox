@@ -202,18 +202,6 @@ export const BUILTIN_APPS: BuiltinAppEntry[] = [
     config: { envVars: 'LD_PRELOAD=libforkpty_shim.so', args: '' }
   },
   {
-    id: 'hello-wine',
-    name: 'Hello Wine',
-    icon: '🍷',
-    desc: '一个简单的 Win32 Hello World 程序。',
-    containerType: ContainerType.WINE,
-    rawfileName: 'apps/hello-wine.tar.zst',
-    execRelPath: 'hello.exe',
-    execPathType: ExecPathType.APP_RELATIVE,
-    runtimeMode: RuntimeMode.CLI,
-    config: { envVars: '', args: '' }
-  },
-  {
     id: 'wine-notepad',
     name: 'Wine 记事本 (诊断)',
     icon: '📄',
