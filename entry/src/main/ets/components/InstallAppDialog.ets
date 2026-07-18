@@ -9,6 +9,7 @@ import { ContainerInfo, ContainerType } from '../model/ContainerInfo';
 import { ContainerService } from '../service/ContainerService';
 import { PackageService, PackageResult } from '../service/PackageService';
 import { InstallService } from '../service/InstallService';
+import { fileIo as fs } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'HBox_UI_InstallApp';
@@ -214,8 +215,18 @@ export struct InstallAppDialog {
         finalExecType = entry.execPathType;
         finalMode = entry.runtimeMode;
         finalConfig = entry.config;
-        r = await PackageService.importFromRawfile(ctx, entry.rawfileName, installAbsDir);
-
+        if (entry.rawfileName && entry.rawfileName.length > 0) {
+          // 有 rawfile: 解压安装
+          r = await PackageService.importFromRawfile(ctx, entry.rawfileName, installAbsDir);
+        } else {
+          // 无 rawfile (BARE 应用如 wine-notepad): 只创建空目录
+          try {
+            if (!fs.accessSync(installAbsDir)) fs.mkdirSync(installAbsDir, true);
+            r = { ok: true, error: '' };
+          } catch (e) {
+            r = { ok: false, error: `创建目录失败: ${(e as Error).message}` };
+          }
+        }
       } else if (this.currentSource === 'tar') {
         r = await PackageService.importFromTar(ctx, this.archiveUri, installAbsDir);
 

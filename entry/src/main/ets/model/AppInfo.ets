@@ -217,7 +217,7 @@ export const BUILTIN_APPS: BuiltinAppEntry[] = [
     id: 'wine-notepad',
     name: 'Wine 记事本',
     icon: '📄',
-    desc: '调用 Wine 内置 notepad',
+    desc: 'Wine 内置的记事本 (notepad.exe), 无需安装本体, 由 Wine 直接解析。需要一个已初始化的 Wine 容器。',
     containerType: ContainerType.WINE,
     rawfileName: '',  // 不需要 rawfile
     execRelPath: 'notepad',

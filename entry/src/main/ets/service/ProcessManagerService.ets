@@ -192,6 +192,7 @@ export class ProcessManagerService {
     let exeAbs: string;
     let launchArgs: string[];
     let launchEnvs: string[];
+    let launchCwd: string;
 
     if (container.config.type === ContainerType.WINE) {
       const wineBinPath: string    = `${container.path}/wine/bin/wine`;
@@ -207,11 +208,13 @@ export class ProcessManagerService {
       exeAbs = isBare ? wineBinPath : userExe;   // spawn 需要一个有效的绝对路径做 execveat
       launchArgs = ['box64', wineBinPath, userExe, ...userArgs];
       launchEnvs = [...containerEnv, ...wineEnv, ...userEnvs, ...identityEnv];
+      launchCwd = isBare ? `${container.path}/wineprefix` : installRoot;
 
     } else if (container.config.type === ContainerType.LINUX) {
       exeAbs = isBare ? 'box64' : userExe;       // BARE 时无有效路径, 让 runCommand 走 PATH
       launchArgs = ['box64', userExe, ...userArgs];
       launchEnvs = [...commonEnv, ...containerEnv, ...userEnvs, ...identityEnv];
+      launchCwd = isBare ? container.path : installRoot;
 
     } else {
       this.toast(`暂不支持容器类型 ${container.config.type}`, 2000);
@@ -241,7 +244,7 @@ export class ProcessManagerService {
       const cb = (event: string, data: string): void => {
         this.handleStreamEvent(pid, event, data);
       };
-      pid = wl.runCommand(exeAbs, launchArgs, launchEnvs, installRoot, cb, 'box64');
+      pid = wl.runCommand(exeAbs, launchArgs, launchEnvs, launchCwd, cb, 'box64');
     } catch (e) {
       pid = -1;
     }
