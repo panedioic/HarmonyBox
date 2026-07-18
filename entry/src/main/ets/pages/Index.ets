@@ -18,6 +18,7 @@ import { ContainerManagerPage } from '../pages/ContainerManagerPage';
 import { PackageService, PackageResult } from '../service/PackageService';
 import { picker } from '@kit.CoreFileKit';
 import { ProcessManagerService, LaunchResult } from '../service/ProcessManagerService';
+import { ShortcutService, ShortcutResult } from '../service/ShortcutService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'HBox_UI_Page_Index';
@@ -125,6 +126,18 @@ struct Index {
     this.toast('更新应用功能尚未实现', 1500);
   }
 
+  createShortcut = (app: AppInfo): void => {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    ShortcutService.getInstance().createShortcutForApp(ctx, app)
+      .then((r: ShortcutResult): void => {
+        if (r.ok) {
+          this.toast('请在系统弹窗中确认添加');
+        } else {
+          this.toast('添加失败: ' + r.error, 2500);
+        }
+      });
+  }
+
   private toast(msg: string, dur: number = 1500): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: msg, duration: dur });
@@ -146,6 +159,7 @@ struct Index {
         onEdit: this.editApp,
         onExport: this.exportApp,
         onUpdate: this.updateApp,
+        onCreateShortcut: this.createShortcut,
         onInstalled: this.addApp
       })
     } else if (this.currentPage === PageType.INSTALL) {

@@ -15,6 +15,8 @@ const TAG = 'HBox_UI_Svc_ProcessManager';
 
 export interface LaunchOptions {
   launchMode: LaunchMode;
+  /** shortcut Ability 场景: Ability 已经存在, 复用 instanceId, 跳过 prepareGuiHost / createLogWindow */
+  reuseInstanceId?: string;
 }
 
 export interface LaunchResult {
@@ -74,6 +76,11 @@ export class ProcessManagerService {
 
   // toast 回调
   private toastFn: ((msg: string, dur: number) => void) | null = null;
+
+  /** shortcut Ability 用: 预分配 instanceId, 之后 attach 自己 + 传 reuseInstanceId 调 launchApp */
+  allocateInstanceId(): string {
+    return `inst-${++this.instanceSeq}`;
+  }
 
   // =========================================================
   // lifecycle
@@ -156,7 +163,14 @@ export class ProcessManagerService {
     const containerEnv: string[] = [...(container.config.envVars || [])];
 
     // ★ 先生成 instanceId, 好注入到子进程 env, 供 wayland 侧精确匹配
-    const instanceId: string = `inst-${++this.instanceSeq}`;
+    let instanceId: string;
+    if (opts.reuseInstanceId) {
+      instanceId = opts.reuseInstanceId;
+      // 不 registerPending: Ability 已 attach, WMS 走"已挂载"分支
+    } else {
+      instanceId = `inst-${++this.instanceSeq}`;
+      WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
+    }
     const identityEnv: string[] = [`HBOX_INSTANCE_ID=${instanceId}`];
 
     let exeAbs: string;
@@ -206,7 +220,8 @@ export class ProcessManagerService {
     WindowManagerService.getInstance().registerPending(instanceId, app.name, app.id);
 
     // ★ GUI-first: spawn 前先拉起 AppRunnerAbility 展 loading
-    if (opts.launchMode === LaunchMode.GUI) {
+    // (reuse 时跳过)
+    if (opts.launchMode === LaunchMode.GUI && !opts.reuseInstanceId) {
       try {
         await WindowManagerService.getInstance().prepareGuiHost(instanceId, app.name, app.id);
       } catch (e) {
@@ -228,11 +243,14 @@ export class ProcessManagerService {
       pid = -1;
     }
     if (pid <= 0) {
-      WindowManagerService.getInstance().cancelPending(instanceId);
-      // ★ 清理已拉起的 loading 窗
-      if (opts.launchMode === LaunchMode.GUI) {
-        WindowManagerService.getInstance().destroyInstance(instanceId);
+      if (!opts.reuseInstanceId) {
+        WindowManagerService.getInstance().cancelPending(instanceId);
+        // ★ 清理已拉起的 loading 窗
+        if (opts.launchMode === LaunchMode.GUI) {
+          WindowManagerService.getInstance().destroyInstance(instanceId);
+        }
       }
+      // reuse 场景下, 调用方 (shortcut Ability) 自己负责清理
       this.toast(`${app.name} 启动失败: (fork/exec)`, 2500);
       return { ok: false, instanceId: '', errorMsg: '启动失败: (fork/exec)' };
     }
@@ -255,7 +273,8 @@ export class ProcessManagerService {
     });
 
     // 13. CLI-first 立即开日志窗 (GUI-first 由 wayland 触发 startAbility)
-    if (opts.launchMode === LaunchMode.CLI) {
+    // (reuse 时跳过)
+    if (opts.launchMode === LaunchMode.CLI && !opts.reuseInstanceId) {
       await WindowManagerService.getInstance().createLogWindow(instanceId, app.name, pid);
     }
 

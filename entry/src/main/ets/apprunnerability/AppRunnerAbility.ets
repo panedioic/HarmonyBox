@@ -65,33 +65,45 @@ export default class AppRunnerAbility extends UIAbility {
       return;
     }
 
-    // ★ shortcut 场景: 有 shortcutAppId 但无 instanceId, 现场 launch
+    // ★ shortcut 场景: 自己作为 host, 先 attach 再 launch
     if (this.shortcutAppId && !this.instanceId) {
-      const r = await ProcessManagerService.getInstance()
-        .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.GUI });
-      if (!r.ok) {
-        hilog.error(0x0000, TAG,
-          `[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`
-        );
+      const app = AppRegistry.getById(this.context, this.shortcutAppId);
+      if (!app) {
+        hilog.error(0x0000, TAG, `[AppRunnerAbility] shortcut app not found: ${this.shortcutAppId}`);
         this.context.terminateSelf().catch((): void => { /* ignore */ });
         return;
       }
-      this.instanceId = r.instanceId;
-      // 更新 storage 里的 instanceId, 让页面拿到最新值
-      storage.setOrCreate<string>('instanceId', this.instanceId);
-
-      // 从 registry 取 appName / appId 补齐 storage
-      const uiCtx = this.context;
-      const app = AppRegistry.getById(uiCtx, this.shortcutAppId);
-      if (app) {
-        this.appName = app.name;
-        this.appId = app.id;
-        storage.setOrCreate<string>('appName', app.name);
-        storage.setOrCreate<string>('appId',   app.id);
+      // 1) 预分配 instanceId + 更新 storage 让页面看到
+      const preAllocId: string = ProcessManagerService.getInstance().allocateInstanceId();
+      this.instanceId = preAllocId;
+      this.appName    = app.name;
+      this.appId      = app.id;
+      storage.setOrCreate<string>('instanceId', preAllocId);
+      storage.setOrCreate<string>('appName',    app.name);
+      storage.setOrCreate<string>('appId',      app.id);
+      // 2) 先 ensureInstance + attach 自己 (成为 host)
+      WindowManagerService.getInstance().ensureInstanceFromAbility(preAllocId, app.name, app.id);
+      WindowManagerService.getInstance().attachAppRunnerAbility(
+        preAllocId, this.context, stage, storage
+      );
+      // 3) launch (reuse 让 launchApp 跳过 prepareGuiHost, 不再拉起另一个 Ability)
+      const r = await ProcessManagerService.getInstance().launchAppById(
+        this.shortcutAppId,
+        { launchMode: LaunchMode.GUI, reuseInstanceId: preAllocId }
+      );
+      if (!r.ok) {
+        hilog.error(0x0000, TAG, `[AppRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        WindowManagerService.getInstance().destroyInstance(preAllocId);
+        return;
       }
+      try {
+        const mainWin: window.Window = stage.getMainWindowSync();
+        mainWin.setWindowTitle?.(app.name);
+      } catch (e) { /* ignore */ }
+      return;   // ★ shortcut 分支到此结束, 不走后面常规路径
     }
 
-    // ★ 保证 WMS 里有 instance
+    // ─── 常规路径 (launcher 起 Ability, 参数带 instanceId) ───
     if (this.instanceId) {
       WindowManagerService.getInstance().ensureInstanceFromAbility(
         this.instanceId, this.appName, this.appId

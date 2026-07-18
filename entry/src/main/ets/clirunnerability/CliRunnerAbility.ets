@@ -64,31 +64,45 @@ export default class CliRunnerAbility extends UIAbility {
       return;
     }
 
-    // ★ shortcut 场景: 现场 launch (showLog=false 避免死循环拉起自己)
+    // ★ shortcut 场景
     if (this.shortcutAppId && !this.instanceId) {
-      const r = await ProcessManagerService.getInstance()
-        .launchAppById(this.shortcutAppId, { launchMode: LaunchMode.CLI });
-      if (!r.ok) {
-        hilog.error(0x0000, TAG,
-          `[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`
-        );
+      const app = AppRegistry.getById(this.context, this.shortcutAppId);
+      if (!app) {
+        hilog.error(0x0000, TAG, `[CliRunnerAbility] shortcut app not found: ${this.shortcutAppId}`);
         this.context.terminateSelf().catch((): void => { /* ignore */ });
         return;
       }
-      this.instanceId = r.instanceId;
-      this.pid = ProcessManagerService.getInstance().getPidByInstance(this.instanceId);
-      storage.setOrCreate<string>('instanceId', this.instanceId);
-      storage.setOrCreate<number>('cliPid',     this.pid);
-
-      const app = AppRegistry.getById(this.context, this.shortcutAppId);
-      if (app) {
-        this.appName = app.name;
-        this.appId = app.id;
-        storage.setOrCreate<string>('appName', app.name);
-        storage.setOrCreate<string>('appId',   app.id);
+      const preAllocId: string = ProcessManagerService.getInstance().allocateInstanceId();
+      this.instanceId = preAllocId;
+      this.appName    = app.name;
+      this.appId      = app.id;
+      storage.setOrCreate<string>('instanceId', preAllocId);
+      storage.setOrCreate<string>('appName',    app.name);
+      storage.setOrCreate<string>('appId',      app.id);
+      WindowManagerService.getInstance().ensureInstanceFromAbility(preAllocId, app.name, app.id);
+      WindowManagerService.getInstance().attachCliRunnerAbility(
+        preAllocId, this.context, stage, storage
+      );
+      const r = await ProcessManagerService.getInstance().launchAppById(
+        this.shortcutAppId,
+        { launchMode: LaunchMode.CLI, reuseInstanceId: preAllocId }
+      );
+      if (!r.ok) {
+        hilog.error(0x0000, TAG, `[CliRunnerAbility] shortcut launch failed: ${r.errorMsg}`);
+        WindowManagerService.getInstance().destroyInstance(preAllocId);
+        return;
       }
+      // pid 现在有值, 更新 storage
+      this.pid = ProcessManagerService.getInstance().getPidByInstance(preAllocId);
+      storage.setOrCreate<number>('cliPid', this.pid);
+      try {
+        const mainWin: window.Window = stage.getMainWindowSync();
+        mainWin.setWindowTitle?.(`${app.name} — 日志`);
+      } catch (e) { /* ignore */ }
+      return;
     }
 
+    // ─── 常规路径 ───
     if (this.instanceId) {
       WindowManagerService.getInstance().ensureInstanceFromAbility(
         this.instanceId, this.appName, this.appId

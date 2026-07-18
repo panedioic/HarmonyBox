@@ -17,6 +17,7 @@ export struct LibraryPage {
   onEdit: (app: AppInfo) => void = () => {};
   onExport: (app: AppInfo) => void = () => {};
   onUpdate: (app: AppInfo) => void = () => {};
+  onCreateShortcut: (app: AppInfo) => void = () => {};
   onInstalled: (app: AppInfo) => void = () => {};
   private installDialog: CustomDialogController = new CustomDialogController({
     builder: InstallAppDialog({
@@ -92,7 +93,8 @@ export struct LibraryPage {
                 onDelete: this.onDelete,
                 onEdit: this.onEdit,
                 onExport: this.onExport,
-                onUpdate: this.onUpdate
+                onUpdate: this.onUpdate,
+                onCreateShortcut:  this.onCreateShortcut
               })
             }, (app: AppInfo, index: number): string =>
             app.id || `${app.name}_${index}`)
@@ -118,6 +120,7 @@ struct AppCard {
   onEdit: (app: AppInfo) => void = () => {};
   onExport: (app: AppInfo) => void = () => {};
   onUpdate: (app: AppInfo) => void = () => {};
+  onCreateShortcut: (app: AppInfo) => void = () => {};
   @State isHovered: boolean = false;
   @Prop isRunning: boolean = false;
 
@@ -142,6 +145,9 @@ struct AppCard {
 
       MenuItem({ content: '启动并显示日志' })
         .onClick((): void => { this.onLaunchWithLog(this.app); })
+
+      MenuItem({ content: '添加到桌面' })
+        .onClick((): void => { this.onCreateShortcut(this.app); })
 
       MenuItem({ content: '编辑信息' })
         .onClick((): void => { this.editDialog.open(); })
