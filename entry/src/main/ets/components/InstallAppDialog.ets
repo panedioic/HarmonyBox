@@ -10,6 +10,7 @@ import { ContainerService } from '../service/ContainerService';
 import { PackageService, PackageResult } from '../service/PackageService';
 import { InstallService } from '../service/InstallService';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { AppRegistry } from '../model/AppRegistry';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'HBox_UI_InstallApp';
@@ -112,12 +113,21 @@ export struct InstallAppDialog {
   private canInstall(): boolean {
     if (this.installing) return false;
     if (!this.selectedContainerId) return false;
+
     if (this.currentSource === 'builtin') return !!this.selectedBuiltinId;
-    if (this.currentSource === 'tar') return !!this.archiveUri && !!this.appName.trim();
-    if (this.currentSource === 'folder') {
-      return !!this.folderUri && !!this.execRelPath.trim() && !!this.appName.trim();
+
+    if (this.currentSource === 'tar') {
+      if (!this.archiveUri) return false;
+      // useAppJson 时不需要用户填 appName / execPath
+      return this.useAppJson || !!this.appName.trim();
     }
-    if (this.useAppJson) return false;   // 功能未实现
+
+    if (this.currentSource === 'folder') {
+      if (!this.folderUri) return false;
+      return this.useAppJson
+        || (!!this.execRelPath.trim() && !!this.appName.trim());
+    }
+
     return false;
   }
 
@@ -181,6 +191,12 @@ export struct InstallAppDialog {
     this.statusText = '';
   }
 
+  private rmDirSafe(dir: string): void {
+    try {
+      if (fs.accessSync(dir)) fs.rmdirSync(dir);
+    } catch (_e) { /* ignore */ }
+  }
+
   // ==============================================================
   //  安装
   // ==============================================================
@@ -198,7 +214,7 @@ export struct InstallAppDialog {
       let finalName: string = this.appName;
       let finalIcon: string = this.appIcon;
       let finalExec: string = this.execRelPath;
-      let finalExecType: ExecPathType = this.execPathType;    // ★
+      let finalExecType: ExecPathType = this.execPathType;
       let finalMode: RuntimeMode = this.runtimeMode;
       let finalConfig: AppConfig = { envVars: this.envVars, args: this.launchArgs };
 
@@ -240,6 +256,52 @@ export struct InstallAppDialog {
         return;
       }
 
+      // ★ useAppJson: 直接复用包内 app.json, 只覆盖系统字段
+      if (this.useAppJson
+        && (this.currentSource === 'tar' || this.currentSource === 'folder')) {
+
+        // 校验 app.json 存在
+        const jsonPath: string = `${installAbsDir}/app.json`;
+        try {
+          if (!fs.accessSync(jsonPath)) {
+            this.rmDirSafe(installAbsDir);
+            this.statusText = '安装失败: 安装包中未找到 app.json';
+            this.installing = false;
+            return;
+          }
+        } catch (_e) {
+          this.rmDirSafe(installAbsDir);
+          this.statusText = '安装失败: 无法访问 app.json';
+          this.installing = false;
+          return;
+        }
+
+        // 复用 AppRegistry 的读取逻辑
+        const app: AppInfo | null = AppRegistry.getById(ctx, appId);
+        if (!app) {
+          this.rmDirSafe(installAbsDir);
+          this.statusText = '安装失败: app.json 内容无效';
+          this.installing = false;
+          return;
+        }
+
+        // 覆盖系统决定的字段
+        app.id          = appId;                        // 强制与目录名一致
+        app.installDir  = installRelDir;
+        app.installedAt = Date.now();
+        app.containerId = this.selectedContainerId;
+
+        this.statusText = '安装完成';
+        hilog.info(0x0000, TAG,
+          `[install] ok (from app.json): ${app.name} -> ${installAbsDir}`);
+        setTimeout((): void => {
+          this.onInstalled(app);        // Index 的 addApp 会调 AppRegistry.add → save
+          this.controller?.close();
+        }, 400);
+        return;
+      }
+
+      // 常规路径: 用表单字段构造 AppInfo
       const app: AppInfo = new AppInfo(
         appId,
         finalName.trim(),
@@ -247,7 +309,7 @@ export struct InstallAppDialog {
         'deprecated' as never,
         finalMode,
         finalExec.trim(),
-        finalExecType,                    // ★
+        finalExecType,
         installRelDir,
         Date.now(),
         finalConfig,
@@ -363,13 +425,14 @@ export struct InstallAppDialog {
 
       if (this.useAppJson) {
         Row({ space: 6 }) {
-          Text('🚧').fontSize(12)
-          Text('该功能尚未实现, 暂无法安装')
-            .fontSize(11).fontColor('#FF9F43')
+          Text('ℹ️').fontSize(12)
+          Text('安装完成后, 名称/可执行文件/运行模式/参数/环境变量将从 app.json 读取')
+            .fontSize(11).fontColor(Theme.TEXT_SEC)
+            .layoutWeight(1)
         }
         .width('100%')
         .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor('#FFF7EC').borderRadius(6)
+        .backgroundColor('#EEF3FF').borderRadius(6)
         .margin({ top: 10 })
       }
     }
