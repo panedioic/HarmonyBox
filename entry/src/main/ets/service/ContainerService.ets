@@ -264,7 +264,24 @@ export class ContainerService {
     if (!opts.name.trim()) {
       return { ok: false, error: '容器名称不能为空' };
     }
-    const id: string = ContainerService.slug(opts.name);
+
+    // ★ 目录 id 计算: 内置容器直接用 builtinId, 其他走 slug(name)
+    let id: string;
+    if (opts.source === 'builtin') {
+      if (!opts.builtinId) {
+        return { ok: false, error: '未指定内置容器 ID' };
+      }
+      // 校验 builtinId 有效
+      const entry: BuiltinEntry | undefined =
+        ContainerService.builtins.find((b): boolean => b.id === opts.builtinId);
+      if (!entry) {
+        return { ok: false, error: `未知的内置容器 ID: ${opts.builtinId}` };
+      }
+      id = opts.builtinId;
+    } else {
+      id = ContainerService.slug(opts.name);
+    }
+
     const dest: string = ContainerService.containerDir(ctx, id);
 
     try {
