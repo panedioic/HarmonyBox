@@ -19,6 +19,7 @@ import { PackageService, PackageResult } from '../service/PackageService';
 import { picker } from '@kit.CoreFileKit';
 import { ProcessManagerService, LaunchResult } from '../service/ProcessManagerService';
 import { ShortcutService, ShortcutResult } from '../service/ShortcutService';
+import { BottomNav } from '../components/BottomNav';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'HBox_UI_Page_Index';
@@ -29,7 +30,14 @@ struct Index {
   @State currentPage: string = PageType.LIBRARY;
   @State installedApps: AppInfo[] = [];
   @State runningAppIds: string[] = [];
+  @State windowWidth: number = 1024;
+
   windowClass: window.Window | undefined = AppStorage.get('windowClass');
+
+  private readonly SIDEBAR_BREAK: number = 720;
+  private readonly HIDE_PROC_BREAK: number = 500;
+  private readonly HIDE_SHELL_BREAK: number = 400;
+
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
   aboutToAppear(): void {
@@ -144,6 +152,24 @@ struct Index {
     } catch (e) { /* ignore */ }
   }
 
+  //
+
+  private useBottomNav(): boolean {
+    return this.windowWidth < this.SIDEBAR_BREAK;
+  }
+
+  /** 屏幕变窄导致当前页被隐藏时, 跳回应用库 */
+  private ensurePageVisible(): void {
+    if (this.windowWidth < this.HIDE_PROC_BREAK
+      && this.currentPage === PageType.PROC_MANAGER) {
+      this.currentPage = PageType.LIBRARY;
+    }
+    if (this.windowWidth < this.HIDE_SHELL_BREAK
+      && this.currentPage === PageType.DEBUG_SHELL) {
+      this.currentPage = PageType.LIBRARY;
+    }
+  }
+
   // =========================================================
   // UI
   // =========================================================
@@ -188,6 +214,43 @@ struct Index {
   }
 
   build() {
+    Column() {
+      if (this.useBottomNav()) {
+        this.NarrowBody()
+        BottomNav({
+          currentPage: $currentPage,
+          screenWidth: this.windowWidth
+        })
+      } else {
+        this.WideBody()
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.HM_BG)
+    .onAreaChange((_o: Area, n: Area): void => {
+      const w: number = n.width as number;
+      if (w > 0 && w !== this.windowWidth) {
+        this.windowWidth = w;
+        this.ensurePageVisible();
+      }
+    })
+  }
+
+  @Builder
+  NarrowBody() {
+    Column() {
+      this.CustomDecor()
+      this.PageContent()
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  WideBody() {
     Row() {
       Sidebar({ currentPage: $currentPage })
       Column() {
@@ -199,9 +262,8 @@ struct Index {
       .padding({ left: 28, right: 28, top: 28, bottom: 28 })
       .alignItems(HorizontalAlign.Start)
     }
+    .layoutWeight(1)
     .width('100%')
-    .height('100%')
     .alignItems(VerticalAlign.Top)
-    .backgroundColor(Theme.HM_BG)
   }
 }
