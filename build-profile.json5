@@ -7,11 +7,11 @@
         "material": {
           "certpath": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B24A019481DA3944B80A092FF4A6AE6B702AFFF9DE16F68EA3ED580BB8778A7AE3D2DDCE057BD49",
+          "keyPassword": "0000001BD2A58D455772D2062B1F73352C5441DD407D555B465E85E4FA0CA996B8EC06AF60F633E48773BF",
           "profile": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\suwan\\.ohos\\config\\default_HarmonyBox_LqSHC85f_t3GLsbDDlPzHoF92QfE3aUd2u0sEbeDEEM=.p12",
-          "storePassword": "0000001B944205CFBA3AF940A01824F975B97D61BE3B1A3F9B8F4ABB37B567A6E49DED9AC94A6D77D8A2F2"
+          "storePassword": "0000001BDE43C513CDC2A1925E2F69BE9F5141270C4C5EB1EAE47EDAC04C0B62738BBA915422492D26670C"
         }
       }
     ],

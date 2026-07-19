@@ -387,7 +387,10 @@ export class WindowManagerService {
       hilog.info(0x0000, TAG, `[WMS] createLogWindow skip (pending or attached) inst=${instanceId}`);
       return;
     }
-    const uiCtx = this.getUiCtx();            // ★
+    // ★ 优先用 host Ability 的 context (用户刚在它里面点了按钮, 一定是前台)
+    //    手机端 EntryAbility 此时可能已退到后台, 用 launcherCtx 会 201
+    const uiCtx: common.UIAbilityContext | null =
+      inst.hostAbilityContext ?? this.getUiCtx();
     if (!uiCtx) {
       hilog.error(0x0000, TAG, '[WMS] createLogWindow: no active UI context');
       ProcessManagerService.getInstance().terminate(pid);
@@ -1163,7 +1166,17 @@ export class WindowManagerService {
     try { win.setWindowBackgroundColor('#FF000000'); } catch (e) { /* ignore */ }
     // 主窗口不支持 setWindowCornerRadius, 通过 AppRunner 页面的 borderRadius 实现视觉圆角
 
-    // 尺寸: 基于 wayland buffer 或缺省 800x600
+    // ★ 判断是否为手机等受限窗口环境
+    let canResize: boolean = true;
+    try {
+      const di = display.getDefaultDisplaySync();
+      // 手机通常 densityDPI > 300 且宽度 < 720vp; 或者可以直接查窗口能否 resize
+      // 更稳的判断: 尝试读取 windowStage 的 mode
+      // 这里用简单启发: 显示可用宽度小于 720vp 视为受限
+      const availW: number = di.availableWidth / (di.densityPixels || 1);
+      if (availW < 720) canResize = false;
+    } catch (e) { /* ignore */ }
+
     const sz: WlBufferSize = wlSvc.getLatestBufferSize(inst.clientId ?? '');
     const scale: number = wlSvc.getUiScale();
     const bufW: number = sz.w > 0 ? sz.w : 800;
@@ -1171,19 +1184,23 @@ export class WindowManagerService {
     const totalW: number = Math.max(1, Math.round(bufW * scale));
     const totalH: number = Math.max(1, Math.round(bufH * scale));
 
-    win.resize(totalW, totalH).then((): void => {
-      try {
-        const prop = win.getWindowProperties();
-        const di = display.getDisplayByIdSync(prop.displayId);
-        win.moveWindowToGlobal(
-          Math.round((di.availableWidth - totalW) / 2),
-          Math.round((di.availableHeight - totalH) / 2),
-          { displayId: prop.displayId }
-        ).catch((): void => { /* ignore */ });
-      } catch (e) { /* ignore */ }
-    }).catch((e: BusinessError): void => {
-      hilog.warn(0x0000, TAG, `[WMS] setupHostWindow resize failed: ${e.code} ${e.message}`);
-    });
+    if (canResize) {
+      win.resize(totalW, totalH).then((): void => {
+        try {
+          const prop = win.getWindowProperties();
+          const di = display.getDisplayByIdSync(prop.displayId);
+          win.moveWindowToGlobal(
+            Math.round((di.availableWidth - totalW) / 2),
+            Math.round((di.availableHeight - totalH) / 2),
+            { displayId: prop.displayId }
+          ).catch((): void => { /* ignore */ });
+        } catch (e) { /* ignore */ }
+      }).catch((e: BusinessError): void => {
+        hilog.warn(0x0000, TAG, `[WMS] setupHostWindow resize failed: ${e.code} ${e.message}`);
+      });
+    } else {
+      hilog.info(0x0000, TAG, `[WMS] narrow display, skip resize, will use full window`);
+    }
 
     const instanceId: string = inst.instanceId;
     win.on('windowEvent', (event: window.WindowEventType): void => {
@@ -1195,11 +1212,20 @@ export class WindowManagerService {
       this.handleHostSizeChange(instanceId, size.width, size.height);
     });
 
-    if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
+    // ★ 手机端: 直接用实际窗口尺寸做 configure, 让 client 按窗口尺寸绘制
+    if (!canResize) {
+      try {
+        const r = win.getWindowProperties().windowRect;
+        if (inst.clientId) {
+          this.firstCommitDone.add(instanceId);
+          this.sendConfigure(inst.clientId, r.width, r.height, false);
+        }
+      } catch (e) { /* ignore */ }
+    } else if (sz.w > 0 && sz.h > 0 && !this.firstCommitDone.has(instanceId)) {
       this.firstCommitDone.add(instanceId);
       this.applyWindowSize(win, sz.w, sz.h);
     }
-    hilog.info(0x0000, TAG, `HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH}`);
+    hilog.info(0x0000, TAG, `HBOX_WM_HOST_SHOWN inst=${instanceId} ${totalW}x${totalH} canResize=${canResize}`);
   }
 
   private setupLogWindow(inst: AppInstance, win: window.Window): void {
