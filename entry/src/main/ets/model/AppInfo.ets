@@ -195,7 +195,7 @@ export const BUILTIN_APPS: BuiltinAppEntry[] = [
     icon: '📝',
     desc: '基于 Weston 的终端模拟器，不过由于鸿蒙权限限制，只有窗口，并不能真的操作终端。',
     containerType: ContainerType.LINUX,
-    rawfileName: 'apps/weston-termina l.tar.zst',
+    rawfileName: 'apps/weston-terminal.tar.zst',
     execRelPath: 'weston-terminl',
     execPathType: ExecPathType.APP_RELATIVE,
     runtimeMode: RuntimeMode.GUI,
