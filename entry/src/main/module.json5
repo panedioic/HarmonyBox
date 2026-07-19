@@ -6,6 +6,7 @@
     "srcEntry": "./ets/entryability/HBoxAbilityStage.ets",   // ★ 新增
     "mainElement": "EntryAbility",
     "deviceTypes": [
+      "phone",
       "tablet",
       "2in1"
     ],
