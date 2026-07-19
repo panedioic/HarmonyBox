@@ -199,23 +199,29 @@ export struct InstallContainerDialog {
 
   @Builder
   MainContent() {
-    Column() {
-      if (this.currentSource === 'tar')          this.PanelTar()
-      else if (this.currentSource === 'folder')  this.PanelFolder()
-      else if (this.currentSource === 'network') this.PanelNetwork()
-      else                                       this.PanelBuiltin()
+    Scroll() {
+      Column() {
+        if (this.currentSource === 'tar')          this.PanelTar()
+        else if (this.currentSource === 'folder')  this.PanelFolder()
+        else if (this.currentSource === 'network') this.PanelNetwork()
+        else                                       this.PanelBuiltin()
 
-      if (this.currentSource === 'tar' || this.currentSource === 'folder') {
-        Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
-        this.FormFields()
-      } else if (this.currentSource === 'builtin' && this.selectedBuiltin) {
-        Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
-        this.BuiltinPreview()
+        if (this.currentSource === 'tar' || this.currentSource === 'folder') {
+          Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
+          this.FormFields()
+        } else if (this.currentSource === 'builtin' && this.selectedBuiltin) {
+          Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
+          this.BuiltinPreview()
+        }
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding(this.isNarrow() ? 16 : 24)
     }
-    .layoutWeight(1).height('100%')
-    .padding(this.isNarrow() ? 16 : 24)
-    .alignItems(HorizontalAlign.Start)
+    .layoutWeight(1)
+    .width('100%')
+    .align(Alignment.TopStart)
+    .scrollBar(BarState.Auto)
   }
 
   @Builder
@@ -417,13 +423,7 @@ export struct InstallContainerDialog {
       if (this.isNarrow()) {
         Column() {
           this.SourceTabsH()
-          Scroll() {
-            this.MainContent()
-          }
-          .layoutWeight(1)
-          .width('100%')
-          .align(Alignment.TopStart)
-          .scrollBar(BarState.Auto)
+          this.MainContent()
         }
         .width('100%').layoutWeight(1)
       } else {
