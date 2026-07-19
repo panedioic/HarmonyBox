@@ -31,6 +31,8 @@ export struct InstallContainerDialog {
 
   @State selectedBuiltin: string = '';
 
+  @State dlgW: number = 720;
+
   // 内置容器排最上面
   private sources: SourceOption[] = [
     { id: 'builtin', label: '内置容器',     icon: '⭐', enabled: true  },
@@ -42,6 +44,10 @@ export struct InstallContainerDialog {
   private types: ContainerType[] = [ContainerType.WINE, ContainerType.LINUX];
 
   private builtins: BuiltinEntry[] = ContainerService.getBuiltins();
+
+  private isNarrow(): boolean {
+    return this.dlgW < 500;
+  }
 
   // ──────────────────────────────────────────────
   private async chooseTar(): Promise<void> {
@@ -125,6 +131,35 @@ export struct InstallContainerDialog {
   }
 
   // ──────────────────────────────────────────────
+
+  @Builder
+  SourceTabsH() {
+    Scroll() {
+      Row({ space: 6 }) {
+        ForEach(this.sources, (s: SourceOption): void => {
+          Row({ space: 6 }) {
+            Text(s.icon).fontSize(13)
+            Text(s.label).fontSize(12)
+              .fontColor(this.currentSource === s.id ? Color.White : Theme.TEXT_MAIN)
+          }
+          .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+          .borderRadius(6)
+          .backgroundColor(this.currentSource === s.id ? Theme.HM_BLUE : '#F5F7FA')
+          .opacity(s.enabled ? 0.5 : 1)
+          .onClick((): void => {
+            if (s.enabled) this.currentSource = s.id;
+          })
+        }, (s: SourceOption): string => s.id)
+      }
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor('#FAFBFC')
+    .border({ width: { bottom: 1 }, color: Theme.BORDER_LIGHT })
+  }
+
   @Builder
   SourceNav() {
     Column() {
@@ -170,8 +205,6 @@ export struct InstallContainerDialog {
       else if (this.currentSource === 'network') this.PanelNetwork()
       else                                       this.PanelBuiltin()
 
-      // 只有 tar / folder 需要手动填写名称/类型/描述
-      // builtin 全部用默认值, 展示只读预览
       if (this.currentSource === 'tar' || this.currentSource === 'folder') {
         Divider().color(Theme.BORDER_LIGHT).margin({ top: 16, bottom: 12 })
         this.FormFields()
@@ -181,7 +214,7 @@ export struct InstallContainerDialog {
       }
     }
     .layoutWeight(1).height('100%')
-    .padding(24)
+    .padding(this.isNarrow() ? 16 : 24)
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -380,42 +413,65 @@ export struct InstallContainerDialog {
       .padding({ left: 20, right: 12 })
       .border({ width: { bottom: 1 }, color: Theme.BORDER_LIGHT })
 
-      // body
-      Row() {
-        this.SourceNav()
-        this.MainContent()
+      // body: 窄屏纵向, 宽屏横向
+      if (this.isNarrow()) {
+        Column() {
+          this.SourceTabsH()
+          Scroll() {
+            this.MainContent()
+          }
+          .layoutWeight(1)
+          .width('100%')
+          .align(Alignment.TopStart)
+          .scrollBar(BarState.Auto)
+        }
+        .width('100%').layoutWeight(1)
+      } else {
+        Row() {
+          this.SourceNav()
+          this.MainContent()
+        }
+        .width('100%').layoutWeight(1)
       }
-      .width('100%').layoutWeight(1)
 
       // footer
-      Row({ space: 12 }) {
+      Row({ space: 10 }) {
         if (this.status.length > 0) {
           Text(this.status).fontSize(12)
             .fontColor(this.status.startsWith('安装失败')
               || this.status.startsWith('安装异常')
               ? '#E64545' : Theme.TEXT_SEC)
             .layoutWeight(1)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
         } else {
           Blank()
         }
         Button('取消')
-          .fontSize(13).height(36).width(90)
+          .fontSize(13).height(36)
+          .padding({ left: 14, right: 14 })
           .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
           .onClick((): void => { this.controller?.close(); })
         Button(this.installing ? '安装中...' : '开始安装')
-          .fontSize(13).height(36).width(120)
+          .fontSize(13).height(36)
+          .padding({ left: 14, right: 14 })
           .backgroundColor(this.canInstall() ? Theme.HM_BLUE : '#B0B7C0')
           .enabled(this.canInstall())
           .onClick((): void => { this.doInstall(); })
       }
       .width('100%').height(60)
-      .padding({ left: 20, right: 20 })
+      .padding({ left: 16, right: 16 })
       .backgroundColor('#FAFBFC')
       .border({ width: { top: 1 }, color: Theme.BORDER_LIGHT })
     }
-    .width(720).height(540)
+    .width('94%').height('90%')
+    .constraintSize({ maxWidth: 720, maxHeight: 540 })
     .backgroundColor(Theme.HM_CARD)
     .borderRadius(Theme.RADIUS_LG)
     .clip(true)
+    .onAreaChange((_o: Area, n: Area): void => {
+      const w: number = n.width as number;
+      if (w > 0 && w !== this.dlgW) this.dlgW = w;
+    })
   }
 }

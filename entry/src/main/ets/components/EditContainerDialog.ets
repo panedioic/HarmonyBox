@@ -173,7 +173,8 @@ export struct EditContainerDialog {
       .backgroundColor('#FAFBFC')
       .border({ width: { top: 1 }, color: Theme.BORDER_LIGHT })
     }
-    .width(600).height(560)
+    .width('94%').height('90%')
+    .constraintSize({ maxWidth: 600, maxHeight: 560 })
     .backgroundColor(Theme.HM_CARD)
     .borderRadius(Theme.RADIUS_LG)
     .clip(true)

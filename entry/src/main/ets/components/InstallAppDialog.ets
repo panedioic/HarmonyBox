@@ -74,6 +74,8 @@ export struct InstallAppDialog {
   @State builtinArgs: string = '';
   @State builtinEnv:  string = '';
 
+  @State dlgW: number = 720;
+
   @State useAppJson: boolean = false;
 
   private allModes: RuntimeMode[] = [RuntimeMode.GUI, RuntimeMode.CLI];
@@ -84,6 +86,10 @@ export struct InstallAppDialog {
     ExecPathType.ABSOLUTE,
     ExecPathType.BARE
   ];
+
+  private isNarrow(): boolean {
+    return this.dlgW < 500;
+  }
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.Context;
@@ -357,6 +363,34 @@ export struct InstallAppDialog {
   // ==============================================================
 
   @Builder
+  SourceTabsH() {
+    Scroll() {
+      Row({ space: 6 }) {
+        ForEach(this.sources, (s: SourceOption): void => {
+          Row({ space: 6 }) {
+            Text(s.icon).fontSize(13)
+            Text(s.label).fontSize(12)
+              .fontColor(this.currentSource === s.id ? Color.White : Theme.TEXT_MAIN)
+          }
+          .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+          .borderRadius(6)
+          .backgroundColor(this.currentSource === s.id ? Theme.HM_BLUE : '#F5F7FA')
+          .onClick((): void => {
+            this.currentSource = s.id;
+            this.useAppJson = false;
+          })
+        }, (s: SourceOption): string => s.id)
+      }
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor('#FAFBFC')
+    .border({ width: { bottom: 1 }, color: Theme.BORDER_LIGHT })
+  }
+
+  @Builder
   MainContent() {
     Scroll() {
       Column() {
@@ -368,7 +402,7 @@ export struct InstallAppDialog {
       .alignItems(HorizontalAlign.Start)
     }
     .layoutWeight(1).height('100%')
-    .padding(24)
+    .padding(this.isNarrow() ? 16 : 24)
     .align(Alignment.TopStart)
     .scrollBar(BarState.Auto)
   }
@@ -796,14 +830,22 @@ export struct InstallAppDialog {
       .border({ width: { bottom: 1 }, color: Theme.BORDER_LIGHT })
 
       // body
-      Row() {
-        this.SourceNav()
-        this.MainContent()
+      if (this.isNarrow()) {
+        Column() {
+          this.SourceTabsH()
+          this.MainContent()
+        }
+        .width('100%').layoutWeight(1)
+      } else {
+        Row() {
+          this.SourceNav()
+          this.MainContent()
+        }
+        .width('100%').layoutWeight(1)
       }
-      .width('100%').layoutWeight(1)
 
       // footer
-      Row({ space: 12 }) {
+      Row({ space: 10 }) {
         if (this.statusText.length > 0) {
           Text(this.statusText).fontSize(12)
             .fontColor(this.statusText.startsWith('安装失败')
@@ -811,27 +853,36 @@ export struct InstallAppDialog {
               || this.statusText.startsWith('未')
               ? '#E64545' : Theme.TEXT_SEC)
             .layoutWeight(1)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
         } else {
           Blank()
         }
         Button('取消')
-          .fontSize(13).height(36).width(90)
+          .fontSize(13).height(36)
+          .padding({ left: 14, right: 14 })
           .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
           .onClick((): void => { this.controller?.close(); })
         Button(this.installing ? '安装中...' : '开始安装')
-          .fontSize(13).height(36).width(120)
+          .fontSize(13).height(36)
+          .padding({ left: 14, right: 14 })
           .backgroundColor(this.canInstall() ? Theme.HM_BLUE : '#B0B7C0')
           .enabled(this.canInstall())
           .onClick((): void => { this.doInstall(); })
       }
       .width('100%').height(60)
-      .padding({ left: 20, right: 20 })
+      .padding({ left: 16, right: 16 })
       .backgroundColor('#FAFBFC')
       .border({ width: { top: 1 }, color: Theme.BORDER_LIGHT })
     }
-    .width(720).height(560)
+    .width('94%').height('90%')
+    .constraintSize({ maxWidth: 720, maxHeight: 560 })
     .backgroundColor(Theme.HM_CARD)
     .borderRadius(Theme.RADIUS_LG)
     .clip(true)
+    .onAreaChange((_o: Area, n: Area): void => {
+      const w: number = n.width as number;
+      if (w > 0 && w !== this.dlgW) this.dlgW = w;
+    })
   }
 }
