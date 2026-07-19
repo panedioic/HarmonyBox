@@ -4,6 +4,7 @@ import { ContainerInfo, ContainerType, containerTypeLabel } from '../model/Conta
 import { ContainerService, InstallResult } from '../service/ContainerService';
 import { InstallContainerDialog } from '../components/InstallContainerDialog';
 import { picker } from '@kit.CoreFileKit';
+import { EditContainerDialog } from '../components/EditContainerDialog';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'HBox_UI_Page_ContainerManager';
@@ -15,6 +16,8 @@ export struct ContainerManagerPage {
   @State busy: string = '';   // 正在启停的容器 id
   @State exporting: string = '';
   @State resetting: string = '';
+
+  private editDialog: CustomDialogController | null = null;
 
   private installDialog: CustomDialogController = new CustomDialogController({
     builder: InstallContainerDialog({
@@ -148,6 +151,21 @@ export struct ContainerManagerPage {
       confirm: { value: '好的', action: (): void => {} },
       alignment: DialogAlignment.Center
     });
+  }
+
+  private openEditDialog(c: ContainerInfo): void {
+    this.editDialog = new CustomDialogController({
+      builder: EditContainerDialog({
+        info: c,
+        onSaved: (_i: ContainerInfo): void => {
+          this.reload();
+        }
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center
+    });
+    this.editDialog.open();
   }
 
   build() {
@@ -320,20 +338,26 @@ export struct ContainerManagerPage {
       // 环境变量
       Column({ space: 6 }) {
         this.DetailRowLabel('环境变量')
-        if (Object.keys(c.config.envVars).length === 0) {
+        if (!c.config.envVars || c.config.envVars.length === 0) {
           Text('(无)').fontSize(12).fontColor(Theme.TEXT_HINT)
         } else {
-          ForEach(Object.keys(c.config.envVars),
-            (k: string): void => {
-              Text(`${k}=${c.config.envVars[k]}`)
-                .fontSize(11).fontColor(Theme.TEXT_MAIN)
-                .fontFamily('monospace')
-            })
+          ForEach(c.config.envVars, (kv: string): void => {
+            Text(kv)
+              .fontSize(11).fontColor(Theme.TEXT_MAIN)
+              .fontFamily('monospace')
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }, (kv: string, idx: number): string => `${idx}:${kv}`)
         }
       }.width('100%').alignItems(HorizontalAlign.Start)
 
       // 底部操作
       Row({ space: 10 }) {
+        Button('编辑')
+          .fontSize(12).height(32)
+          .backgroundColor('#F0F0F0').fontColor(Theme.TEXT_MAIN)
+          .onClick((): void => { this.openEditDialog(c); })
+
         if (c.config.type === ContainerType.WINE) {
           Button(this.resetting === c.id ? '重置中...' : '重置 prefix')
             .fontSize(12).height(32)
