@@ -200,6 +200,8 @@ export struct DebugShellPage {
           );
         })
     }
-    .width('100%').height('100%').backgroundColor('#0E0E0E')
+    .width('100%')
+    .layoutWeight(1)            // ★ 从 height('100%') 改成 layoutWeight(1)
+    .backgroundColor('#0E0E0E')
   }
 }
