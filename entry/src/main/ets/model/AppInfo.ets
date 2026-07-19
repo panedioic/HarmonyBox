@@ -196,7 +196,7 @@ export const BUILTIN_APPS: BuiltinAppEntry[] = [
     desc: '基于 Weston 的终端模拟器，不过由于鸿蒙权限限制，只有窗口，并不能真的操作终端。',
     containerType: ContainerType.LINUX,
     rawfileName: 'apps/weston-terminal.tar.zst',
-    execRelPath: 'weston-terminl',
+    execRelPath: 'weston-terminal',
     execPathType: ExecPathType.APP_RELATIVE,
     runtimeMode: RuntimeMode.GUI,
     config: { envVars: 'LD_PRELOAD=libforkpty_shim.so', args: '' }
